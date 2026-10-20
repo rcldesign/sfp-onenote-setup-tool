@@ -220,14 +220,48 @@ public class DateEngineGridTests
     }
 
     [Theory]
-    [InlineData(1899)]
-    [InlineData(2200)]
-    public void Grid_rejects_a_year_outside_1900_to_2199(int year)
+    [InlineData(2027, 4)]
+    [InlineData(2026, 12)]
+    [InlineData(1899, 1)]
+    [InlineData(2200, 1)]
+    public void Grid_rejects_a_month_that_is_not_one_of_the_quarters_months(int year, int month)
     {
         Quarter q = engine.Build(new QuarterSpec(2027, 1));
 
-        Action act = () => engine.Grid(year, 1, q);
+        Action act = () => engine.GridWithMode(year, month, q, SixthRowMode.Stack);
 
-        act.Should().Throw<ArgumentOutOfRangeException>().WithMessage("*1900*2199*");
+        act.Should().Throw<ArgumentOutOfRangeException>()
+            .WithMessage($"Month {year:0000}-{month:00} is not one of the quarter's months (2027-01, 2027-02, 2027-03).*");
+    }
+
+    [Theory]
+    [InlineData(2199, 11)]
+    [InlineData(2199, 12)]
+    public void Grid_draws_every_month_of_a_quarter_that_ends_in_2200(int year, int month)
+    {
+        // Build accepts starts up to 2199-12, whose second and third months are in 2200.
+        Quarter q = engine.Build(new QuarterSpec(year, month));
+
+        foreach ((int y, int m) in q.Months)
+        {
+            MonthGrid grid = engine.Grid(y, m, q);
+
+            grid.Cells.Where(c => c.InMonth).Select(c => c.Date.Day)
+                .Concat(grid.Cells.Where(c => c.StackedDay is not null).Select(c => c.StackedDay!.Value))
+                .Order().Should().Equal(Enumerable.Range(1, DateTime.DaysInMonth(y, m)));
+            grid.Cells.Should().OnlyContain(c => c.InQuarter == q.Contains(c.Date));
+        }
+
+        q.Months.Should().Contain((2200, 1));
+    }
+
+    [Fact]
+    public void Grid_rejects_a_hand_built_quarter_past_the_years_a_start_can_reach()
+    {
+        Quarter q = new(new DateOnly(2201, 1, 1), new DateOnly(2201, 3, 31), 13, "Q1 2201");
+
+        Action act = () => engine.Grid(2201, 1, q);
+
+        act.Should().Throw<ArgumentOutOfRangeException>().WithMessage("Year must be between 1900 and 2200*");
     }
 }

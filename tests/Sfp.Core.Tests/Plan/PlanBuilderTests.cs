@@ -389,6 +389,20 @@ public class PlanBuilderTests
         Build(Q1_2027, o => o with { Links = false }).Links.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(2199, 11)]
+    [InlineData(2199, 12)]
+    public void A_start_in_late_2199_builds_a_plan_whose_calendar_reaches_2200(int year, int month)
+    {
+        // The last accepted starts: their quarters end in 2200, and the calendar links need the 2200 month grids.
+        NotebookPlan plan = Build(new QuarterSpec(year, month));
+
+        plan.Page(PageKey.Calendar(2200, 1)).Title.Should().Be("January 2200");
+        plan.LinksFrom(PageKey.Calendar(2200, 1)).Count(l => l.AnchorType == "calendarDay").Should().Be(31);
+        plan.Pages.Count(p => p.Type == PageType.Calendar).Should().Be(3);
+        plan.Links.Should().OnlyContain(l => plan.FindPage(l.To) != null);
+    }
+
     [Fact]
     public void Section_of_and_links_from_work_on_the_built_plan()
     {

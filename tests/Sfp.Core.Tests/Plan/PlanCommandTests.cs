@@ -97,6 +97,20 @@ public class PlanCommandTests
         err.Should().Be(message + "\n");
     }
 
+    [Theory]
+    [InlineData("2199-11", "SFP Nov to Jan 2199: Nov to Jan 2199, 2199-11-01 to 2200-01-31")]
+    [InlineData("2199-12", "SFP Dec to Feb 2199: Dec to Feb 2199, 2199-12-01 to 2200-02-28")]
+    public void The_last_accepted_starts_print_a_plan_that_reaches_2200(string start, string header)
+    {
+        (int code, string output, string err) = Run(Request(start));
+
+        code.Should().Be(ExitCodes.Success);
+        err.Should().BeEmpty();
+        output.Should().StartWith(header);
+        output.Should().Contain("\n  January 2200  [calendar:2200-01]  pdf ");
+        output.Should().Contain(" calendarDay ");
+    }
+
     [Fact]
     public void An_empty_start_exits_2()
     {

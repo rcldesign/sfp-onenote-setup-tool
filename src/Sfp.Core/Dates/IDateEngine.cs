@@ -15,7 +15,9 @@ public interface IDateEngine
     /// <summary>
     /// The 5-row Monday-first grid for one month of the quarter. Every cell holds a real date (InMonth and InQuarter say
     /// where it falls); a six-row month has its overflow stacked into row 5 (<see cref="SixthRowMode.Stack"/>).
-    /// The renderer decides from the options whether to draw the stacked day.
+    /// The renderer decides from the options whether to draw the stacked day. Throws
+    /// <see cref="ArgumentOutOfRangeException"/> for a month outside 1 to 12 or one that is not among the quarter's
+    /// three months (a quarter starting 2199-12 has the grids 2199-12, 2200-01 and 2200-02).
     /// </summary>
     MonthGrid Grid(int year, int month, Quarter q);
 
