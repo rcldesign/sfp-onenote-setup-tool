@@ -23,7 +23,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         nameof(PdfPath), nameof(Month), nameof(YearText), nameof(NotebookName), nameof(OutputFolder), nameof(DateFormat),
         nameof(WeeksRemaining), nameof(Dpi), nameof(GroupWeeks), nameof(Links), nameof(HideTitle), nameof(CustomPageSize),
         nameof(PageScaleText), nameof(SixthRow), nameof(OutOfMonthDays), nameof(ReflectionDateIsWeekStart),
-        nameof(IncludeOutOfQuarterDays), nameof(TimeBlockStart), nameof(TimeBlockEnd),
+        nameof(IncludeOutOfQuarterDays), nameof(TimeBlockStart), nameof(TimeBlockEnd), nameof(PreviousNotebook),
     };
 
     /// <summary>Properties whose change re-renders the previews (the date, the formats, everything drawn on the sheet; not the name, folder or DPI).</summary>
@@ -105,6 +105,14 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private int _timeBlockEnd = TimeBlockWindow.Default.EndHour;
+
+    /// <summary>
+    /// Advanced: the previous quarter's notebook folder (or its .sfp-state.json), whose Quarterly Review gets a Next quarter
+    /// link to the new notebook (GenerateOptions.PreviousNotebook, the CLI's --previous). Empty for none. Not saved in the
+    /// settings: it names a different notebook every quarter.
+    /// </summary>
+    [ObservableProperty]
+    private string _previousNotebook = "";
 
     [ObservableProperty]
     private string? _pdfError;
@@ -290,6 +298,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         ReflectionDateIsWeekStart = ReflectionDateIsWeekStart,
         IncludeOutOfQuarterDays = IncludeOutOfQuarterDays,
         TimeBlocks = new TimeBlockWindow(TimeBlockStart, TimeBlockEnd),
+        PreviousNotebook = string.IsNullOrWhiteSpace(PreviousNotebook) ? null : PreviousNotebook.Trim(),
     };
 
     /// <summary>The settings to save for the current fields.</summary>
@@ -366,6 +375,17 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         if (chosen is not null)
         {
             OutputFolder = chosen;
+        }
+    }
+
+    [RelayCommand]
+    private void BrowsePrevious()
+    {
+        string start = string.IsNullOrWhiteSpace(PreviousNotebook) ? OutputFolder : PreviousNotebook;
+        string? chosen = _dialogs.PickFolder("Choose the previous quarter's notebook folder", start);
+        if (chosen is not null)
+        {
+            PreviousNotebook = chosen;
         }
     }
 

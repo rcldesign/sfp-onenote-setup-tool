@@ -422,6 +422,37 @@ public class GenerateViewModelTests
     }
 
     [Fact]
+    public async Task The_previous_notebook_field_maps_to_the_option_the_browse_button_and_the_run()
+    {
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+        vm.ToOptions().PreviousNotebook.Should().BeNull("an empty field means no previous notebook");
+
+        vm.PreviousNotebook = @"  D:\Notebooks\SFP Q4 2026  ";
+        vm.ToOptions().PreviousNotebook.Should().Be(@"D:\Notebooks\SFP Q4 2026");
+        vm.ToRequest().Options.PreviousNotebook.Should().Be(@"D:\Notebooks\SFP Q4 2026");
+        SettingsStore.Serialize(vm.ToSettings(Array.Empty<string>())).Should().NotContain("SFP Q4 2026", "the previous notebook changes every quarter, so it is not a saved setting");
+
+        _h.Dialogs.NextFolder = null;
+        vm.BrowsePreviousCommand.Execute(null);
+        vm.PreviousNotebook.Should().Be(@"  D:\Notebooks\SFP Q4 2026  ", "a cancelled dialog changes nothing");
+        _h.Dialogs.LastInitialPath.Should().Be(@"  D:\Notebooks\SFP Q4 2026  ");
+        _h.Dialogs.NextFolder = @"E:\Old\SFP Q4 2026";
+        vm.BrowsePreviousCommand.Execute(null);
+        vm.PreviousNotebook.Should().Be(@"E:\Old\SFP Q4 2026");
+
+        await vm.GenerateCommand.ExecuteAsync(null);
+        _h.Generator.LastRequest!.Options.PreviousNotebook.Should().Be(@"E:\Old\SFP Q4 2026");
+
+        vm.PreviousNotebook = "   ";
+        vm.ToOptions().PreviousNotebook.Should().BeNull();
+        _h.Dialogs.NextFolder = null;
+        vm.BrowsePreviousCommand.Execute(null);
+        _h.Dialogs.LastInitialPath.Should().Be(Harness.DefaultFolder, "with the field empty the dialog starts in the output folder");
+    }
+
+    [Fact]
     public async Task Generate_runs_the_orchestrator_with_the_request_and_locks_the_fields_meanwhile()
     {
         using GenerateViewModel vm = _h.NewGenerate();

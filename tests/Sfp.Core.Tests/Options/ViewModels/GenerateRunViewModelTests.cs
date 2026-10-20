@@ -52,6 +52,28 @@ public class GenerateRunViewModelTests
     }
 
     [Fact]
+    public async Task The_success_view_says_whether_the_previous_notebook_got_its_next_quarter_link()
+    {
+        _h.Generator.Result = _h.Generator.Result with { NextQuarterLink = "Next quarter link added to the quarterly review of SFP Q4 2026." };
+        using GenerateRunViewModel run = _h.NewRun();
+
+        await run.StartAsync(Request());
+
+        run.ShowSuccess.Should().BeTrue();
+        run.NextQuarterLinkText.Should().Be("Next quarter link added to the quarterly review of SFP Q4 2026.");
+
+        _h.Generator.Result = _h.Generator.Result with
+        {
+            NextQuarterLink = null,
+            Warnings = new[] { "The Next quarter link was not written to the previous notebook D:\\Old\\SFP Q4 2026: its state file was not found." },
+        };
+        await run.StartAsync(Request());
+
+        run.NextQuarterLinkText.Should().BeNull("the link was not written; the warning says why");
+        run.WarningsText.Should().Contain("Next quarter link was not written");
+    }
+
+    [Fact]
     public async Task Progress_reports_drive_the_bar()
     {
         _h.Generator.ProgressToReport.Add(new GenerateProgress(GeneratePhase.Rendering, 36, 144, "Tue Jan 5"));

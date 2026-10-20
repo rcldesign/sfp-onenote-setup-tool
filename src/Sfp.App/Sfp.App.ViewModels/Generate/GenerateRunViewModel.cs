@@ -78,6 +78,13 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string? _summaryText;
 
+    /// <summary>
+    /// The success summary's line about the previous notebook ("Next quarter link added to the quarterly review of SFP Q4
+    /// 2026."), or null when no previous notebook was given or the link was not written (a warning then says why).
+    /// </summary>
+    [ObservableProperty]
+    private string? _nextQuarterLinkText;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(OpenInOneNoteCommand))]
     [NotifyCanExecuteChangedFor(nameof(CopyPathCommand))]
@@ -300,6 +307,7 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         ShowFailure = false;
         ShowCancelled = false;
         SummaryText = null;
+        NextQuarterLinkText = null;
         NotebookPath = null;
         ElapsedText = null;
         WarningsText = null;
@@ -332,6 +340,7 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
                 result.PagesWritten,
                 result.NotebookName ?? result.OutputPath ?? "the notebook",
                 ElapsedText);
+            NextQuarterLinkText = string.IsNullOrWhiteSpace(result.NextQuarterLink) ? null : result.NextQuarterLink;
             ShowSuccess = true;
         }
         else if (result.Cancelled)
