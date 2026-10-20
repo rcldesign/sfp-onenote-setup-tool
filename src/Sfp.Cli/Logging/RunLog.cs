@@ -43,8 +43,13 @@ public sealed class RunLog : IDisposable
         }
     }
 
-    /// <summary>Starts a log for a verb. Console output goes to stderr at Warning and above unless <paramref name="quiet"/> is false and verbose is wanted.</summary>
-    public static RunLog Start(string verb, bool quiet, string? directory = null, DateTimeOffset? now = null)
+    /// <summary>
+    /// Starts a log for a verb. Everything from Debug up goes to the file. The console gets errors only when
+    /// <paramref name="quiet"/>; warnings and errors when the verb prints its own progress and summary
+    /// (<paramref name="printsOwnProgress"/>), so the Information lines (every COM call, every rendered page) do not
+    /// repeat what the verb prints; Information and up otherwise. Warnings and errors go to stderr.
+    /// </summary>
+    public static RunLog Start(string verb, bool quiet, string? directory = null, DateTimeOffset? now = null, bool printsOwnProgress = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(verb);
         string dir = directory ?? DefaultDirectory;
@@ -56,12 +61,16 @@ public sealed class RunLog : IDisposable
             .MinimumLevel.Debug()
             .Enrich.WithProperty("verb", verb)
             .WriteTo.File(file, outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}", formatProvider: CultureInfo.InvariantCulture)
-            .WriteTo.Console(restrictedToMinimumLevel: quiet ? LogEventLevel.Error : LogEventLevel.Information, standardErrorFromLevel: LogEventLevel.Warning, formatProvider: CultureInfo.InvariantCulture);
+            .WriteTo.Console(restrictedToMinimumLevel: ConsoleLevel(quiet, printsOwnProgress), standardErrorFromLevel: LogEventLevel.Warning, formatProvider: CultureInfo.InvariantCulture);
 
         Logger logger = config.CreateLogger();
         logger.Information("sfp2onenote {Verb} started; log {Path}", verb, file);
         return new RunLog(logger, file);
     }
+
+    /// <summary>The lowest level the console shows: Error when quiet, Warning when the verb prints its own progress, else Information.</summary>
+    public static LogEventLevel ConsoleLevel(bool quiet, bool printsOwnProgress) =>
+        quiet ? LogEventLevel.Error : printsOwnProgress ? LogEventLevel.Warning : LogEventLevel.Information;
 
     public void Dispose() => _logger.Dispose();
 }

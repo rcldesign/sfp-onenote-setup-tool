@@ -164,7 +164,8 @@ public static class GenerateCommand
         bool renderOnly = !string.IsNullOrWhiteSpace(args.RenderOnly);
         GenerateRequest request = new(options, manifest, templatesDir, renderOnly, renderOnly ? Path.GetFullPath(args.RenderOnly!) : null);
 
-        using RunLog log = RunLog.Start("generate", args.Quiet, logDirectory);
+        // The verb prints its own progress and summary, so the log's console sink keeps to warnings and errors.
+        using RunLog log = RunLog.Start("generate", args.Quiet, logDirectory, printsOwnProgress: true);
         log.Logger.Information("generate --pdf {Pdf} --start {Start} --dpi {Dpi} render-only {RenderOnly}", options.PdfPath, options.Start, options.Dpi, renderOnly);
         IGenerateOrchestrator orchestrator;
         try
@@ -471,12 +472,17 @@ public static class GenerateCommand
     private static string Elapsed(TimeSpan elapsed) =>
         string.Format(CultureInfo.InvariantCulture, "{0}:{1:00}", (int)elapsed.TotalMinutes, elapsed.Seconds);
 
-    /// <summary>Prints one line per progress report, synchronously (reports arrive from render workers too).</summary>
+    /// <summary>
+    /// Prints one line per progress report, synchronously (reports arrive from render workers too). A page count is
+    /// printed once per phase and only moving forward: render-only reports each page from its render worker and again
+    /// from the loop that writes the file, and workers finish out of order.
+    /// </summary>
     private sealed class ProgressPrinter : IProgress<GenerateProgress>
     {
         private readonly TextWriter _out;
         private readonly bool _quiet;
         private readonly object _gate = new();
+        private readonly Dictionary<GeneratePhase, int> _lastCount = new();
         private GeneratePhase? _lastPhase;
 
         public ProgressPrinter(TextWriter output, bool quiet)
@@ -496,7 +502,11 @@ public static class GenerateCommand
             {
                 if (value.Total > 0)
                 {
-                    _out.WriteLine(string.Format(CultureInfo.InvariantCulture, "{0} ({1} of {2}){3}", GenerateOrchestrator.PhaseLabel(value.Phase), value.Current, value.Total, string.IsNullOrEmpty(value.Detail) ? "" : ": " + value.Detail));
+                    if (!_lastCount.TryGetValue(value.Phase, out int last) || value.Current > last)
+                    {
+                        _lastCount[value.Phase] = value.Current;
+                        _out.WriteLine(string.Format(CultureInfo.InvariantCulture, "{0} ({1} of {2}){3}", GenerateOrchestrator.PhaseLabel(value.Phase), value.Current, value.Total, string.IsNullOrEmpty(value.Detail) ? "" : ": " + value.Detail));
+                    }
                 }
                 else if (value.Phase != _lastPhase || !string.IsNullOrEmpty(value.Detail))
                 {
@@ -547,9 +557,12 @@ public static class GenerateCommand
             OneNoteLocator? oneNote = null;
             try
             {
+                // The fallback-font warning reaches the user once, in the run's warnings (the preflight carries
+                // fonts.Warnings) printed with the summary; logged here at Information so the console, which shows the
+                // log's warnings, does not print it a second time.
                 foreach (string warning in fonts.Warnings)
                 {
-                    log.Warning("{Warning}", warning);
+                    log.Information("Font fallback (reported with the summary): {Warning}", warning);
                 }
 
                 rasterizer = new Rasterizer(ColorParser.Parse(manifest.Colors.Background));

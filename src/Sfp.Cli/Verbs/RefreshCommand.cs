@@ -147,7 +147,8 @@ public static class RefreshCommand
             return ExitCodes.ValidationError;
         }
 
-        using RunLog log = RunLog.Start("refresh", args.Quiet, logDirectory);
+        // The verb prints its own progress, listing and summary, so the log's console sink keeps to warnings and errors.
+        using RunLog log = RunLog.Start("refresh", args.Quiet, logDirectory, printsOwnProgress: true);
         log.Logger.Information("refresh --notebook {Notebook} calendar {Calendar} horizon {Horizon} dry-run {DryRun} today {Today}", request.NotebookName, request.Calendar, request.HorizonDays, request.DryRun, request.Today);
         IRefreshOrchestrator orchestrator;
         try

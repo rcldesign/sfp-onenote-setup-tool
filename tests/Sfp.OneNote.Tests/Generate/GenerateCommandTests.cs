@@ -1,5 +1,7 @@
 using System.CommandLine;
+using Serilog.Events;
 using Sfp.Cli;
+using Sfp.Cli.Logging;
 using Sfp.Cli.Verbs;
 using Sfp.Core.Options;
 using Sfp.OneNote.Generate;
@@ -31,25 +33,35 @@ public class GenerateCommandTests
     /// <summary>An orchestrator returning a canned result and keeping the request it was given.</summary>
     private sealed class CannedOrchestrator : IGenerateOrchestrator, IDisposable
     {
-        public CannedOrchestrator(GenerateResult result)
+        private static readonly GenerateProgress[] DefaultReports =
+        {
+            new(GeneratePhase.CheckingOneNote, 0, 0, null),
+            new(GeneratePhase.Rendering, 3, 132, "Mon Jan 4"),
+            new(GeneratePhase.Done, 0, 0, null),
+        };
+
+        private readonly IReadOnlyList<GenerateProgress> _reports;
+
+        public CannedOrchestrator(GenerateResult result, IReadOnlyList<GenerateProgress>? reports = null)
         {
             Result = result;
+            _reports = reports ?? DefaultReports;
         }
 
         public GenerateResult Result { get; }
 
         public GenerateRequest? Request { get; private set; }
 
-        public List<GenerateProgress> Reports { get; } = new();
-
         public bool Disposed { get; private set; }
 
         public GenerateResult Run(GenerateRequest request, IProgress<GenerateProgress>? progress, CancellationToken cancellationToken)
         {
             Request = request;
-            progress?.Report(new GenerateProgress(GeneratePhase.CheckingOneNote, 0, 0, null));
-            progress?.Report(new GenerateProgress(GeneratePhase.Rendering, 3, 132, "Mon Jan 4"));
-            progress?.Report(new GenerateProgress(GeneratePhase.Done, 0, 0, null));
+            foreach (GenerateProgress report in _reports)
+            {
+                progress?.Report(report);
+            }
+
             return Result;
         }
 
@@ -382,6 +394,106 @@ public class GenerateCommandTests
         code.Should().Be(0);
         stderr.Should().BeEmpty();
         stdout.Should().Contain("Cancelled. The partial notebook was deleted.");
+    }
+
+    [Fact]
+    public void Each_page_count_is_printed_once_and_only_moving_forward()
+    {
+        // Render-only reports every page from its render worker and again from the loop that writes the file, and the
+        // workers finish out of order.
+        GenerateProgress[] reports =
+        {
+            new(GeneratePhase.Rendering, 0, 0, null),
+            new(GeneratePhase.Rendering, 0, 3, null),
+            new(GeneratePhase.Rendering, 1, 3, "Cover"),
+            new(GeneratePhase.Rendering, 1, 3, "Cover"),
+            new(GeneratePhase.Rendering, 3, 3, "Mon Jan 4"),
+            new(GeneratePhase.Rendering, 2, 3, "Fri Jan 1"),
+            new(GeneratePhase.Rendering, 2, 3, "Fri Jan 1"),
+            new(GeneratePhase.Rendering, 3, 3, "Mon Jan 4"),
+            new(GeneratePhase.Finishing, 0, 0, null),
+        };
+        GenerateResult ok = new() { Success = true, ExitCode = 0, Phase = GeneratePhase.Done, OutputPath = Path.Combine(Root, "png-dedupe"), NotebookName = "n", PagesRendered = 3 };
+        StringWriter stdout = new();
+
+        int code = GenerateCommand.Run(Args() with { RenderOnly = Path.Combine(Root, "png-dedupe") }, stdout, new StringWriter(), (_, _, _) => new CannedOrchestrator(ok, reports), Path.Combine(Root, "logs"));
+
+        code.Should().Be(0);
+        string[] lines = stdout.ToString().Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+        lines.TakeWhile(l => !l.StartsWith("Rendered ", StringComparison.Ordinal)).Should().Equal(
+            "Rendering pages",
+            "Rendering pages (0 of 3)",
+            "Rendering pages (1 of 3): Cover",
+            "Rendering pages (3 of 3): Mon Jan 4",
+            "Finishing");
+    }
+
+    [Fact]
+    public void The_console_shows_the_run_logs_warnings_but_not_its_information_lines()
+    {
+        // The verb prints its own progress and summary; the run log's console sink keeps to warnings and errors so every
+        // COM call and rendered page (logged at Information) does not flood the console or repeat the progress lines.
+        RunLog.ConsoleLevel(quiet: true, printsOwnProgress: true).Should().Be(LogEventLevel.Error);
+        RunLog.ConsoleLevel(quiet: false, printsOwnProgress: true).Should().Be(LogEventLevel.Warning);
+        RunLog.ConsoleLevel(quiet: false, printsOwnProgress: false).Should().Be(LogEventLevel.Information);
+
+        string info = "information-" + Guid.NewGuid().ToString("N");
+        string warning = "warning-" + Guid.NewGuid().ToString("N");
+        GenerateResult ok = new() { Success = true, ExitCode = 0, Phase = GeneratePhase.Done, OutputPath = "x", NotebookName = "n" };
+        StringWriter console = new();
+        TextWriter originalOut = Console.Out;
+        TextWriter originalError = Console.Error;
+        Console.SetOut(console);
+        Console.SetError(console);
+        try
+        {
+            GenerateCommand.Run(Args(), new StringWriter(), new StringWriter(), (_, log, _) =>
+            {
+                log.Information("{Marker}", info);
+                log.Warning("{Marker}", warning);
+                return new CannedOrchestrator(ok);
+            }, Path.Combine(Root, "logs"));
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+        }
+
+        console.ToString().Should().Contain(warning).And.NotContain(info);
+    }
+
+    [Fact]
+    public void The_fallback_font_warning_reaches_the_user_once()
+    {
+        // The production composition: without Bookman Old Style (always the case on Linux) the font service falls back
+        // and warns. The warning travels in the run's warnings, printed with the result; the log must not echo it too.
+        StringWriter console = new();
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+        TextWriter originalOut = Console.Out;
+        TextWriter originalError = Console.Error;
+        Console.SetOut(console);
+        Console.SetError(console);
+        try
+        {
+            GenerateCommand.Run(Args() with { RenderOnly = Path.Combine(Root, "png-font") }, stdout, stderr, null, Path.Combine(Root, "logs"));
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+        }
+
+        int shown = System.Text.RegularExpressions.Regex.Matches(console.ToString() + stdout + stderr, "is not installed; using the bundled").Count;
+        if (OperatingSystem.IsLinux())
+        {
+            shown.Should().Be(1, "this build has no Bookman Old Style, so the fallback warning shows, once");
+        }
+        else
+        {
+            shown.Should().BeLessThanOrEqualTo(1);
+        }
     }
 
     [Fact]
