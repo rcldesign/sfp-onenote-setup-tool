@@ -26,5 +26,6 @@ public sealed record QuarterSpec(int Year, int Month)
         return new QuarterSpec(year, month);
     }
 
-    public override string ToString() => $"{Year:0000}-{Month:00}";
+    public override string ToString() =>
+        Year.ToString("0000", System.Globalization.CultureInfo.InvariantCulture) + "-" + Month.ToString("00", System.Globalization.CultureInfo.InvariantCulture);
 }
