@@ -143,6 +143,50 @@ internal static class Pixels
         return clusters;
     }
 
+    /// <summary>
+    /// Pixels inside <paramref name="region"/> (points) whose color differs from the background by more than
+    /// <paramref name="tolerance"/> in some channel and whose center lies outside every allowed rectangle: printed art
+    /// an erase missed, or overlay ink outside the boxes it was drawn in. Only whole pixels inside the region are
+    /// checked, so a partly covered pixel on the region's edge never counts. Returns how many there are and up to five
+    /// of them (in points) for a failure message.
+    /// </summary>
+    public static (int Count, IReadOnlyList<(double XPt, double YPt)> Samples) StrayInk(SKBitmap bitmap, RectPt region, IReadOnlyList<RectPt> allowed, int dpi, SKColor background, int tolerance = 3)
+    {
+        double s = dpi / 72.0;
+        int left = Math.Max(0, (int)Math.Ceiling(region.X * s));
+        int top = Math.Max(0, (int)Math.Ceiling(region.Y * s));
+        int right = Math.Min(bitmap.Width, (int)Math.Floor(region.Right * s));
+        int bottom = Math.Min(bitmap.Height, (int)Math.Floor(region.Bottom * s));
+        int count = 0;
+        List<(double, double)> samples = new();
+        for (int y = top; y < bottom; y++)
+        {
+            for (int x = left; x < right; x++)
+            {
+                SKColor c = bitmap.GetPixel(x, y);
+                if (Math.Abs(c.Red - background.Red) <= tolerance && Math.Abs(c.Green - background.Green) <= tolerance && Math.Abs(c.Blue - background.Blue) <= tolerance)
+                {
+                    continue;
+                }
+
+                double xPt = (x + 0.5) / s;
+                double yPt = (y + 0.5) / s;
+                if (allowed.Any(a => xPt >= a.X && xPt <= a.Right && yPt >= a.Y && yPt <= a.Bottom))
+                {
+                    continue;
+                }
+
+                count++;
+                if (samples.Count < 5)
+                {
+                    samples.Add((xPt, yPt));
+                }
+            }
+        }
+
+        return (count, samples);
+    }
+
     /// <summary>The most frequent color, sampling every <paramref name="step"/> pixels in each direction.</summary>
     public static SKColor Dominant(SKBitmap bitmap, int step = 7)
     {
