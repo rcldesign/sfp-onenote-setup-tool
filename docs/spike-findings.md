@@ -7,6 +7,14 @@ docs/decisions.md.
 
 How to run: see tools/spike/README.md. Each script prints its findings as a block that can be pasted here.
 
+How the scripts report: every script ends by printing its findings twice, as a JSON block and as a Markdown block
+headed like the matching section below, and writes both to tools/spike/scratch/m0_N-findings.json and .md while
+merging the JSON into tools/spike/scratch/findings.json (schema at the top of tools/spike/m0_9_apply.py). Paste the
+Markdown block over the matching section here, replacing its _pending_ lines; keep the screenshots named in the
+block under tools/spike/scratch. Set the accepted values under "decisions" in findings.json (or accept the scripts'
+proposals) and run m0_9_apply.py to write them into the manifest's onenote block. M0.7 has no script; its checklist
+is tools/spike/m0_7_ipad.md, and M0.8 reads the inked page back afterwards.
+
 ## M0.1 COM reachability
 
 - OneNote version string: _pending_
