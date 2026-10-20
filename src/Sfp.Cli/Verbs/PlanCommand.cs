@@ -82,7 +82,10 @@ public static class PlanCommand
         return command;
     }
 
-    /// <summary>Runs the verb; returns an exit code from <see cref="ExitCodes"/> (2 with a message on stderr for a bad month, manifest or folder).</summary>
+    /// <summary>
+    /// Runs the verb; returns an exit code from <see cref="ExitCodes"/>: 2 with one message on stderr and nothing on
+    /// stdout for a bad month, folder or manifest, or for a manifest and options that cannot make a plan.
+    /// </summary>
     public static int Run(PlanRequest request, TextWriter stdout, TextWriter stderr)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -132,7 +135,19 @@ public static class PlanCommand
         }
 
         DateEngine engine = new();
-        NotebookPlan plan = new PlanBuilder(engine).Build(manifest, engine.Build(spec), options);
+        NotebookPlan plan;
+        try
+        {
+            plan = new PlanBuilder(engine).Build(manifest, engine.Build(spec), options);
+        }
+        catch (Exception ex) when (ex is ManifestException or InvalidOperationException or ArgumentException)
+        {
+            // The manifest loaded, but it cannot make a plan with these options: a page the template repeats, an index
+            // outside its instances, a week page outside an eachWeek section, blank or colliding --notes names.
+            stderr.WriteLine(ex.Message);
+            return ExitCodes.ValidationError;
+        }
+
         if (request.Json)
         {
             stdout.WriteLine(PlanJson.From(plan).Serialize());

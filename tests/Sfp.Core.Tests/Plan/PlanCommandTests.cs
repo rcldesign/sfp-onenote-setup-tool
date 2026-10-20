@@ -180,6 +180,84 @@ public class PlanCommandTests
         }
     }
 
+    public static TheoryData<string, string> UnbuildableManifests => new()
+    {
+        {
+            // Loads, but the template repeats the cover once per week.
+            "{ \"notebook\": { \"sections\": [ { \"name\": \"Quarter\", \"pages\": [ { \"type\": \"cover\", \"title\": \"Cover\", \"level\": 1 } ] }, { \"name\": \"W {NN}\", \"eachWeek\": true, \"pages\": [ { \"type\": \"overview\", \"level\": 1 }, { \"type\": \"cover\", \"level\": 1 } ] } ] } }",
+            "The notebook template produces page key 'cover' twice (in sections 'Quarter' and 'W 01')"
+        },
+        {
+            "{ \"notebook\": { \"sections\": [ { \"name\": \"Objectives\", \"pages\": [ { \"type\": \"objective\", \"index\": 9, \"level\": 1 } ] } ] } }",
+            "Page template 'objective' index 9 is out of range: the valid indexes are 0 to 7."
+        },
+        {
+            "{ \"notebook\": { \"sections\": [ { \"name\": \"Loose\", \"pages\": [ { \"type\": \"overview\", \"level\": 1 } ] } ] } }",
+            "Page template type 'overview' is only valid inside a section with eachWeek."
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(UnbuildableManifests))]
+    public void A_manifest_that_loads_but_cannot_make_a_plan_exits_2_with_the_message(string userJson, string message)
+    {
+        string dir = TestPaths.NewTempDir("plan-unbuildable");
+        try
+        {
+            string user = Path.Combine(dir, "user.json");
+            File.WriteAllText(user, userJson);
+
+            foreach (bool noLinks in new[] { false, true })
+            {
+                (int code, string output, string err) = Run(Request("2027-01") with { ManifestPath = user, NoLinks = noLinks });
+
+                code.Should().Be(ExitCodes.ValidationError);
+                output.Should().BeEmpty();
+                err.Should().StartWith(message).And.EndWith("\n").And.NotContain("   at ", "a message, not a stack trace");
+            }
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(new[] { "Ideas", "ideas" }, "Notes page names 'Ideas' and 'ideas' both give the page key 'notes:ideas'; give each Notes page a distinct name.")]
+    [InlineData(new[] { "Backlog", " " }, "Notes page name 2 of 2 is blank; every Notes page needs a name.")]
+    public void Blank_or_duplicate_notes_names_exit_2_with_the_message(string[] notes, string message)
+    {
+        (int code, string output, string err) = Run(Request("2027-01") with { Notes = notes });
+
+        code.Should().Be(ExitCodes.ValidationError);
+        output.Should().BeEmpty();
+        err.Should().Be(message + "\n");
+    }
+
+    [Theory]
+    [InlineData("{ \"notebook\": { \"sections\": [ { \"name\": \"Quarter {NN}\", \"pages\": [ { \"type\": \"cover\", \"title\": \"Cover\", \"level\": 1 } ] } ] } }", "notebook.sections[0].name: token {NN} in 'Quarter {NN}' has no value")]
+    [InlineData("{ \"notebook\": { \"sections\": [ { \"name\": \"Quarter\", \"pages\": [ { \"type\": \"cover\", \"title\": \"Cover {n}\", \"level\": 1 } ] } ] } }", "notebook.sections[0].pages[0].title: token {n} in 'Cover {n}' has no value")]
+    [InlineData("{ \"slots\": { \"date\": null } }", "$.slots.date must not be null.")]
+    public void A_context_invalid_token_or_a_null_slot_exits_2_with_the_message(string userJson, string fragment)
+    {
+        string dir = TestPaths.NewTempDir("plan-invalid");
+        try
+        {
+            string user = Path.Combine(dir, "user.json");
+            File.WriteAllText(user, userJson);
+
+            (int code, string output, string err) = Run(Request("2027-01") with { ManifestPath = user });
+
+            code.Should().Be(ExitCodes.ValidationError);
+            output.Should().BeEmpty();
+            err.Should().Contain(fragment).And.NotContain("   at ");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Build_defines_the_plan_command_and_its_options()
     {
