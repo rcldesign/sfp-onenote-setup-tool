@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Xml.Linq;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
@@ -627,6 +628,27 @@ public class GenerateOrchestratorTests
         GenerateResult goneResult = gone.Run();
         goneResult.ExitCode.Should().Be(3);
         goneResult.Error.Should().Contain("OneNote went away");
+    }
+
+    [Fact]
+    public void Onenote_going_away_while_pages_are_written_exits_3_saying_it_stopped_not_that_it_is_missing()
+    {
+        Harness h = new() { Parallelism = 1, Capacity = 1 };
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        app.UpdatePageContentFailure = xml => xml.Contains("content=\"day:2027-01-04\"", StringComparison.Ordinal)
+            ? OneNoteHResults.Map("UpdatePageContent", new COMException("The object invoked has disconnected from its clients.", OneNoteHResults.RpcDisconnected), xml)
+            : null;
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run();
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(3);
+        result.Phase.Should().Be(GeneratePhase.WritingPages);
+        result.FailedPage.Should().Be("Mon Jan 4");
+        result.Error.Should().Contain(OneNoteUnavailableException.DisconnectedMessage).And.Contain("RPC_E_DISCONNECTED (0x80010108)");
+        result.Error.Should().NotContain("is required", "OneNote is installed; it went away during the run");
     }
 
     [Fact]

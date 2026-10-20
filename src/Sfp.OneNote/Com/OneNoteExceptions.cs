@@ -33,10 +33,20 @@ public class OneNoteException : Exception
     public string HResultHex => OneNoteHResults.Hex(HResult);
 }
 
-/// <summary>OneNote desktop is not installed, not registered, or its COM server is not reachable.</summary>
+/// <summary>
+/// OneNote desktop is not installed, not registered, or its COM server could not be reached: at activation (the
+/// install message, <see cref="UserMessage"/>) or because it went away during the run (<see cref="DisconnectedMessage"/>).
+/// </summary>
 public sealed class OneNoteUnavailableException : OneNoteException
 {
-    public const string UserMessage = "OneNote desktop (Office 2016 or later) is required. OneNote for Windows 10 is not supported.";
+    /// <summary>Where OneNote desktop can be installed (the PRD's link to install OneNote).</summary>
+    public const string InstallUrl = "https://www.onenote.com/download";
+
+    /// <summary>PRD error table, OneNote desktop not installed or only the UWP app: for activation and ProgID failures.</summary>
+    public const string UserMessage = "OneNote desktop (Office 2016 or later) is required. OneNote for Windows 10 is not supported. Install OneNote desktop from " + InstallUrl + ".";
+
+    /// <summary>OneNote was running when the run reached it, then its COM server went away (closed, crashed or hung).</summary>
+    public const string DisconnectedMessage = "OneNote stopped responding or was closed during the run.";
 
     public OneNoteUnavailableException()
         : base(UserMessage)
