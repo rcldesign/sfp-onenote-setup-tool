@@ -188,3 +188,34 @@ of templates/sfp-quarterly.json so a spike result is a manifest edit.
   variations (page count, size, missing probe); SyntheticTemplate (tests/Sfp.TestSupport) builds the full look-alike
   for rendering. Both read the manifest. They stay separate: the validator tests need the variations, the render
   tests need the geometry.
+
+## Calibration against the real PDF (integrator, after wave 1)
+
+The owner placed SFP_No_Dates.pdf on the main branch (docs/SFP No Dates.pdf). It validates against the manifest
+(132 pages, 1112 x 770 pt, every probe found). sfp-measure on pages 1, 2, 3, 5, 13, 16, 17 and 24 gave the values
+below, now in templates/sfp-quarterly.json. The PRD's "baseline y 47" figures turned out to be ink bottoms: the
+32 pt page titles sit on baseline 39.4 (ink 16.5 to 46.6).
+
+| Item | Measured (pt) | Manifest key |
+| --- | --- | --- |
+| Page title baseline (all pages) | x 23, baseline 39.4, 32 pt | generated.heading.baselineY |
+| Weeks-remaining numbers | left edges as the PRD lists, baseline 39.4, ink 32.5 to 39.5; 25 hour labels | slots.weeksRemaining.baselineY |
+| Date slashes | (900.2, 41.0) to (918.8, 16.9) and (952.1, 41.0) to (970.7, 16.9); center y 29 | slots.date.slashes |
+| Date fields | 15 pt lining digits (about 10.5 pt tall) centered on the slashes: baseline 34.5 | slots.date.baselineY |
+| Daily Goals box | x 28.1 to 349.1, rows 87 to 159, 159 to 231, 231 to 303; number column to x 107.6; row lines at 111, 135 (and so on, 24 pt apart) | slots.standingGoals rows at x 111, y 92, 164, 236, w 234, h 16 |
+| Daily Metrics tables | x 29.5 to 371, 388.8 to 726.6, 745.6 to 1082.7; rows 690.9 to 714.3 and 714.3 to 738.3; name cells end at x 285.2, 640.8, 996.9 | slots.metricNames cells |
+| Time Blocks column | 25 labels (12, 1 ... 12, 1 ... 12) right edge 894, baselines 97.3 + 22.6k; rules x 897.9 to 1082.7 at 95.5 + 22.6k | slots.timeBlocks columnX, columnRight, top 95.5, bottom 638, printedRows 25 |
+| Weekly Overview day grid | header box y 309.2 to 338.9, columns at 29.5 + 150.43 i, bottom 724.9; names baseline 331.1 | links.overviewDayHeader, slots.overviewDayColumns |
+| Weekly Reflection | Weekly Goal Review table x 574 to 1082.7, y 87.7 to 231.7, Progress % column from x 998.7; "Progress %" 10 pt at x 1012.9 to 1066.7, baseline 81.9; "Changes For Next Week" baseline 536.3 ending at x 759.8 | links.progressScorecard (x 1000, y 71, w 82, erase), links.reflectionNext and the review links beside the label (x 770, y 524) |
+| Annual Objectives | block tops 61.0, 234.2, 407.5, 580.5; title band y top to top + 24 from x 28.2 to 711; label cell x 28.2 to 99.3 is blank (nothing to erase) | links.annualObjective erase false; the title slot (slots.annualTitle) goes in the band at x 34, y top + 4, w 670 |
+| Objective Details | heading ends at x 285.2; Objective Description lines x 29.5 to 538.2, y 87.5 + 24k | links.objectiveBack at x 300; generated.notes rules 87.5 + 24k, x 29.5 to 1082.7, 0.5 pt |
+| Monthly Calendar | day names baseline 103.4 (ink 92.7 to 106.8); grid columns and rows as the PRD; rule x 779.5 to 1082.7 at 50.9 | unchanged |
+| Cover | logo image y about 320 to 420, x 261 to 850; copyright baseline 746.7 | coverLabel baselines 470 and 492 stay |
+
+- **Overview header erase is per cell.** Erasing one band across the header would also erase the seven column rules
+  inside the header box, so links.overviewDayHeader.eraseInsetX = 1 erases each cell separately (OverviewDayHeaderAnchor.EraseCell).
+- **Progress % becomes the link text.** The printed label is erased and "Progress %" is written as the link to the
+  scorecard, so the sheet reads the same. The quarterly review uses the same spot for "Scorecard".
+- **Navigation beside "Changes For Next Week".** reflectionNext reads "Next week" (its target title would be the
+  uninformative "Weekly Overview"); the quarterly review link keeps the target title ("Q1 2027 Review").
+- Goldens recorded before this calibration (the synthetic fixture reads the manifest) are re-recorded deliberately.

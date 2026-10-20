@@ -60,8 +60,8 @@
     </one:OEChildren>
   </one:Outline>
   <one:Outline>
-    <one:Position x="62" y="128" z="1" />
-    <one:Size width="300" height="14" isSetByUser="true" />
+    <one:Position x="111" y="128" z="1" />
+    <one:Size width="234" height="16" isSetByUser="true" />
     <one:OEChildren>
       <one:OE alignment="left">
         <one:T><![CDATA[<span style='font-family:Bookman Old Style;font-size:10.0pt;color:#6B6763'>Walk 30 min</span>]]></one:T>

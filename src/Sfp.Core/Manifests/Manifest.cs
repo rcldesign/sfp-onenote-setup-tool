@@ -606,7 +606,22 @@ public sealed record OverviewDayHeaderAnchor
     /// <summary>Band erased before the names are redrawn as links.</summary>
     public RectPt? Erase { get; init; }
 
+    /// <summary>When set, the band is erased one cell at a time, inset this much from each column boundary so the printed column rules survive.</summary>
+    public double EraseInsetX { get; init; }
+
     public RectPt Rect(int weekdayIndex) => new(X0 + (Pitch * weekdayIndex), Y, W, H);
+
+    /// <summary>The erase rectangle for one header cell (the band clipped to the column, inset by <see cref="EraseInsetX"/>).</summary>
+    public RectPt? EraseCell(int weekdayIndex)
+    {
+        if (Erase is not RectPt band)
+        {
+            return null;
+        }
+
+        double left = X0 + (Pitch * weekdayIndex) + EraseInsetX;
+        return new RectPt(left, band.Y, Pitch - (2 * EraseInsetX), band.H);
+    }
 }
 
 /// <summary>An anchor whose position comes from a generated page's own geometry (scorecard column headers).</summary>

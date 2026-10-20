@@ -177,8 +177,9 @@ public class ManifestLoaderTests : IDisposable
         });
 
         Manifest m = _loader.Load(path);
+        Manifest shipped = _loader.Load(TestPaths.ManifestPath);
 
-        m.Slots.Date.BaselineY.Should().Be(37);
+        m.Slots.Date.BaselineY.Should().Be(shipped.Slots.Date.BaselineY);
         ManifestLoader.Serialize(m).Should().NotContain("$comment");
     }
 

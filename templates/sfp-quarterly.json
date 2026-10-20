@@ -1,5 +1,5 @@
 {
-  "$comment": "Everything the tool knows about the SFP quarterly planner PDF. Coordinates are PDF points, top-left origin, page 1112 x 770. Rectangles are {x, y, w, h}. The renderer owns the DPI conversion. Values marked calibrate in docs/decisions.md are estimates to be confirmed with 'sfp2onenote measure' on the real PDF and the M0 spike.",
+  "$comment": "Everything the tool knows about the SFP quarterly planner PDF. Coordinates are PDF points, top-left origin, page 1112 x 770. Rectangles are {x, y, w, h}. The renderer owns the DPI conversion. Slot geometry was calibrated against the real PDF with sfp-measure (see docs/decisions.md, Calibration); the onenote block still carries the M0 assumptions.",
   "templateId": "sfp-quarterly-2023",
   "pageSizePt": [1112, 770],
   "pageCount": 132,
@@ -52,7 +52,7 @@
       "appliesTo": ["overview", "mon", "tue", "wed", "thu", "fri", "sat", "sun", "reflection"],
       "linkOn": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
       "sizePt": 15,
-      "baselineY": 37,
+      "baselineY": 34.5,
       "fields": [
         { "name": "month", "align": "right", "x": 895 },
         { "name": "day", "align": "center", "x": 935 },
@@ -68,7 +68,7 @@
       "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
       "erase": { "x": 530, "y": 28, "w": 198, "h": 16 },
       "sizePt": 10,
-      "baselineY": 40,
+      "baselineY": 39.4,
       "numberX": [537.3, 556.1, 574.9, 593.7, 615.7, 628.3, 640.9, 653.5, 666.1, 678.7, 691.3, 703.9, 716.5],
       "numberSpan": { "from": 537, "to": 723 },
       "circleDiameterPt": 12,
@@ -101,35 +101,35 @@
       "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
       "sizePt": 10,
       "rows": [
-        { "x": 62, "y": 92, "w": 300, "h": 14 },
-        { "x": 62, "y": 170, "w": 300, "h": 14 },
-        { "x": 62, "y": 248, "w": 300, "h": 14 }
+        { "x": 111, "y": 92, "w": 234, "h": 16 },
+        { "x": 111, "y": 164, "w": 234, "h": 16 },
+        { "x": 111, "y": 236, "w": 234, "h": 16 }
       ]
     },
     "metricNames": {
       "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
       "sizePt": 10,
       "cells": [
-        { "x": 44, "y": 690, "w": 150, "h": 14 },
-        { "x": 394, "y": 690, "w": 150, "h": 14 },
-        { "x": 744, "y": 690, "w": 150, "h": 14 }
+        { "x": 33, "y": 694, "w": 248, "h": 16 },
+        { "x": 392, "y": 694, "w": 245, "h": 16 },
+        { "x": 749, "y": 694, "w": 244, "h": 16 }
       ]
     },
     "habitLegend": { "appliesTo": ["calendar"], "rect": { "x": 28.8, "y": 718, "w": 850, "h": 40 }, "sizePt": 8, "columns": 8, "lineHeight": 11 },
     "timeBlocks": {
       "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
-      "erase": { "x": 870, "y": 88, "w": 212, "h": 560 },
-      "columnX": 870,
-      "columnRight": 1082,
-      "top": 88,
-      "bottom": 648,
+      "erase": { "x": 870, "y": 88, "w": 214, "h": 560 },
+      "columnX": 897.9,
+      "columnRight": 1082.7,
+      "top": 95.5,
+      "bottom": 638,
       "labelRightX": 894,
       "labelSizePt": 9,
       "printedLabelSizePt": 7,
-      "printedRows": 24,
+      "printedRows": 25,
       "printedPitch": 22.6,
       "ruleWidthPt": 0.5,
-      "eventTextX": 898,
+      "eventTextX": 900,
       "eventSizePt": 8,
       "eventLineHeight": 10
     },
@@ -137,10 +137,10 @@
     "overviewDayColumns": {
       "appliesTo": ["overview"],
       "x0": 29.5,
-      "pitch": 150.4,
-      "columnW": 150.4,
-      "top": 340,
-      "bottom": 740,
+      "pitch": 150.43,
+      "columnW": 150.43,
+      "top": 339,
+      "bottom": 724.9,
       "sizePt": 9,
       "lineHeight": 11,
       "maxLines": 18
@@ -148,28 +148,28 @@
     "calendarEventLines": { "appliesTo": ["calendar"], "offsetBelowBox": 2, "xOffset": 2, "w": 117, "sizePt": 8, "lineHeight": 10, "maxLines": 2 }
   },
   "links": {
-    "annualObjective": { "x": 33, "blockTops": [61.0, 234.2, 407.5, 580.5], "yOffset": 29, "w": 62, "h": 14, "sizePt": 10, "align": "left", "erase": true },
+    "annualObjective": { "x": 33, "blockTops": [61.0, 234.2, 407.5, 580.5], "yOffset": 29, "w": 62, "h": 14, "sizePt": 10, "align": "left", "erase": false },
     "objectiveBack": { "x": 300, "y": 24, "w": 120, "h": 20, "sizePt": 15, "align": "left", "erase": false },
     "calendarDay": { "yOffset": 8, "w": 30.3, "h": 14, "sizePt": 10, "align": "center" },
     "calendarWeek": { "xOffset": 36, "yOffset": 8, "w": 60, "h": 14, "sizePt": 10, "align": "left" },
     "dailyDate": { "rightX": 1010, "y": 22, "w": 110, "h": 20, "sizePt": 15, "align": "right" },
-    "overviewDayHeader": { "x0": 29.5, "pitch": 150.4, "y": 316, "w": 150.4, "h": 20, "sizePt": 15, "align": "center", "erase": { "x": 29.5, "y": 314, "w": 1052.8, "h": 24 } },
+    "overviewDayHeader": { "x0": 29.5, "pitch": 150.43, "y": 316, "w": 150.43, "h": 20, "sizePt": 15, "align": "center", "erase": { "x": 29.5, "y": 310.5, "w": 1053, "h": 27 }, "eraseInsetX": 1.0 },
     "prev": { "x": 23, "y": 48, "w": 95, "h": 14, "sizePt": 10, "align": "left", "textFormat": "‹ {title}" },
     "next": { "x": 122, "y": 48, "w": 95, "h": 14, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
     "prevCalendar": { "x": 785, "y": 56, "w": 100, "h": 14, "sizePt": 10, "align": "left", "textFormat": "‹ {title}" },
     "nextCalendar": { "x": 890, "y": 56, "w": 100, "h": 14, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
-    "reflectionNext": { "x": 560, "y": 392, "w": 180, "h": 14, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
-    "progressScorecard": { "x": 40, "y": 700, "w": 160, "h": 14, "sizePt": 10, "align": "left", "textFormat": "Scorecard ›" },
+    "reflectionNext": { "x": 770, "y": 524, "w": 200, "h": 16, "sizePt": 10, "align": "left", "textFormat": "Next week ›" },
+    "progressScorecard": { "x": 1000, "y": 71, "w": 82, "h": 14, "sizePt": 10, "align": "right", "erase": true, "textFormat": "Progress %" },
     "scorecardWeek": { "sizePt": 10, "align": "center" },
     "calendarReview": { "x": 1000, "y": 56, "w": 82, "h": 14, "sizePt": 10, "align": "right", "textFormat": "Review ›" },
-    "reflectionQuarterReview": { "x": 760, "y": 700, "w": 200, "h": 14, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
-    "quarterReviewScorecard": { "x": 40, "y": 700, "w": 160, "h": 14, "sizePt": 10, "align": "left", "textFormat": "Scorecard ›" },
-    "nextQuarter": { "x": 760, "y": 700, "w": 200, "h": 14, "sizePt": 10, "align": "left", "textFormat": "Next quarter ›" },
+    "reflectionQuarterReview": { "x": 770, "y": 524, "w": 230, "h": 16, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
+    "quarterReviewScorecard": { "x": 1000, "y": 71, "w": 82, "h": 14, "sizePt": 10, "align": "right", "erase": true, "textFormat": "Scorecard ›" },
+    "nextQuarter": { "x": 770, "y": 524, "w": 200, "h": 16, "sizePt": 10, "align": "left", "textFormat": "Next quarter ›" },
     "notesContents": { "x": 1000, "y": 24, "w": 82, "h": 14, "sizePt": 10, "align": "right", "textFormat": "Contents ›" }
   },
   "generated": {
-    "heading": { "x": 23, "baselineY": 47, "sizePt": 32 },
-    "notes": { "rulesTop": 88, "rulesBottom": 740, "rulePitch": 24, "ruleX": 29, "ruleRight": 1083, "ruleWidthPt": 0.42 },
+    "heading": { "x": 23, "baselineY": 39.4, "sizePt": 32 },
+    "notes": { "rulesTop": 87.5, "rulesBottom": 740, "rulePitch": 24, "ruleX": 29.5, "ruleRight": 1082.7, "ruleWidthPt": 0.5 },
     "reviews": { "headingErase": { "x": 20, "y": 8, "w": 420, "h": 42 } },
     "scorecard": {
       "labelSizePt": 10,
