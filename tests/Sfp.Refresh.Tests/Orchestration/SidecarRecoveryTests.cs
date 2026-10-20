@@ -250,6 +250,35 @@ public class SidecarRecoveryTests
     }
 
     [Fact]
+    public void A_rebuild_carries_the_texts_the_tool_wrote_for_the_slots_it_re_finds()
+    {
+        FakeNotebook nb = FakeNotebook.Generate();
+        PageKey key = PageKey.Day(new DateOnly(2027, 1, 4));
+        AnchorWriteResult written = new AnchorWriter(nb.App, nb.Options, new CapturingLog().Logger).Write(nb.PageIds[key], nb.Read(key), new[]
+        {
+            new AnchorWrite(new PlannedChange(key, "standingGoal:1", null, "Walk 30 min", ChangeKind.Create, false, null), nb.Catalog.Slot(nb.Plan.Page(key), "standingGoal:1"), null),
+        });
+        SidecarPage monday = nb.Sidecar.Pages[key.Value];
+        Dictionary<string, SidecarPage> pages = new(nb.Sidecar.Pages, StringComparer.Ordinal)
+        {
+            [key.Value] = monday with
+            {
+                Anchors = new Dictionary<string, string>(monday.Anchors, StringComparer.Ordinal) { ["standingGoal:1"] = written.Created["standingGoal:1"] },
+                AnchorTexts = new Dictionary<string, string>(StringComparer.Ordinal) { ["standingGoal:1"] = "Walk 30 min", ["metricName:1"] = "Steps" },
+            },
+        };
+        string newNotebookId = nb.App.RenumberIds(nb.NotebookId);
+
+        RecoveryResult result = Recovery(nb).Recover(new NotebookHandle(newNotebookId, nb.NotebookPath, nb.Plan.Name), nb.Sidecar with { Pages = pages }, "1.2.3");
+
+        result.Rebuilt.Should().BeTrue();
+        result.Sidecar.Pages[key.Value].Anchors.Should().ContainKey("standingGoal:1");
+        result.Sidecar.Pages[key.Value].AnchorTexts.Should().Equal(
+            new Dictionary<string, string> { ["standingGoal:1"] = "Walk 30 min" },
+            "the re-found slot keeps what the tool wrote there; a slot whose outline is gone is dropped");
+    }
+
+    [Fact]
     public void Quarter_is_derived_from_calendar_keys_or_day_keys()
     {
         SidecarRecovery.QuarterFromKeys(new[] { "cover", "calendar:2027-03", "calendar:2027-01", "day:2027-02-03" }).Should().Be(new QuarterSpec(2027, 1));

@@ -283,6 +283,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     {
         Dictionary<string, Dictionary<string, string>> anchors = pages.Sidecar.Pages.ToDictionary(
             p => p.Key, p => new Dictionary<string, string>(p.Value.Anchors, StringComparer.Ordinal), StringComparer.Ordinal);
+        Dictionary<string, Dictionary<string, string>> texts = pages.Sidecar.Pages.ToDictionary(
+            p => p.Key, p => new Dictionary<string, string>(p.Value.AnchorTexts, StringComparer.Ordinal), StringComparer.Ordinal);
         List<PlannedChange> outcome = new();
         List<string> warnings = new();
         int touched = 0;
@@ -359,14 +361,25 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                 ? existing
                 : new Dictionary<string, string>(StringComparer.Ordinal);
             anchors[group.Key.Value] = updatedAnchors;
+            Dictionary<string, string> updatedTexts = texts.TryGetValue(group.Key.Value, out Dictionary<string, string>? known)
+                ? known
+                : new Dictionary<string, string>(StringComparer.Ordinal);
+            texts[group.Key.Value] = updatedTexts;
             foreach ((string slotId, string objectId) in result.Created)
             {
                 updatedAnchors[slotId] = objectId;
+                updatedTexts[slotId] = writes.First(w => w.Change.SlotId == slotId).Change.NewText;
+            }
+
+            foreach (string slotId in result.Updated)
+            {
+                updatedTexts[slotId] = writes.First(w => w.Change.SlotId == slotId).Change.NewText;
             }
 
             foreach (string slotId in result.Removed)
             {
                 updatedAnchors.Remove(slotId);
+                updatedTexts.Remove(slotId);
             }
 
             foreach (string slotId in result.Unresolved)
@@ -393,7 +406,11 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         Dictionary<string, SidecarPage> pagesWithAnchors = pages.Sidecar.Pages.ToDictionary(
             p => p.Key,
-            p => anchors.TryGetValue(p.Key, out Dictionary<string, string>? a) ? p.Value with { Anchors = a } : p.Value,
+            p => p.Value with
+            {
+                Anchors = anchors.TryGetValue(p.Key, out Dictionary<string, string>? a) ? a : p.Value.Anchors,
+                AnchorTexts = texts.TryGetValue(p.Key, out Dictionary<string, string>? t) ? t : p.Value.AnchorTexts,
+            },
             StringComparer.Ordinal);
         return new WriteOutcome(outcome, pagesWithAnchors, touched, valuesWritten, eventsWritten, warnings, error);
     }
@@ -510,7 +527,10 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         return change.NewText.Split('\n').All(old.Contains);
     }
 
-    /// <summary>Applies the ownership rules to a calendar change: a user object in the slot or a moved tool object blocks it.</summary>
+    /// <summary>
+    /// Applies the ownership rules to a calendar change: a user object in the slot, a moved tool object, or a tool object
+    /// whose text the user edited (it no longer holds the text the tool last wrote) blocks it.
+    /// </summary>
     private static PlannedChange Check(PlannedChange change, NotebookPlan plan, SlotCatalog catalog, PageCache pages, Sidecar sidecar)
     {
         PageSpec? spec = plan.FindPage(change.Page);
@@ -532,6 +552,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         if (state.Moved)
         {
             return change with { Blocked = true, Reason = Propagator.MovedReason };
+        }
+
+        string? written = record is not null && record.AnchorTexts.TryGetValue(change.SlotId, out string? last) ? last : null;
+        if (state.Owned is not null && Propagator.IsEdited(state.OwnedText, written))
+        {
+            return change with { Blocked = true, Reason = Propagator.EditedReason };
         }
 
         if (change.Kind != ChangeKind.Remove && state.IsBlocked)

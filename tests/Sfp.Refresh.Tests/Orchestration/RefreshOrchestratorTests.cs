@@ -5,6 +5,7 @@ using Sfp.Core.Options;
 using Sfp.Core.Plan;
 using Sfp.OneNote;
 using Sfp.OneNote.Com;
+using Sfp.OneNote.Tests.Support;
 using Sfp.Refresh.Calendar;
 using Sfp.Refresh.Orchestration;
 using Sfp.Refresh.Propagation;
@@ -28,6 +29,9 @@ public class RefreshOrchestratorTests
     private static readonly PageKey MonJan4 = PageKey.Day(new DateOnly(2027, 1, 4));
     private static readonly DateOnly Jan4 = new(2027, 1, 4);
     private static readonly DateTimeOffset Now = new(2027, 1, 4, 5, 0, 0, TimeSpan.Zero);
+
+    /// <summary>The sidecar schema the OneNote tests validate the generated file with.</summary>
+    private static string SidecarSchemaPath => Path.Combine(TestPaths.RepoRoot, "tests", "Sfp.OneNote.Tests", "schema", "sfp-state.schema.json");
 
     private static double Mono(string text, double sizePt) => text.Length * sizePt * 0.55;
 
@@ -195,6 +199,64 @@ public class RefreshOrchestratorTests
         monday.Outlines.Should().NotContain(o => o.PlainText.StartsWith("O1", StringComparison.Ordinal));
         h.SavedSidecar().Pages[MonJan4.Value].Anchors.Should().NotContainKey("objectiveLegend");
         RefreshText.SummaryLines(result, "SFP Q1 2027").Should().Contain(l => l.StartsWith("Skipped: Mon Jan 4", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Text_the_user_typed_into_a_pre_fill_is_left_alone_and_reported_while_untouched_pre_fills_update()
+    {
+        Harness h = new();
+        h.Type(S.StandingGoals[0], "Walk 30 min");
+        h.Run(Request()).Summary!.ValuesWritten.Should().Be(90);
+        Sidecar first = h.SavedSidecar();
+        first.Pages[MonJan4.Value].AnchorTexts.Should().Contain("standingGoal:1", "Walk 30 min", "the sidecar records what the tool wrote");
+        JsonSchemaLite.AssertValid(File.ReadAllText(SidecarSchemaPath), File.ReadAllText(h.SidecarPath));
+        string goalId = first.Pages[MonJan4.Value].Anchors["standingGoal:1"];
+        SlotGeometry goal = h.Notebook.Catalog.Slot(h.Notebook.Plan.Page(MonJan4), "standingGoal:1")!;
+        h.Notebook.EditOutlineText(MonJan4, goalId, AnchorWriter.Html("standingGoal:1", "Walk 30 min, then stretch", goal, h.Notebook.Options));
+        string setupGoal = h.Notebook.Read(PageKey.Setup).Outlines.Single(o => o.PlainText == "Walk 30 min").ObjectId;
+        h.Notebook.EditOutlineText(PageKey.Setup, setupGoal, "Walk 45 min");
+
+        RefreshResult second = h.Run(Request());
+
+        second.Success.Should().BeTrue(second.Error);
+        PlannedChange edited = second.Summary!.Changes.Single(c => c.Page == MonJan4);
+        edited.Blocked.Should().BeTrue();
+        edited.Reason.Should().Be(Propagator.EditedReason);
+        h.Notebook.Read(MonJan4).Outlines.Single(o => o.ObjectId == goalId).PlainText.Should().Be("Walk 30 min, then stretch", "what the user typed is never overwritten");
+        second.Summary.ValuesWritten.Should().Be(89, "every pre-fill the user did not touch updates normally");
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+        Sidecar saved = h.SavedSidecar();
+        h.Notebook.Read(tueJan5).Outlines.Single(o => o.ObjectId == saved.Pages[tueJan5.Value].Anchors["standingGoal:1"]).PlainText.Should().Be("Walk 45 min");
+        saved.Pages[tueJan5.Value].AnchorTexts["standingGoal:1"].Should().Be("Walk 45 min");
+        saved.Pages[MonJan4.Value].AnchorTexts["standingGoal:1"].Should().Be("Walk 30 min", "the edited outline keeps the text the tool wrote, so it stays the user's");
+        RefreshText.SummaryLines(second, "SFP Q1 2027").Should().Contain(l => l.StartsWith("Skipped: Mon Jan 4  standingGoal:1", StringComparison.Ordinal) && l.Contains("edited by the user", StringComparison.Ordinal));
+
+        h.Run(Request()).Summary!.Changes.Should().ContainSingle().Which.Reason.Should().Be(Propagator.EditedReason, "it stays the user's on later runs");
+    }
+
+    [Fact]
+    public void A_calendar_line_the_user_typed_into_is_left_alone_when_its_event_changes()
+    {
+        StubCalendarFactory calendars = new();
+        Harness h = new(calendars: calendars);
+        h.Type(S.CalendarSources[0], "Work | https://example.com/cal.ics");
+        DateTime nine = new(2027, 1, 5, 9, 0, 0);
+        calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff meeting", nine, nine.AddHours(1), false, false, false, "Work", null) };
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+        h.Run(Request(calendar: true)).Summary!.EventsWritten.Should().Be(2);
+        Sidecar saved = h.SavedSidecar();
+        saved.Pages[tueJan5.Value].AnchorTexts.Should().Contain("timeBlockEvent:9", "9:00 Staff meeting");
+        string rowId = saved.Pages[tueJan5.Value].Anchors["timeBlockEvent:9"];
+        h.Notebook.EditOutlineText(tueJan5, rowId, "9:00 Staff meeting, bring the slides");
+        calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff sync", nine, nine.AddHours(1), false, false, false, "Work", null) };
+
+        RefreshResult second = h.Run(Request(calendar: true));
+
+        PlannedChange row = second.Summary!.Changes.Single(c => c.Page == tueJan5);
+        row.Blocked.Should().BeTrue();
+        row.Reason.Should().Be(Propagator.EditedReason);
+        h.Notebook.Read(tueJan5).Outlines.Single(o => o.ObjectId == rowId).PlainText.Should().Be("9:00 Staff meeting, bring the slides");
+        second.Summary.EventsWritten.Should().Be(1, "Tuesday's column on the overview, which the user did not touch, is updated");
     }
 
     [Fact]

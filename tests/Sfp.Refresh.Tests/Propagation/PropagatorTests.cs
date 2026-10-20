@@ -233,5 +233,15 @@ public class PropagatorTests
         Propagator.Decide(page, "s", "new", heldBlocked)!.Blocked.Should().BeTrue();
         Propagator.Decide(page, "s", "new", movedAway).Should().Be(new PlannedChange(page, "s", "old", "new", ChangeKind.Update, true, Propagator.MovedReason));
         Propagator.Decide(page, "s", "old", movedAway).Should().BeNull();
+
+        Propagator.Decide(page, "s", "new", held, toolText: "old").Should().Be(new PlannedChange(page, "s", "old", "new", ChangeKind.Update, false, null), "the outline still says what the tool wrote");
+        Propagator.Decide(page, "s", "new", held, toolText: "older").Should().Be(new PlannedChange(page, "s", "old", "new", ChangeKind.Update, true, Propagator.EditedReason), "the user typed into the tool's outline");
+        Propagator.Decide(page, "s", "", held, toolText: "older").Should().Be(new PlannedChange(page, "s", "old", "", ChangeKind.Remove, true, Propagator.EditedReason), "text the user typed is never deleted either");
+        Propagator.Decide(page, "s", "old", held, toolText: "older").Should().BeNull("the slot already says what Setup asks for");
+        Propagator.Decide(page, "s", "new", held, toolText: null)!.Blocked.Should().BeFalse("a sidecar written before the texts were recorded skips the check");
+        Propagator.IsEdited("O1 a  O2 b", "O1 a O2 b").Should().BeFalse("runs of whitespace compare equal");
+        Propagator.IsEdited("1 Run\n2 Read", "1 Run  2 Read").Should().BeFalse();
+        Propagator.IsEdited("Walk, then stretch", "Walk").Should().BeTrue();
+        Propagator.IsEdited("anything", null).Should().BeFalse();
     }
 }

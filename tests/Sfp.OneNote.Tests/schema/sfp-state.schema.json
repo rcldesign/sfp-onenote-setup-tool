@@ -80,6 +80,11 @@
           "description": "Anchor or slot id (dailyDate, calendarDay:2027-01-04, objectiveLegend ...) to the objectID of the outline the tool wrote.",
           "type": "object",
           "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "anchorTexts": {
+          "description": "Slot id to the text Refresh last wrote in that slot's outline, so a later run can tell the user edited it; absent or empty in older files.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
         }
       }
     }

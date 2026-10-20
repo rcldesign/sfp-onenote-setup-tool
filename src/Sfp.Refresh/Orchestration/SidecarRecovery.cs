@@ -148,7 +148,7 @@ public sealed class SidecarRecovery
             IReadOnlyDictionary<string, string> anchors = spec is null
                 ? new Dictionary<string, string>(StringComparer.Ordinal)
                 : MatchAnchors(spec, pages[key], catalog, plan, manifest.OneNote);
-            records[key] = new SidecarPage { PageId = page.Id, SectionId = section.Id, Anchors = anchors };
+            records[key] = new SidecarPage { PageId = page.Id, SectionId = section.Id, Anchors = anchors, AnchorTexts = CarriedTexts(previous, key, anchors) };
         }
 
         log.Information("Sidecar rebuilt for {Name}: {Pages} pages, {Sections} sections, {Anchors} anchors re-found", notebook.Name, records.Count, sections.Count, records.Values.Sum(r => r.Anchors.Count));
@@ -231,6 +231,25 @@ public sealed class SidecarRecovery
         }
 
         return ids;
+    }
+
+    /// <summary>
+    /// The texts the tool last wrote, carried from a stale sidecar for the slots whose outline was re-found: the slot is
+    /// the same and so is what the tool wrote there, whatever the object IDs became. Nothing is guessed for a slot the
+    /// stale sidecar did not record (Refresh then skips the edited check for it until it writes the slot again).
+    /// </summary>
+    private static Dictionary<string, string> CarriedTexts(Sidecar? previous, string key, IReadOnlyDictionary<string, string> anchors)
+    {
+        Dictionary<string, string> texts = new(StringComparer.Ordinal);
+        if (previous is not null && previous.Pages.TryGetValue(key, out SidecarPage? stale))
+        {
+            foreach ((string slotId, string text) in stale.AnchorTexts.Where(t => anchors.ContainsKey(t.Key)))
+            {
+                texts[slotId] = text;
+            }
+        }
+
+        return texts;
     }
 
     /// <summary>The quarter from the page keys: the earliest "calendar:YYYY-MM", else the month of the earliest "day:YYYY-MM-DD".</summary>
