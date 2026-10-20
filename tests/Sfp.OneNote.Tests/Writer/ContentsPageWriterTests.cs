@@ -38,6 +38,19 @@ public class ContentsPageWriterTests
     }
 
     [Fact]
+    public void Entries_carry_the_section_group_of_each_section()
+    {
+        NotebookPlan small = TestPlans.Small();
+        NotebookPlan plan = small with { Sections = new[] { small.Sections[0], small.Sections[1] with { GroupName = "Weeks" } } };
+        (IReadOnlyDictionary<string, string> sectionHrefs, IReadOnlyDictionary<PageKey, string> pageHrefs) = Hrefs(plan);
+
+        IReadOnlyList<ContentsSectionEntry> entries = ContentsPageWriter.Entries(plan, sectionHrefs, pageHrefs);
+
+        entries.Select(e => e.GroupName).Should().Equal(null, "Weeks");
+        ContentsPageWriter.Entries(small, sectionHrefs, pageHrefs).Should().OnlyContain(e => e.GroupName == null);
+    }
+
+    [Fact]
     public void Missing_hrefs_become_empty_so_the_builder_writes_plain_text_instead_of_a_broken_link()
     {
         NotebookPlan plan = TestPlans.Small();

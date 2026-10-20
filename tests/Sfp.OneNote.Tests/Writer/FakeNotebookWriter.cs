@@ -25,12 +25,14 @@ public sealed class FakeNotebookWriter : INotebookWriter
     /// <summary>Exception CreateNotebook should throw, or null.</summary>
     public Exception? CreateNotebookFailure { get; set; }
 
-    /// <summary>Every call in order: "CreateNotebook:name", "CreateSection:name", "CreatePage:key", "ApplyHierarchy:section", "HyperlinkTo:key", "HyperlinkToSection:name", "WritePage:key", "ReadAnchorIds:key", "WriteContentsPage:key", "Sync", "NavigateTo:key", "CloseNotebook".</summary>
+    /// <summary>Every call in order: "CreateNotebook:name", "CreateSectionGroup:name", "CreateSection:name", "CreatePage:key", "ApplyHierarchy:section", "HyperlinkTo:key", "HyperlinkToSection:name", "WritePage:key", "ReadAnchorIds:key", "WriteContentsPage:key", "Sync", "NavigateTo:key", "CloseNotebook".</summary>
     public IReadOnlyList<string> Calls => _calls;
 
     public NotebookHandle? Notebook { get; private set; }
 
     public List<SectionHandle> Sections { get; } = new();
+
+    public List<SectionGroupHandle> Groups { get; } = new();
 
     public Dictionary<PageKey, PageHandle> Pages { get; } = new();
 
@@ -63,14 +65,29 @@ public sealed class FakeNotebookWriter : INotebookWriter
         return Notebook;
     }
 
-    public SectionHandle CreateSection(NotebookHandle nb, SectionSpec s)
+    public SectionHandle CreateSection(NotebookHandle nb, SectionSpec s) => CreateSection(nb, s, null);
+
+    public SectionHandle CreateSection(NotebookHandle nb, SectionSpec s, SectionGroupHandle? group)
     {
         _calls.Add("CreateSection:" + s.Name);
-        SectionHandle handle = new(NewId("s"), s.Name, nb) { ColorHex = s.ColorHex };
+        SectionHandle handle = new(NewId("s"), s.Name, nb) { ColorHex = s.ColorHex, Group = group };
         Sections.Add(handle);
         if (CreateFolderOnDisk)
         {
-            File.WriteAllBytes(Path.Combine(nb.Path, s.Name + ".one"), new byte[4096]);
+            File.WriteAllBytes(Path.Combine(group?.Path ?? nb.Path, s.Name + ".one"), new byte[4096]);
+        }
+
+        return handle;
+    }
+
+    public SectionGroupHandle CreateSectionGroup(NotebookHandle nb, string name)
+    {
+        _calls.Add("CreateSectionGroup:" + name);
+        SectionGroupHandle handle = new(NewId("sg"), name, Path.Combine(nb.Path, name));
+        Groups.Add(handle);
+        if (CreateFolderOnDisk)
+        {
+            Directory.CreateDirectory(handle.Path);
         }
 
         return handle;

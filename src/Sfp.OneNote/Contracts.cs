@@ -10,11 +10,20 @@ namespace Sfp.OneNote;
 /// <param name="Name">Display name.</param>
 public sealed record NotebookHandle(string Id, string Path, string Name);
 
+/// <summary>A section group: a folder of sections at the top level of a notebook (the "Weeks" group with --group-weeks).</summary>
+/// <param name="Id">OneNote object ID.</param>
+/// <param name="Name">Display name as OneNote shows it (the plan's group name, sanitized for a folder name).</param>
+/// <param name="Path">Folder path of the group on disk; its sections are .one files inside it.</param>
+public sealed record SectionGroupHandle(string Id, string Name, string Path);
+
 /// <summary>A section inside a notebook.</summary>
 public sealed record SectionHandle(string Id, string Name, NotebookHandle Notebook)
 {
     /// <summary>Section tab color as #RRGGBB from the plan, or null for OneNote's default. Written with the hierarchy.</summary>
     public string? ColorHex { get; init; }
+
+    /// <summary>The section group that holds this section, or null for a section at the top level of the notebook.</summary>
+    public SectionGroupHandle? Group { get; init; }
 }
 
 /// <summary>A page inside a section.</summary>
@@ -28,14 +37,21 @@ public sealed record ResolvedAnchor(AnchorPlacement Placement, string Href, bool
 
 /// <summary>
 /// The only seam that touches OneNote. One production implementation (COM) and one fake for tests. The orchestrator calls
-/// the methods in the PRD's order: create notebook, create sections, create every page, apply hierarchy, fetch hyperlinks,
-/// then write pages, then sync.
+/// the methods in the PRD's order: create notebook, create sections (and the section group that holds a grouped section,
+/// once, before its first section), create every page, apply hierarchy, fetch hyperlinks, then write pages, then sync.
 /// </summary>
 public interface INotebookWriter
 {
     NotebookHandle CreateNotebook(string folder, string name);
 
+    /// <summary>Creates a section at the top level of the notebook (the same as the overload with no group).</summary>
     SectionHandle CreateSection(NotebookHandle nb, SectionSpec s);
+
+    /// <summary>Creates a section inside <paramref name="group"/>, or at the top level of the notebook when it is null.</summary>
+    SectionHandle CreateSection(NotebookHandle nb, SectionSpec s, SectionGroupHandle? group);
+
+    /// <summary>Creates a section group (a folder of sections) at the top level of the notebook.</summary>
+    SectionGroupHandle CreateSectionGroup(NotebookHandle nb, string name);
 
     PageHandle CreatePage(SectionHandle s, PageSpec p);
 

@@ -6,13 +6,17 @@ using Sfp.OneNote.Xml;
 namespace Sfp.OneNote.Tests.Writer;
 
 /// <summary>
-/// An in-memory OneNote: notebooks, sections and pages created by the same calls the COM wrapper exposes, hierarchy
-/// updates applied, page XML stored and handed back with objectIDs the way GetPageContent reports them, and onenote:
-/// hyperlinks in the real shape. Every call is recorded so tests can assert the PRD call sequence without COM.
+/// An in-memory OneNote: notebooks, section groups (cftFolder), sections and pages created by the same calls the COM
+/// wrapper exposes, hierarchy updates applied, page XML stored and handed back with objectIDs the way GetPageContent
+/// reports them, and onenote: hyperlinks in the real shape. GetHierarchy lists a notebook's top-level sections before
+/// its section groups, the order the 2013 schema gives them. A closed notebook is not listed and its pages cannot be
+/// read or written until OpenHierarchy (cftNone) opens its folder again. Every call is recorded so tests can assert the
+/// PRD call sequence without COM.
 /// </summary>
 public sealed class FakeOneNoteApp : IOneNoteApp
 {
     private readonly Dictionary<string, Notebook> _notebooks = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SectionGroup> _groups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Section> _sections = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Page> _pages = new(StringComparer.Ordinal);
     private readonly List<(string Call, string Detail)> _calls = new();
@@ -49,8 +53,15 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     /// <summary>The calls of one kind, in order, with their detail.</summary>
     public IReadOnlyList<string> CallsOf(string call) => Calls.Where(c => c.Call == call).Select(c => c.Detail).ToList();
 
-    /// <summary>Section names of a notebook in creation order.</summary>
+    /// <summary>Names of the sections at the top level of a notebook in creation order (sections inside a section group are not listed).</summary>
     public IReadOnlyList<string> SectionNames(string notebookId) => _notebooks[notebookId].SectionIds.Select(id => _sections[id].Name).ToList();
+
+    /// <summary>The section groups of a notebook in creation order.</summary>
+    public IReadOnlyList<(string Id, string Name, string Path)> SectionGroups(string notebookId) =>
+        _notebooks[notebookId].GroupIds.Select(id => (id, _groups[id].Name, _groups[id].Path)).ToList();
+
+    /// <summary>Names of the sections inside a section group in creation order.</summary>
+    public IReadOnlyList<string> SectionNamesInGroup(string groupId) => _groups[groupId].SectionIds.Select(id => _sections[id].Name).ToList();
 
     /// <summary>Section color as last applied, or null.</summary>
     public string? SectionColor(string sectionId) => _sections[sectionId].Color;
@@ -83,7 +94,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
                 notebooks.Add(new XElement(one + "Notebook", new XAttribute("name", name), new XAttribute("ID", "{pre:" + name + "}"), new XAttribute("path", "C:\\Pre\\" + name)));
             }
 
-            foreach (Notebook nb in _notebooks.Values)
+            foreach (Notebook nb in _notebooks.Values.Where(n => n.Open))
             {
                 notebooks.Add(NotebookElement(one, nb, scope));
             }
@@ -91,9 +102,16 @@ public sealed class FakeOneNoteApp : IOneNoteApp
             return OneNoteXml.Serialize(notebooks);
         }
 
-        if (_notebooks.TryGetValue(startId, out Notebook? notebook))
+        if (_notebooks.TryGetValue(startId, out Notebook? notebook) && notebook.Open)
         {
             XElement element = NotebookElement(one, notebook, scope);
+            element.Add(new XAttribute(XNamespace.Xmlns + "one", one.NamespaceName));
+            return OneNoteXml.Serialize(element);
+        }
+
+        if (_groups.TryGetValue(startId, out SectionGroup? group))
+        {
+            XElement element = GroupElement(one, group, scope);
             element.Add(new XAttribute(XNamespace.Xmlns + "one", one.NamespaceName));
             return OneNoteXml.Serialize(element);
         }
@@ -120,6 +138,55 @@ public sealed class FakeOneNoteApp : IOneNoteApp
                 if (CreateFoldersOnDisk)
                 {
                     Directory.CreateDirectory(path);
+                }
+
+                return id;
+            }
+
+            case CreateFileType.None:
+            {
+                // Opens an existing notebook by its folder path, as OneNote does when the notebook is closed.
+                Notebook? existing = _notebooks.Values.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase));
+                if (existing is null)
+                {
+                    throw new OneNoteException("OpenHierarchy", OneNoteHResults.FileDoesNotExist, "No notebook at " + path, null);
+                }
+
+                existing.Open = true;
+                return existing.Id;
+            }
+
+            case CreateFileType.Folder:
+            {
+                if (relativeToId is null || !_notebooks.TryGetValue(relativeToId, out Notebook? owner))
+                {
+                    throw new OneNoteException("OpenHierarchy", OneNoteHResults.NotebookDoesNotExist, "No notebook " + relativeToId, null);
+                }
+
+                string id = NewId("sg");
+                _groups[id] = new SectionGroup(id, Path.GetFileName(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)), path, owner.Id);
+                owner.GroupIds.Add(id);
+                if (CreateFoldersOnDisk)
+                {
+                    Directory.CreateDirectory(path);
+                }
+
+                return id;
+            }
+
+            case CreateFileType.Section when relativeToId is not null && _groups.TryGetValue(relativeToId, out SectionGroup? group):
+            {
+                if (!string.Equals(Path.GetDirectoryName(path), group.Path, StringComparison.Ordinal))
+                {
+                    throw new OneNoteException("OpenHierarchy", OneNoteHResults.CreatingSection, "Section " + path + " is not inside the section group folder " + group.Path, null);
+                }
+
+                string id = NewId("s");
+                _sections[id] = new Section(id, Path.GetFileNameWithoutExtension(path), path, group.NotebookId) { GroupId = group.Id };
+                group.SectionIds.Add(id);
+                if (CreateFoldersOnDisk)
+                {
+                    File.WriteAllBytes(path, new byte[1024]);
                 }
 
                 return id;
@@ -216,7 +283,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
         XElement root = XElement.Parse(xml);
         string id = (string?)root.Attribute("ID") ?? "";
-        if (!_pages.TryGetValue(id, out Page? page))
+        if (!_pages.TryGetValue(id, out Page? page) || !Reachable(page))
         {
             throw new OneNoteException("UpdatePageContent", OneNoteHResults.PageDoesNotExist, "No page " + id, null);
         }
@@ -235,7 +302,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     public string GetPageContent(string pageId, PageInfo pageInfo)
     {
         Record("GetPageContent", pageId + ":" + pageInfo);
-        if (!_pages.TryGetValue(pageId, out Page? page))
+        if (!_pages.TryGetValue(pageId, out Page? page) || !Reachable(page))
         {
             throw new OneNoteException("GetPageContent", OneNoteHResults.PageDoesNotExist, "No page " + pageId, null);
         }
@@ -298,8 +365,24 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     public void CloseNotebook(string id)
     {
         Record("CloseNotebook", id);
-        _notebooks.Remove(id);
+        Close(id);
     }
+
+    /// <summary>
+    /// Closes a notebook the way the user closing it in OneNote does: it is no longer listed and its pages cannot be read
+    /// or written until OpenHierarchy opens its folder again (unknown IDs are ignored, as OneNote ignores them).
+    /// </summary>
+    public void Close(string notebookId)
+    {
+        if (_notebooks.TryGetValue(notebookId, out Notebook? nb))
+        {
+            nb.Open = false;
+        }
+    }
+
+    /// <summary>The ID of the notebook created or opened at a folder path, or null.</summary>
+    public string? NotebookIdAt(string path) =>
+        _notebooks.Values.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase))?.Id;
 
     public void Dispose() => Disposed = true;
 
@@ -315,6 +398,25 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         if (scope is HierarchyScope.Sections or HierarchyScope.Pages)
         {
             foreach (string sectionId in nb.SectionIds)
+            {
+                element.Add(SectionElement(one, _sections[sectionId], scope));
+            }
+
+            foreach (string groupId in nb.GroupIds)
+            {
+                element.Add(GroupElement(one, _groups[groupId], scope));
+            }
+        }
+
+        return element;
+    }
+
+    private XElement GroupElement(XNamespace one, SectionGroup group, HierarchyScope scope)
+    {
+        XElement element = new(one + "SectionGroup", new XAttribute("name", group.Name), new XAttribute("ID", group.Id), new XAttribute("path", group.Path));
+        if (scope is HierarchyScope.Sections or HierarchyScope.Pages)
+        {
+            foreach (string sectionId in group.SectionIds)
             {
                 element.Add(SectionElement(one, _sections[sectionId], scope));
             }
@@ -342,6 +444,10 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
         return element;
     }
+
+    /// <summary>False for a page whose notebook was closed or deleted.</summary>
+    private bool Reachable(Page page) =>
+        _sections.TryGetValue(page.SectionId, out Section? section) && _notebooks.TryGetValue(section.NotebookId, out Notebook? nb) && nb.Open;
 
     private string NewId(string kind)
     {
@@ -372,6 +478,32 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
         public string Path { get; }
 
+        /// <summary>False once the notebook is closed; OpenHierarchy on its path opens it again.</summary>
+        public bool Open { get; set; } = true;
+
+        public List<string> SectionIds { get; } = new();
+
+        public List<string> GroupIds { get; } = new();
+    }
+
+    private sealed class SectionGroup
+    {
+        public SectionGroup(string id, string name, string path, string notebookId)
+        {
+            Id = id;
+            Name = name;
+            Path = path;
+            NotebookId = notebookId;
+        }
+
+        public string Id { get; }
+
+        public string Name { get; }
+
+        public string Path { get; }
+
+        public string NotebookId { get; }
+
         public List<string> SectionIds { get; } = new();
     }
 
@@ -392,6 +524,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         public string Path { get; }
 
         public string NotebookId { get; }
+
+        /// <summary>The section group holding the section, or null at the top level.</summary>
+        public string? GroupId { get; init; }
 
         public string? Color { get; set; }
 

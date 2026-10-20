@@ -3,6 +3,7 @@ using Sfp.Core.Plan;
 using Sfp.OneNote.Generate;
 using Sfp.OneNote.Tests.Writer;
 using Sfp.OneNote.Tests.Xml;
+using Sfp.OneNote.Writer;
 using Sfp.Render;
 
 namespace Sfp.OneNote.Tests.Generate;
@@ -51,6 +52,19 @@ public class AnchorResolverTests
         problems.Should().HaveCount(2);
         problems[0].Should().Contain("dailyDate").And.Contain("no hyperlink");
         problems[1].Should().Contain("calendarWeek:1").And.Contain("no link");
+    }
+
+    [Fact]
+    public void The_reserved_next_quarter_slot_of_the_quarterly_review_is_skipped_without_a_note()
+    {
+        PageSpec review = new(PageKey.QuarterlyReview, PageType.QuarterlyReview, "Q1 2027 Review", 1, 132, new DateOnly(2027, 1, 1), new Dictionary<string, string>(StringComparer.Ordinal));
+        RenderedPage art = Art(review.Key, Placement(NextQuarterLinkWriter.AnchorId, ""), Placement("calendarWeek:1", "Week 02"));
+        List<string> problems = new();
+
+        IReadOnlyList<ResolvedAnchor> anchors = AnchorResolver.Resolve(review, art, AnchorResolver.None, Hrefs(), true, problems);
+
+        anchors.Should().BeEmpty("the slot is filled later by a Generate with --previous, never at generation");
+        problems.Should().ContainSingle().Which.Should().Contain("calendarWeek:1", "other placements without a link are still reported");
     }
 
     [Fact]

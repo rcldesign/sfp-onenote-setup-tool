@@ -94,6 +94,33 @@ public class ContentsXmlBuilderTests
     }
 
     [Fact]
+    public void Grouped_sections_are_listed_under_a_plain_text_heading_with_the_group_name_where_the_first_of_them_would_be()
+    {
+        ContentsPageEntry overview = new("Weekly Overview", "onenote:#wo&section-id={s}&page-id={p}&end", 1);
+        IReadOnlyList<ContentsSectionEntry> sections = new[]
+        {
+            new ContentsSectionEntry("Calendar", "onenote:Calendar.one#section-id={c}&end", Array.Empty<ContentsPageEntry>()),
+            new ContentsSectionEntry("Week 01 (Jan 1 to Jan 3)", "onenote:Week%2001.one#section-id={w1}&end", new[] { overview }) { GroupName = "Weeks" },
+            new ContentsSectionEntry("Week 02 (Jan 4 to Jan 10)", "onenote:Week%2002.one#section-id={w2}&end", new[] { overview }) { GroupName = "Weeks" },
+            new ContentsSectionEntry("Reviews", "onenote:Reviews.one#section-id={r}&end", Array.Empty<ContentsPageEntry>()),
+            new ContentsSectionEntry("Week 03 (Jan 11 to Jan 17)", "onenote:Week%2003.one#section-id={w3}&end", Array.Empty<ContentsPageEntry>()) { GroupName = "Weeks" },
+        };
+
+        XElement outline = ContentsXmlBuilder.OutlineElement(sections, MonJan4.Options(M));
+
+        List<XElement> top = outline.Element(One + "OEChildren")!.Elements(One + "OE").ToList();
+        top.Select(Text).Should().Equal("Calendar", "Weeks", "Reviews");
+        XElement heading = top[1];
+        heading.Element(One + "T")!.Value.Should().Be("Weeks", "the group heading is plain text, not a link");
+        List<XElement> grouped = heading.Element(One + "OEChildren")!.Elements(One + "OE").ToList();
+        grouped.Select(Text).Should().Equal("Week 01 (Jan 1 to Jan 3)", "Week 02 (Jan 4 to Jan 10)", "Week 03 (Jan 11 to Jan 17)");
+        grouped[0].Element(One + "T")!.Value.Should().StartWith("<a href=\"onenote:Week%2001.one");
+        grouped[0].Element(One + "OEChildren")!.Elements(One + "OE").Select(Text).Should().Equal("Weekly Overview");
+        PageSpec contents = new(PageKey.Contents, PageType.Contents, "Contents", 1, null, new DateOnly(2027, 1, 1), new Dictionary<string, string>(StringComparer.Ordinal));
+        SchemaValidator.AssertValid(ContentsXmlBuilder.Page("{contents}", contents, sections, MonJan4.Options(M)));
+    }
+
+    [Fact]
     public void A_level_two_page_with_no_parent_before_it_is_listed_at_the_top_level()
     {
         IReadOnlyList<ContentsSectionEntry> sections = new[]

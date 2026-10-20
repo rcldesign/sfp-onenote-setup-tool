@@ -38,6 +38,42 @@ public class HierarchyXmlReaderTests
         sfp.Sections[1].Pages[1].Should().Be(new HierarchyPage("{p4}", "Fri Jan 1", 2));
         sfp.Pages.Should().HaveCount(4);
         sfp.Pages.Last().Section.Id.Should().Be("{s2}");
+        sfp.SectionGroups.Should().Equal(new HierarchySectionGroup("{g1}", "Weeks", null));
+        notebooks[0].SectionGroups.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Nested_section_groups_are_listed_and_the_recycle_bin_is_left_out()
+    {
+        string xml = $$"""
+            <one:Notebook xmlns:one="{{Ns}}" name="SFP Q1 2027" ID="{nb}" path="C:\Notebooks\SFP Q1 2027">
+              <one:Section name="Quarter" ID="{s1}">
+                <one:Page ID="{p1}" name="Cover" pageLevel="1"/>
+              </one:Section>
+              <one:SectionGroup name="Weeks" ID="{g1}" path="C:\Notebooks\SFP Q1 2027\Weeks">
+                <one:Section name="Week 01 (Jan 1 to Jan 3)" ID="{s2}">
+                  <one:Page ID="{p2}" name="Weekly Overview" pageLevel="1"/>
+                </one:Section>
+                <one:SectionGroup name="Archive" ID="{g2}">
+                  <one:Section name="Old" ID="{s3}"/>
+                </one:SectionGroup>
+              </one:SectionGroup>
+              <one:SectionGroup name="OneNote_RecycleBin" ID="{bin}" isRecycleBin="true">
+                <one:Section name="Deleted Pages" ID="{s4}" isInRecycleBin="true" isDeletedPages="true">
+                  <one:Page ID="{p3}" name="Mon Jan 4" pageLevel="2"/>
+                </one:Section>
+              </one:SectionGroup>
+              <one:Section name="Strays" ID="{s5}" isInRecycleBin="true"/>
+            </one:Notebook>
+            """;
+
+        HierarchyNotebook notebook = HierarchyXmlReader.Notebook(xml);
+
+        notebook.SectionGroups.Should().Equal(
+            new HierarchySectionGroup("{g1}", "Weeks", "C:\\Notebooks\\SFP Q1 2027\\Weeks"),
+            new HierarchySectionGroup("{g2}", "Archive", null));
+        notebook.Sections.Select(s => s.Id).Should().Equal("{s1}", "{s2}", "{s3}");
+        notebook.Pages.Select(p => p.Page.Id).Should().Equal("{p1}", "{p2}");
     }
 
     [Fact]

@@ -9,9 +9,15 @@ public sealed record HierarchyPage(string Id, string Name, int Level);
 /// <summary>A section as GetHierarchy lists it, with its pages when the scope reached them.</summary>
 public sealed record HierarchySection(string Id, string Name, string? Path, IReadOnlyList<HierarchyPage> Pages);
 
+/// <summary>A section group as GetHierarchy lists it (the "Weeks" group of a notebook generated with --group-weeks).</summary>
+public sealed record HierarchySectionGroup(string Id, string Name, string? Path);
+
 /// <summary>A notebook as GetHierarchy lists it, with its sections (section groups flattened, in document order) when the scope reached them.</summary>
 public sealed record HierarchyNotebook(string Id, string Name, string? Path, IReadOnlyList<HierarchySection> Sections)
 {
+    /// <summary>The notebook's section groups, nested ones included, in document order; empty when the scope did not reach them.</summary>
+    public IReadOnlyList<HierarchySectionGroup> SectionGroups { get; init; } = Array.Empty<HierarchySectionGroup>();
+
     /// <summary>Every page of every section, in order.</summary>
     public IEnumerable<(HierarchySection Section, HierarchyPage Page)> Pages =>
         Sections.SelectMany(s => s.Pages.Select(p => (s, p)));
@@ -20,7 +26,9 @@ public sealed record HierarchyNotebook(string Id, string Name, string? Path, IRe
 /// <summary>
 /// Reads the XML GetHierarchy returns (one:Notebooks, one:Notebook or one:Section at the root) into records. Sections
 /// inside one:SectionGroup elements are flattened in document order so a notebook generated with the Weeks group reads
-/// the same as a flat one. The namespace is taken from the root so 2010 and 2013 documents both parse.
+/// the same as a flat one, and the groups themselves are listed beside them. OneNote's recycle bin (the section group
+/// marked isRecycleBin, and any section marked isInRecycleBin) is left out: deleted pages are not the notebook's pages.
+/// The namespace is taken from the root so 2010 and 2013 documents both parse.
 /// </summary>
 public static class HierarchyXmlReader
 {
@@ -74,7 +82,10 @@ public static class HierarchyXmlReader
         Attr(element, "ID"),
         Attr(element, "name"),
         (string?)element.Attribute("path"),
-        Sections(element, one).ToList());
+        Sections(element, one).ToList())
+    {
+        SectionGroups = Groups(element, one).ToList(),
+    };
 
     private static IEnumerable<HierarchySection> Sections(XElement parent, XNamespace one)
     {
@@ -85,11 +96,11 @@ public static class HierarchyXmlReader
                 continue;
             }
 
-            if (child.Name.LocalName == "Section")
+            if (child.Name.LocalName == "Section" && !Flag(child, "isInRecycleBin"))
             {
                 yield return Section(child, one);
             }
-            else if (child.Name.LocalName == "SectionGroup")
+            else if (child.Name.LocalName == "SectionGroup" && !Flag(child, "isRecycleBin"))
             {
                 foreach (HierarchySection nested in Sections(child, one))
                 {
@@ -98,6 +109,21 @@ public static class HierarchyXmlReader
             }
         }
     }
+
+    private static IEnumerable<HierarchySectionGroup> Groups(XElement parent, XNamespace one)
+    {
+        foreach (XElement group in parent.Elements(one + "SectionGroup").Where(g => !Flag(g, "isRecycleBin")))
+        {
+            yield return new HierarchySectionGroup(Attr(group, "ID"), Attr(group, "name"), (string?)group.Attribute("path"));
+            foreach (HierarchySectionGroup nested in Groups(group, one))
+            {
+                yield return nested;
+            }
+        }
+    }
+
+    private static bool Flag(XElement element, string attribute) =>
+        string.Equals((string?)element.Attribute(attribute), "true", StringComparison.OrdinalIgnoreCase);
 
     private static HierarchySection Section(XElement element, XNamespace one) => new(
         Attr(element, "ID"),

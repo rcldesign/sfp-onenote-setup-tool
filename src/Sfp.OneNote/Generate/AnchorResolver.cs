@@ -1,4 +1,5 @@
 using Sfp.Core.Plan;
+using Sfp.OneNote.Writer;
 using Sfp.Render;
 
 namespace Sfp.OneNote.Generate;
@@ -16,7 +17,7 @@ public static class AnchorResolver
     /// <param name="links">The plan's links from this page, keyed by AnchorId.</param>
     /// <param name="pageHrefs">onenote: URL per page key.</param>
     /// <param name="linksEnabled">False writes no anchors at all (the purely locked sheet).</param>
-    /// <param name="problems">Receives a line per placement that could not be resolved (no link spec, or no hyperlink for its target).</param>
+    /// <param name="problems">Receives a line per placement that could not be resolved (no link spec, or no hyperlink for its target); the reserved Next quarter slot is skipped without one.</param>
     public static IReadOnlyList<ResolvedAnchor> Resolve(
         PageSpec page,
         RenderedPage art,
@@ -44,7 +45,12 @@ public static class AnchorResolver
 
             if (!links.TryGetValue(placement.AnchorId, out LinkSpec? link))
             {
-                problems?.Add($"Page {page.Key}: the renderer placed link anchor '{placement.AnchorId}' but the plan has no link for it; left out.");
+                // The quarterly review's Next quarter slot is reserved, not linked: a later Generate with --previous fills it.
+                if (!string.Equals(placement.AnchorId, NextQuarterLinkWriter.AnchorId, StringComparison.Ordinal))
+                {
+                    problems?.Add($"Page {page.Key}: the renderer placed link anchor '{placement.AnchorId}' but the plan has no link for it; left out.");
+                }
+
                 continue;
             }
 

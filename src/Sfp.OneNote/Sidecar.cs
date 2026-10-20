@@ -1,4 +1,5 @@
 using Sfp.Core.Dates;
+using Sfp.Core.Options;
 
 namespace Sfp.OneNote;
 
@@ -28,6 +29,9 @@ public sealed record Sidecar
     /// <summary>Section name to OneNote section ID.</summary>
     public IReadOnlyDictionary<string, string> Sections { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
 
+    /// <summary>Section group name ("Weeks" with --group-weeks) to OneNote section group ID; empty for a notebook without groups.</summary>
+    public IReadOnlyDictionary<string, string> SectionGroups { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
     /// <summary>Page key value to page record.</summary>
     public IReadOnlyDictionary<string, SidecarPage> Pages { get; init; } = new Dictionary<string, SidecarPage>(StringComparer.Ordinal);
 
@@ -40,6 +44,12 @@ public sealed record Sidecar
 
     /// <summary>Path of the previous quarter's notebook when generated with --previous.</summary>
     public string? PreviousNotebook { get; init; }
+
+    /// <summary>
+    /// The Time Blocks window the daily pages were generated with (their rows are baked art), so Refresh places calendar
+    /// events in the rows the pages show; null in files written before it was recorded.
+    /// </summary>
+    public TimeBlockWindow? TimeBlocks { get; init; }
 }
 
 /// <summary>One page's IDs and its tool-owned objects.</summary>

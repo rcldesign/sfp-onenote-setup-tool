@@ -366,7 +366,11 @@ public static class GenerateCommand
         return true;
     }
 
-    /// <summary>The success summary, the cancelled line or the failure block per the PRD Generate flow.</summary>
+    /// <summary>
+    /// The success summary, the cancelled line or the failure block per the PRD Generate flow. With --previous the
+    /// summary says whether the previous notebook got its Next quarter link; when it did not, the reason is one of the
+    /// warning lines.
+    /// </summary>
     public static void Print(GenerateResult result, GenerateRequest request, TextWriter stdout, TextWriter stderr, bool quiet)
     {
         ArgumentNullException.ThrowIfNull(result);
@@ -429,6 +433,11 @@ public static class GenerateCommand
             if (!string.IsNullOrEmpty(result.SidecarPath))
             {
                 stdout.WriteLine("State file: " + result.SidecarPath);
+            }
+
+            if (!string.IsNullOrEmpty(result.NextQuarterLink))
+            {
+                stdout.WriteLine(result.NextQuarterLink);
             }
         }
 
@@ -550,7 +559,8 @@ public static class GenerateCommand
                     () => new ComNotebookWriter(locator.Open(), xml, log),
                     sidecars,
                     new GenerateOrchestratorOptions { FontFamily = fonts.FamilyInUse, TimeZone = TimeZoneInfo.Local, LogPath = logPath },
-                    log);
+                    log,
+                    () => new NextQuarterLinkWriter(locator.Open(), sidecars, manifest, xml, log));
                 return new ProductionOrchestrator(inner, fonts, rasterizer, oneNote);
             }
             catch

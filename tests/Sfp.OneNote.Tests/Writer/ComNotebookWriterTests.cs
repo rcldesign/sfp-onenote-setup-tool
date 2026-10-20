@@ -66,6 +66,50 @@ public class ComNotebookWriterTests
     }
 
     [Fact]
+    public void A_section_group_is_a_folder_in_the_notebook_and_its_sections_are_opened_inside_that_folder()
+    {
+        (ComNotebookWriter writer, FakeOneNoteApp app, CapturingSink log) = Create();
+        using (app)
+        {
+            NotebookHandle nb = writer.CreateNotebook("/out", "SFP Q1 2027");
+            SectionHandle quarter = writer.CreateSection(nb, new SectionSpec("Quarter", null, Array.Empty<PageSpec>()));
+            SectionGroupHandle weeks = writer.CreateSectionGroup(nb, "Weeks");
+            SectionHandle week1 = writer.CreateSection(nb, new SectionSpec("Week 01 (Jan 1 to Jan 3)", "#F0E6D8", Array.Empty<PageSpec>()) { GroupName = "Weeks" }, weeks);
+            SectionHandle week2 = writer.CreateSection(nb, new SectionSpec("Week 02 (Jan 4 to Jan 10)", "#F0E6D8", Array.Empty<PageSpec>()) { GroupName = "Weeks" }, weeks);
+            SectionHandle notes = writer.CreateSection(nb, new SectionSpec("Notes", null, Array.Empty<PageSpec>()), null);
+            SectionGroupHandle odd = writer.CreateSectionGroup(nb, "A/B");
+
+            app.CallsOf("OpenHierarchy").Skip(1).Should().Equal(
+                Path.Combine(nb.Path, "Quarter.one") + ":Section",
+                Path.Combine(nb.Path, "Weeks") + ":Folder",
+                Path.Combine(nb.Path, "Weeks", "Week 01 (Jan 1 to Jan 3).one") + ":Section",
+                Path.Combine(nb.Path, "Weeks", "Week 02 (Jan 4 to Jan 10).one") + ":Section",
+                Path.Combine(nb.Path, "Notes.one") + ":Section",
+                Path.Combine(nb.Path, "A-B") + ":Folder");
+            weeks.Id.Should().StartWith("{sg:");
+            weeks.Name.Should().Be("Weeks");
+            weeks.Path.Should().Be(Path.Combine(nb.Path, "Weeks"));
+            week1.Group.Should().BeSameAs(weeks);
+            week1.Notebook.Should().BeSameAs(nb);
+            week1.ColorHex.Should().Be("#F0E6D8");
+            app.SectionColor(week1.Id).Should().Be("#F0E6D8", "a grouped section gets its color like any other");
+            quarter.Group.Should().BeNull();
+            notes.Group.Should().BeNull();
+            odd.Name.Should().Be("A-B");
+            log.Messages.Should().Contain(m => m.Contains("Section group name", StringComparison.Ordinal));
+
+            app.SectionNames(nb.Id).Should().Equal("Quarter", "Notes");
+            app.SectionGroups(nb.Id).Select(g => g.Name).Should().Equal("Weeks", "A-B");
+            app.SectionNamesInGroup(weeks.Id).Should().Equal("Week 01 (Jan 1 to Jan 3)", "Week 02 (Jan 4 to Jan 10)");
+            XElement tree = XElement.Parse(app.GetHierarchy(nb.Id, HierarchyScope.Sections));
+            tree.Elements(One + "Section").Select(s => (string?)s.Attribute("name")).Should().Equal("Quarter", "Notes");
+            XElement group = tree.Elements(One + "SectionGroup").First();
+            ((string?)group.Attribute("ID")).Should().Be(weeks.Id);
+            group.Elements(One + "Section").Select(s => (string?)s.Attribute("ID")).Should().Equal(week1.Id, week2.Id);
+        }
+    }
+
+    [Fact]
     public void Create_page_uses_the_titled_blank_style_unless_the_title_is_hidden()
     {
         (ComNotebookWriter writer, FakeOneNoteApp app, _) = Create();

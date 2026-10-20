@@ -75,6 +75,13 @@ public sealed record GenerateResult
 
     /// <summary>Path of the sidecar written beside the notebook, when one was.</summary>
     public string? SidecarPath { get; init; }
+
+    /// <summary>
+    /// The summary line of the --previous step when the previous notebook's Next quarter link was written ("Next quarter
+    /// link added to the quarterly review of SFP Q4 2026."); null when no previous notebook was given or the link was not
+    /// written, in which case a warning says why.
+    /// </summary>
+    public string? NextQuarterLink { get; init; }
 }
 
 /// <summary>Pre-run checks from the PRD error table: OneNote present and signed in, PDF matches, folder writable, name free.</summary>

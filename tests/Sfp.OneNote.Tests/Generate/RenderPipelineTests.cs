@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Sfp.Core.Plan;
 using Sfp.OneNote.Generate;
 using Sfp.OneNote.Tests.Xml;
@@ -14,6 +15,8 @@ public class RenderPipelineTests
             .ToList();
 
     private static RenderedPage Render(PageSpec page) => new(page.Key, MonJan4.Png, 1, 1, Array.Empty<AnchorPlacement>());
+
+    private static int Index(PageSpec page) => int.Parse(page.Key.Value.Split(':')[1], System.Globalization.CultureInfo.InvariantCulture);
 
     [Fact]
     public void Pages_arrive_in_order_whatever_the_render_timing()
@@ -105,6 +108,98 @@ public class RenderPipelineTests
         pipeline.Pages().Count().Should().Be(5);
 
         counts.OrderBy(c => c).Should().Equal(1, 2, 3, 4, 5);
+    }
+
+    [Fact]
+    public void Each_page_reaches_the_consumer_only_after_its_rendered_callback_has_finished()
+    {
+        // The callback of page i waits until the consumer asks for page i and only then records itself. A pipeline that
+        // handed page i out before running its callback would let the consumer see page i with no record of the callback.
+        IReadOnlyList<PageSpec> pages = Pages(12);
+        ManualResetEventSlim[] asked = pages.Select(_ => new ManualResetEventSlim()).ToArray();
+        ConcurrentDictionary<string, int> finished = new(StringComparer.Ordinal);
+        ConcurrentBag<string> timedOut = new();
+        List<(string Key, bool CallbackDone, int RenderedCount)> seen = new();
+        bool moreAfterLast;
+        try
+        {
+            using RenderPipeline pipeline = new(pages, Render, 4, 3, CancellationToken.None, (page, count) =>
+            {
+                if (!asked[Index(page)].Wait(TimeSpan.FromSeconds(30)))
+                {
+                    timedOut.Add(page.Key.Value);
+                }
+
+                finished[page.Key.Value] = count;
+            });
+
+            try
+            {
+                using IEnumerator<RenderedPage> consumer = pipeline.Pages().GetEnumerator();
+                for (int i = 0; i < pages.Count; i++)
+                {
+                    asked[i].Set();
+                    if (!consumer.MoveNext())
+                    {
+                        break;
+                    }
+
+                    string key = consumer.Current.Key.Value;
+                    seen.Add((key, finished.ContainsKey(key), pipeline.RenderedCount));
+                }
+
+                moreAfterLast = consumer.MoveNext();
+            }
+            finally
+            {
+                // Release any callback still waiting so the pipeline's Dispose returns at once if the loop stopped early.
+                foreach (ManualResetEventSlim gate in asked)
+                {
+                    gate.Set();
+                }
+            }
+        }
+        finally
+        {
+            foreach (ManualResetEventSlim gate in asked)
+            {
+                gate.Dispose();
+            }
+        }
+
+        moreAfterLast.Should().BeFalse();
+        timedOut.Should().BeEmpty("every callback is released when the consumer asks for its page");
+        seen.Select(s => s.Key).Should().Equal(pages.Select(p => p.Key.Value));
+        seen.Should().OnlyContain(s => s.CallbackDone, "a page is handed out only after its rendered callback has finished");
+        seen.Select((s, i) => s.RenderedCount >= i + 1).Should().OnlyContain(ok => ok, "the pages handed out so far are all counted");
+        finished.Values.OrderBy(c => c).Should().Equal(Enumerable.Range(1, pages.Count));
+    }
+
+    [Fact]
+    public void A_page_whose_rendered_callback_throws_is_never_handed_to_the_consumer()
+    {
+        IReadOnlyList<PageSpec> pages = Pages(5);
+        using RenderPipeline pipeline = new(pages, Render, 1, 1, CancellationToken.None, (page, _) =>
+        {
+            if (page.Key.Value == "page:2")
+            {
+                throw new InvalidOperationException("the progress handler failed");
+            }
+        });
+
+        List<string> delivered = new();
+        Action act = () =>
+        {
+            foreach (RenderedPage page in pipeline.Pages())
+            {
+                delivered.Add(page.Key.Value);
+            }
+        };
+
+        RenderFailedException ex = act.Should().Throw<RenderFailedException>().Which;
+        ex.Page!.Key.Value.Should().Be("page:2");
+        ex.InnerException.Should().BeOfType<InvalidOperationException>().Which.Message.Should().Be("the progress handler failed");
+        delivered.Should().Equal("page:0", "page:1");
     }
 
     [Fact]

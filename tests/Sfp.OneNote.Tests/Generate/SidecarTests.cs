@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
@@ -56,8 +57,36 @@ public class SidecarTests
         sidecar.Pages["cover"].Anchors.Should().BeEmpty();
         sidecar.Generated.Should().Be(Now);
         sidecar.PreviousNotebook.Should().Be("/out/SFP Q4 2026");
+        sidecar.TimeBlocks.Should().Be(TimeBlockWindow.Default, "the window the daily pages were generated with");
         sidecar.LastRefresh.Should().BeNull();
         sidecar.FrozenThrough.Should().BeNull();
+    }
+
+    [Fact]
+    public void The_time_block_window_of_the_run_is_recorded_validates_and_loads_back()
+    {
+        NotebookPlan plan = TestPlans.Small();
+        FakeNotebookWriter writer = new();
+        NotebookHandle nb = writer.CreateNotebook("/out", plan.Name);
+        Dictionary<string, SectionHandle> sections = plan.Sections.ToDictionary(s => s.Name, s => writer.CreateSection(nb, s), StringComparer.Ordinal);
+        Dictionary<PageKey, PageHandle> pages = plan.Pages.ToDictionary(p => p.Key, p => writer.CreatePage(sections[plan.SectionOf(p.Key).Name], p));
+        GenerateRequest request = new(new GenerateOptions { Start = new QuarterSpec(2027, 1), TimeBlocks = new TimeBlockWindow(8, 18) }, M, TestPaths.TemplatesDir, false, null);
+
+        Sidecar sidecar = SidecarBuilder.Build(request, plan, nb, sections, pages, new Dictionary<PageKey, IReadOnlyDictionary<string, string>>(), "1.0.0", Now);
+
+        sidecar.TimeBlocks.Should().Be(new TimeBlockWindow(8, 18));
+        SidecarStore store = new();
+        string path = store.PathFor(Path.Combine(TestPaths.NewTempDir("sidecar-window"), plan.Name));
+        store.Save(path, sidecar);
+        string json = File.ReadAllText(path);
+        JsonSchemaLite.AssertValid(File.ReadAllText(SchemaPath), json);
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement window = doc.RootElement.GetProperty("timeBlocks");
+        window.GetProperty("startHour").GetInt32().Should().Be(8);
+        window.GetProperty("endHour").GetInt32().Should().Be(18);
+        store.Load(path)!.TimeBlocks.Should().Be(new TimeBlockWindow(8, 18));
+        JsonSchemaLite.Validate(File.ReadAllText(SchemaPath), json.Replace("\"endHour\": 18", "\"endHour\": 25", StringComparison.Ordinal))
+            .Should().Contain(p => p.Contains("endHour", StringComparison.Ordinal), "the schema bounds the hours");
     }
 
     [Fact]
@@ -94,6 +123,57 @@ public class SidecarTests
         wrongType.Should().Contain(p => p.Contains("pageId", StringComparison.Ordinal) && p.Contains("shorter", StringComparison.Ordinal));
         wrongType.Should().Contain(p => p.Contains("extra", StringComparison.Ordinal) && p.Contains("not allowed", StringComparison.Ordinal));
         wrongType.Should().Contain(p => p.Contains("unknown", StringComparison.Ordinal) && p.Contains("not allowed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Builder_records_the_section_group_of_grouped_sections_under_the_plan_group_name_and_the_file_validates()
+    {
+        NotebookPlan small = TestPlans.Small();
+        NotebookPlan plan = small with { Sections = new[] { small.Sections[0], small.Sections[1] with { GroupName = "Weeks" } } };
+        FakeNotebookWriter writer = new();
+        NotebookHandle nb = writer.CreateNotebook("/out", plan.Name);
+        SectionGroupHandle weeks = writer.CreateSectionGroup(nb, "Weeks");
+        Dictionary<string, SectionHandle> sections = new(StringComparer.Ordinal)
+        {
+            [plan.Sections[0].Name] = writer.CreateSection(nb, plan.Sections[0]),
+            [plan.Sections[1].Name] = writer.CreateSection(nb, plan.Sections[1], weeks),
+        };
+        Dictionary<PageKey, PageHandle> pages = plan.Pages.ToDictionary(p => p.Key, p => writer.CreatePage(sections[plan.SectionOf(p.Key).Name], p));
+        GenerateRequest request = new(new GenerateOptions { Start = new QuarterSpec(2027, 1), GroupWeeks = true }, M, TestPaths.TemplatesDir, false, null);
+
+        Sidecar sidecar = SidecarBuilder.Build(request, plan, nb, sections, pages, new Dictionary<PageKey, IReadOnlyDictionary<string, string>>(), "1.0.0", Now);
+
+        sidecar.SectionGroups.Should().Equal(new Dictionary<string, string> { ["Weeks"] = weeks.Id });
+        sidecar.Sections.Keys.Should().Equal(new[] { "Quarter", TestPlans.WeekSectionName }, "a grouped section is still recorded by name");
+        SidecarStore store = new();
+        string path = store.PathFor(Path.Combine(TestPaths.NewTempDir("sidecar-groups"), plan.Name));
+        store.Save(path, sidecar);
+        string json = File.ReadAllText(path);
+        JsonSchemaLite.AssertValid(File.ReadAllText(SchemaPath), json);
+        using JsonDocument doc = JsonDocument.Parse(json);
+        doc.RootElement.GetProperty("sectionGroups").GetProperty("Weeks").GetString().Should().Be(weeks.Id);
+        store.Load(path)!.SectionGroups.Should().Equal(sidecar.SectionGroups);
+        Build().Sidecar.SectionGroups.Should().BeEmpty("a notebook without groups records none");
+    }
+
+    [Fact]
+    public void A_sidecar_written_before_section_groups_and_the_window_were_recorded_loads_with_none()
+    {
+        (Sidecar sidecar, _) = Build();
+        SidecarStore store = new();
+        string path = store.PathFor(Path.Combine(TestPaths.NewTempDir("sidecar-old"), "SFP Q1 2027"));
+        store.Save(path, sidecar);
+        JsonObject node = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        node.Remove("sectionGroups").Should().BeTrue();
+        node.Remove("timeBlocks").Should().BeTrue();
+        File.WriteAllText(path, node.ToJsonString());
+
+        Sidecar loaded = store.Load(path)!;
+
+        loaded.SectionGroups.Should().BeEmpty();
+        loaded.TimeBlocks.Should().BeNull("Refresh then falls back to the Setup page's window");
+        loaded.Sections.Should().Equal(sidecar.Sections);
+        JsonSchemaLite.AssertValid(File.ReadAllText(SchemaPath), File.ReadAllText(path));
     }
 
     [Fact]

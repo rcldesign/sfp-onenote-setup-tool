@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
@@ -19,6 +20,11 @@ public class GenerateOrchestratorTests
 {
     private static readonly Manifest M = Support.TestManifest.Load();
     private static readonly DateTimeOffset Now = new(2026, 10, 20, 9, 30, 0, TimeSpan.FromHours(-5));
+    private static readonly XNamespace One = OneNoteXml.Namespace2013;
+
+    private static string? Name(XElement element) => (string?)element.Attribute("name");
+
+    private static string Text(XElement oe) => PageXmlParser.PlainText(oe.Element(One + "T")!.Value);
 
     /// <summary>A fixed plan builder standing in for M1.6.</summary>
     private sealed class FixedPlanBuilder : IPlanBuilder
@@ -69,6 +75,9 @@ public class GenerateOrchestratorTests
 
         public int Capacity { get; set; } = 2;
 
+        /// <summary>The link writer for --previous, or null to compose none.</summary>
+        public Func<INextQuarterLinkWriter>? NextQuarterLinks { get; set; }
+
         public GenerateOptions Options(bool links = true) => new()
         {
             Start = new QuarterSpec(2027, 1),
@@ -97,7 +106,8 @@ public class GenerateOrchestratorTests
                 RenderBufferCapacity = Capacity,
                 Now = () => Now,
             },
-            Log.CreateLogger());
+            Log.CreateLogger(),
+            NextQuarterLinks);
 
         public GenerateResult Run(GenerateRequest? request = null, CancellationToken ct = default) => Build().Run(request ?? Request(), Progress, ct);
     }
@@ -193,7 +203,12 @@ public class GenerateOrchestratorTests
         sidecar.Pages["day:2027-01-04"].Anchors.Should().NotContainKey("objectiveLegend", "no empty propagated objects are recorded");
         sidecar.Pages["contents"].Anchors.Should().BeEmpty();
         sidecar.Generated.Should().Be(Now);
+        sidecar.TimeBlocks.Should().Be(TimeBlockWindow.Default);
         JsonSchemaLite.AssertValid(File.ReadAllText(SidecarTests.SchemaPath), File.ReadAllText(result.SidecarPath!));
+
+        Harness windowed = new();
+        GenerateResult custom = windowed.Run(windowed.Request(windowed.Options() with { TimeBlocks = new TimeBlockWindow(8, 18) }));
+        new SidecarStore().Load(custom.SidecarPath!)!.TimeBlocks.Should().Be(new TimeBlockWindow(8, 18), "the run's window is what the daily pages show");
     }
 
     [Fact]
@@ -312,6 +327,164 @@ public class GenerateOrchestratorTests
         app.CallsOf("SyncHierarchy").Should().Equal(sidecar.NotebookId);
         app.SectionNames(sidecar.NotebookId).Should().Equal("Quarter", TestPlans.WeekSectionName);
         app.PagesOf(sidecar.Sections[TestPlans.WeekSectionName]).Select(p => (p.Name, p.Level)).Should().Equal(("Weekly Overview", 1), ("Mon Jan 4", 2), ("Tue Jan 5", 2), ("Weekly Reflection", 1));
+    }
+
+    [Fact]
+    public void Group_weeks_creates_the_weeks_group_once_before_its_first_section_and_records_it_in_the_sidecar()
+    {
+        Harness h = new() { Plans = new PlanBuilder(new DateEngine()) };
+
+        GenerateResult result = h.Run(h.Request(h.Options() with { GroupWeeks = true }));
+
+        result.Success.Should().BeTrue(result.Error);
+        List<string> creates = h.Writer.Calls.Where(c => c.StartsWith("CreateSection", StringComparison.Ordinal)).ToList();
+        creates.Should().ContainSingle(c => c == "CreateSectionGroup:" + PlanBuilder.WeeksGroupName);
+        int group = creates.IndexOf("CreateSectionGroup:" + PlanBuilder.WeeksGroupName);
+        creates[group - 1].Should().Be("CreateSection:Calendar");
+        creates[group + 1].Should().Be("CreateSection:Week 01 (Jan 1 to Jan 3)", "the group is created where its first section goes");
+        h.Writer.Groups.Should().ContainSingle().Which.Name.Should().Be("Weeks");
+        h.Writer.Sections.Where(s => s.Group is not null).Should().HaveCount(14).And.OnlyContain(s => s.Group == h.Writer.Groups[0]);
+        h.Writer.Sections.Where(s => s.Group is null).Select(s => s.Name).Should().Equal("Quarter", "Objectives", "Calendar", "Reviews", "Notes");
+        h.Writer.Contents!.Value.Sections.Count(s => s.GroupName == "Weeks").Should().Be(14);
+        Sidecar sidecar = new SidecarStore().Load(result.SidecarPath!)!;
+        sidecar.SectionGroups.Should().Equal(new Dictionary<string, string> { ["Weeks"] = h.Writer.Groups[0].Id });
+        sidecar.Sections.Should().HaveCount(19);
+        JsonSchemaLite.AssertValid(File.ReadAllText(SidecarTests.SchemaPath), File.ReadAllText(result.SidecarPath!));
+    }
+
+    [Fact]
+    public void With_group_weeks_the_onenote_hierarchy_shows_one_weeks_folder_holding_the_14_week_sections_in_order()
+    {
+        Harness h = new() { Plans = new PlanBuilder(new DateEngine()) };
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        GenerateOptions options = h.Options() with { GroupWeeks = true };
+        PageXmlOptions xml = PageXmlOptions.From(M, options, "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+        IReadOnlyList<string> weekNames = new PlanBuilder(new DateEngine()).Build(M, TestPlans.Q1, options).Sections
+            .Where(s => s.GroupName == PlanBuilder.WeeksGroupName).Select(s => s.Name).ToList();
+
+        GenerateResult result = h.Run(h.Request(options));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Warnings.Should().BeEmpty();
+        Sidecar sidecar = new SidecarStore().Load(result.SidecarPath!)!;
+        XElement tree = XElement.Parse(app.GetHierarchy(sidecar.NotebookId, HierarchyScope.Sections));
+        tree.Elements(One + "Section").Select(Name).Should().Equal("Quarter", "Objectives", "Calendar", "Reviews", "Notes");
+        XElement weeks = tree.Elements(One + "SectionGroup").Should().ContainSingle().Subject;
+        Name(weeks).Should().Be("Weeks");
+        weekNames.Should().HaveCount(14);
+        weeks.Elements(One + "Section").Select(Name).Should().Equal(weekNames);
+        weekNames[0].Should().Be("Week 01 (Jan 1 to Jan 3)");
+        weekNames[13].Should().Be("Week 14 (Mar 29 to Mar 31)");
+        Directory.Exists(Path.Combine(result.OutputPath!, "Weeks")).Should().BeTrue("the group is a folder inside the notebook folder");
+        File.Exists(Path.Combine(result.OutputPath!, "Weeks", weekNames[0] + ".one")).Should().BeTrue();
+        sidecar.SectionGroups.Should().Equal(new Dictionary<string, string> { ["Weeks"] = (string)weeks.Attribute("ID")! });
+        sidecar.Sections[weekNames[0]].Should().Be((string?)weeks.Elements(One + "Section").First().Attribute("ID"));
+        app.PagesOf(sidecar.Sections[weekNames[1]]).Select(p => p.Name).Should().Equal(
+            "Weekly Overview", "Mon Jan 4", "Tue Jan 5", "Wed Jan 6", "Thu Jan 7", "Fri Jan 8", "Sat Jan 9", "Sun Jan 10", "Weekly Reflection");
+
+        XElement contents = XElement.Parse(app.PageContent(sidecar.Pages[PageKey.Contents.Value].PageId)!).Element(One + "Outline")!;
+        List<XElement> top = contents.Element(One + "OEChildren")!.Elements(One + "OE").ToList();
+        top.Select(Text).Should().Equal("Quarter", "Objectives", "Calendar", "Weeks", "Reviews", "Notes");
+        top[3].Element(One + "OEChildren")!.Elements(One + "OE").Select(Text).Should().Equal(weekNames, "the Contents page lists the group as a heading above its sections");
+    }
+
+    [Fact]
+    public void Without_group_weeks_every_section_stays_at_the_top_level_and_no_group_is_recorded()
+    {
+        Harness h = new() { Plans = new PlanBuilder(new DateEngine()) };
+        using FakeOneNoteApp app = new();
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run();
+
+        result.Success.Should().BeTrue(result.Error);
+        Sidecar sidecar = new SidecarStore().Load(result.SidecarPath!)!;
+        XElement tree = XElement.Parse(app.GetHierarchy(sidecar.NotebookId, HierarchyScope.Sections));
+        tree.Elements(One + "SectionGroup").Should().BeEmpty();
+        tree.Elements(One + "Section").Should().HaveCount(19);
+        app.CallsOf("OpenHierarchy").Should().NotContain(c => c.EndsWith(":Folder", StringComparison.Ordinal));
+        sidecar.SectionGroups.Should().BeEmpty();
+        XElement contents = XElement.Parse(app.PageContent(sidecar.Pages[PageKey.Contents.Value].PageId)!).Element(One + "Outline")!;
+        contents.Element(One + "OEChildren")!.Elements(One + "OE").Should().HaveCount(19);
+    }
+
+    [Fact]
+    public void With_previous_the_previous_quarterly_review_links_to_the_new_cover_after_the_sidecar_and_before_the_sync()
+    {
+        Harness h = new();
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        PreviousNotebook previous = PreviousNotebook.Create(app, h.Root, M);
+        GenerateOptions options = h.Options() with { PreviousNotebook = previous.Folder };
+        PageXmlOptions xml = PageXmlOptions.From(M, options, "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+        h.NextQuarterLinks = () => new NextQuarterLinkWriter(app, new SidecarStore(), M, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run(h.Request(options));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.ExitCode.Should().Be(0);
+        result.Warnings.Should().BeEmpty();
+        result.NextQuarterLink.Should().Be("Next quarter link added to the quarterly review of SFP Q4 2026.");
+        Sidecar sidecar = new SidecarStore().Load(result.SidecarPath!)!;
+        sidecar.PreviousNotebook.Should().Be(previous.Folder);
+        string linkId = previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId];
+        OutlineInfo link = previous.Read(app).Outlines.Single(o => o.ObjectId == linkId);
+        link.PlainText.Should().Be("Next quarter ›");
+        string href = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Match(link.TextRuns.Single().Html, "href=\"([^\"]+)\"").Groups[1].Value);
+        HyperlinkParser.Parse(href).PageId.Should().Be(sidecar.Pages[PageKey.Cover.Value].PageId, "the link opens the new notebook's cover");
+
+        List<(string Call, string Detail)> calls = app.Calls.ToList();
+        int linkWrite = calls.FindLastIndex(c => c.Call == "UpdatePageContent" && c.Detail == "Page:" + previous.PageId);
+        linkWrite.Should().BeGreaterThan(calls.FindIndex(c => c.Call == "UpdatePageContent" && c.Detail == "Page:" + sidecar.Pages[PageKey.Contents.Value].PageId), "the link is written after the new notebook");
+        linkWrite.Should().BeLessThan(calls.FindIndex(c => c.Call == "SyncHierarchy"), "before SyncHierarchy");
+        h.Progress.Reports.Should().Contain(r => r.Phase == GeneratePhase.Finishing && r.Detail == "Next quarter link on " + previous.Folder);
+    }
+
+    [Fact]
+    public void A_previous_folder_that_does_not_exist_is_a_warning_and_the_run_still_succeeds()
+    {
+        Harness h = new();
+        using FakeOneNoteApp app = new();
+        string missing = Path.Combine(h.Root, "nowhere", "SFP Q4 2026");
+        GenerateOptions options = h.Options() with { PreviousNotebook = missing };
+        PageXmlOptions xml = PageXmlOptions.From(M, options, "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+        h.NextQuarterLinks = () => new NextQuarterLinkWriter(app, new SidecarStore(), M, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run(h.Request(options));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.ExitCode.Should().Be(0);
+        result.Phase.Should().Be(GeneratePhase.Done);
+        result.NextQuarterLink.Should().BeNull();
+        result.Warnings.Should().ContainSingle().Which.Should().StartWith("The Next quarter link was not written to the previous notebook " + missing + ":");
+        app.CallsOf("SyncHierarchy").Should().ContainSingle();
+        app.CallsOf("NavigateTo").Should().ContainSingle();
+    }
+
+    [Fact]
+    public void A_link_step_that_throws_or_is_not_composed_is_a_warning_never_a_failure()
+    {
+        Harness throwing = new() { NextQuarterLinks = () => throw new InvalidOperationException("the COM session is gone") };
+        GenerateResult result = throwing.Run(throwing.Request(throwing.Options() with { PreviousNotebook = "/notebooks/SFP Q4 2026" }));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Warnings.Should().ContainSingle().Which.Should().Contain("/notebooks/SFP Q4 2026").And.Contain("the COM session is gone");
+        throwing.Writer.Calls.Should().Contain("Sync");
+
+        Harness none = new();
+        GenerateResult without = none.Run(none.Request(none.Options() with { PreviousNotebook = "/notebooks/SFP Q4 2026" }));
+
+        without.Success.Should().BeTrue(without.Error);
+        without.Warnings.Should().ContainSingle().Which.Should().Contain("composes no writer");
+
+        Harness unused = new() { NextQuarterLinks = () => throw new InvalidOperationException("must not be called without --previous") };
+        GenerateResult plain = unused.Run();
+        plain.Success.Should().BeTrue(plain.Error);
+        plain.Warnings.Should().BeEmpty();
+        plain.NextQuarterLink.Should().BeNull();
     }
 
     [Fact]

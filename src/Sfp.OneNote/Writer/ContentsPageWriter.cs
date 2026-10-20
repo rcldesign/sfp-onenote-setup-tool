@@ -5,8 +5,9 @@ namespace Sfp.OneNote.Writer;
 
 /// <summary>
 /// Turns the plan plus the hyperlinks gathered in the hyperlink phase into the Contents page entries: sections in tab
-/// order, each with its pages in order and their levels, so <see cref="ContentsXmlBuilder"/> can nest day pages under
-/// the overview before them as the PRD appendix shows. The Contents page itself is left out of its own list.
+/// order, each with its pages in order and their levels and its section group, so <see cref="ContentsXmlBuilder"/> can
+/// nest day pages under the overview before them as the PRD appendix shows and grouped sections under their group's
+/// heading. The Contents page itself is left out of its own list.
 /// </summary>
 public static class ContentsPageWriter
 {
@@ -37,7 +38,7 @@ public static class ContentsPageWriter
             }
 
             string sectionHref = sectionHrefs.TryGetValue(section.Name, out string? href) ? href : "";
-            sections.Add(new ContentsSectionEntry(section.Name, sectionHref, pages));
+            sections.Add(new ContentsSectionEntry(section.Name, sectionHref, pages) { GroupName = section.GroupName });
         }
 
         return sections;
