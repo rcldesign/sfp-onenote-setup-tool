@@ -23,6 +23,12 @@ public sealed record AppEnvironment(
     /// </summary>
     public Func<DateOnly>? Clock { get; init; }
 
+    /// <summary>
+    /// The font service's warnings (the bundled fallback is in use because the template typeface is not installed),
+    /// shown as a banner on the Generate tab before anything is generated. Empty when the typeface is installed.
+    /// </summary>
+    public IReadOnlyList<string> FontWarnings { get; init; } = Array.Empty<string>();
+
     /// <summary>The date now: the <see cref="Clock"/> when one is set, else <see cref="Today"/>.</summary>
     public DateOnly CurrentDate() => Clock?.Invoke() ?? Today;
 }

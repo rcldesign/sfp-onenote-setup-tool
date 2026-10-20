@@ -67,6 +67,12 @@ public sealed class AppServices : IDisposable
         };
 
         Manifest manifest = new ManifestLoader().LoadShipped(templatesDir);
+        List<IDisposable> owned = new();
+        FontService fonts = FontService.Load(manifest.Font, templatesDir);
+        owned.Add(fonts);
+
+        // The Generate tab shows the fallback-font warning as a banner before anything is generated.
+        env = env with { FontWarnings = fonts.Warnings };
         IDateEngine dates = new DateEngine();
         IManifestValidator pdfValidator = new ManifestValidator();
         IPathProbe paths = new PathProbe();
@@ -77,8 +83,7 @@ public sealed class AppServices : IDisposable
         IRunLogFactory logs = new RunLogFactory();
         ISettingsStore settings = new SettingsStore();
 
-        List<IDisposable> owned = new();
-        IPageRenderer previewRenderer = CreatePageRenderer(manifest, templatesDir, dates, owned);
+        IPageRenderer previewRenderer = CreatePageRenderer(manifest, fonts, dates, owned);
         PreviewStripViewModel previews = new(new PlanBuilder(dates), previewRenderer, manifest, dates, ui);
         GenerateRunViewModel run = new(logs, CreateGenerateOrchestrator, ui, shell, dialogs);
         GenerateViewModel generate = new(manifest, dates, validator, previews, run, dialogs, ui, env);
@@ -116,11 +121,9 @@ public sealed class AppServices : IDisposable
         }
     }
 
-    /// <summary>The preview renderer: the fallback font warning is shown by the form, so it is only logged here.</summary>
-    private static IPageRenderer CreatePageRenderer(Manifest manifest, string templatesDir, IDateEngine dates, List<IDisposable> owned)
+    /// <summary>The preview renderer over the app's font service (its fallback warning is the Generate tab's banner).</summary>
+    private static IPageRenderer CreatePageRenderer(Manifest manifest, FontService fonts, IDateEngine dates, List<IDisposable> owned)
     {
-        FontService fonts = FontService.Load(manifest.Font, templatesDir);
-        owned.Add(fonts);
         Rasterizer rasterizer = new(ColorParser.Parse(manifest.Colors.Background));
         owned.Add(rasterizer);
         return new PageRenderer(manifest, rasterizer, fonts, dates);

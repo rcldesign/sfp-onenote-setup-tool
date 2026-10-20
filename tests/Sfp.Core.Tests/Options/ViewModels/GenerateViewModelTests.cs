@@ -44,6 +44,22 @@ public class GenerateViewModelTests
     }
 
     [Fact]
+    public void The_fallback_font_warning_is_a_banner_before_anything_is_generated()
+    {
+        const string warning = "Font 'Bookman Old Style' is not installed; using the bundled 'TeX Gyre Bonum' instead. The date glyphs will differ slightly from the printed labels.";
+        using (GenerateViewModel installed = _h.NewGenerate())
+        {
+            installed.FontWarning.Should().BeNull("no banner when the template typeface is installed");
+        }
+
+        _h.Env = _h.Env with { FontWarnings = new[] { warning } };
+        using GenerateViewModel vm = _h.NewGenerate();
+
+        vm.FontWarning.Should().Be(warning);
+        _h.Generator.Runs.Should().Be(0, "the banner shows on the form, before any run");
+    }
+
+    [Fact]
     public async Task Saved_settings_fill_every_field_and_the_pdf_check_starts()
     {
         AppSettings saved = new()

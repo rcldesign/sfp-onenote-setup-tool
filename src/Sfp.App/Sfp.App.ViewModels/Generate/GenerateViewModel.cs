@@ -199,6 +199,12 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     public bool FieldsEnabled => !Run.IsRunning;
 
     /// <summary>
+    /// The PRD's "fallback font in use" banner: the font service's warnings, one per line, or null when the template
+    /// typeface is installed. Shown before Generate so the user knows the dates will use the bundled face.
+    /// </summary>
+    public string? FontWarning => _env.FontWarnings.Count > 0 ? string.Join("\n", _env.FontWarnings) : null;
+
+    /// <summary>
     /// The start month when the year parses and lies in 1900 to 2199 (the date engine's range) and the month is 1 to 12,
     /// else null. Every year the user can type passes through here ("2", "20", "202" while typing 2027), so nothing
     /// downstream ever hands the date engine a year it refuses.

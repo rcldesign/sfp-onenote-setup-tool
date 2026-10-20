@@ -4,6 +4,9 @@
              xmlns:local="clr-namespace:Sfp.App.Views">
   <ScrollViewer VerticalScrollBarVisibility="Auto">
     <StackPanel Margin="8">
+    <!-- PRD error table: "Font missing: warning banner, fallback font in use". Hidden when the typeface is installed. -->
+    <TextBlock Style="{StaticResource WarningText}" Text="{Binding FontWarning}" Margin="0,0,0,8"
+               AutomationProperties.Name="Fallback font in use" />
     <!-- Fields, Advanced and previews lock while a run is on; the Cancel button below stays live. -->
     <StackPanel IsEnabled="{Binding FieldsEnabled}">
 
