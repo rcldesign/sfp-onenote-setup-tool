@@ -330,6 +330,32 @@ public class GenerateOrchestratorTests
     }
 
     [Fact]
+    public void The_blank_objective_details_parent_is_written_as_a_frame_and_onenote_receives_no_image_data_for_it()
+    {
+        Harness h = new() { Plans = new PlanBuilder(new DateEngine()) };
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run();
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Warnings.Should().BeEmpty();
+        h.Renderer.Rendered.Should().Contain(PageKey.ObjectiveDetails, "the parent page goes through the render pipeline like every sheet");
+        Sidecar sidecar = new SidecarStore().Load(result.SidecarPath!)!;
+        string parentId = sidecar.Pages[PageKey.ObjectiveDetails.Value].PageId;
+        XElement parent = XElement.Parse(app.PageContent(parentId)!);
+        parent.Descendants(One + "Image").Should().BeEmpty("the renderer gave the page no image");
+        parent.Descendants(One + "Data").Should().BeEmpty();
+        parent.Elements(One + "Outline").Should().BeEmpty();
+        parent.Element(One + "Meta")!.Attribute("content")!.Value.Should().Be("objectives");
+        app.PagesOf(sidecar.Sections["Objectives"]).Select(p => (p.Name, p.Level)).Skip(2).Take(2)
+            .Should().Equal(("Objective Details", 1), ("Objective 1", 2));
+        app.WrittenPages.Should().HaveCount(144);
+        app.WrittenPages.Values.Count(page => page.Contains("<one:Data>", StringComparison.Ordinal)).Should().Be(142, "every page but Contents and the blank parent carries its sheet");
+    }
+
+    [Fact]
     public void Group_weeks_creates_the_weeks_group_once_before_its_first_section_and_records_it_in_the_sidecar()
     {
         Harness h = new() { Plans = new PlanBuilder(new DateEngine()) };

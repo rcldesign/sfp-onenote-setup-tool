@@ -15,6 +15,13 @@ public class PageXmlBuilderTests
     private static readonly Manifest M = TestManifest.Load();
     private static readonly XNamespace One = OneNoteXml.Namespace2013;
 
+    /// <summary>The blank Objective Details parent page, as the plan builder makes it.</summary>
+    private static PageSpec ObjectiveDetails() =>
+        new(PageKey.ObjectiveDetails, PageType.Blank, "Objective Details", 1, null, new DateOnly(2027, 1, 1), new Dictionary<string, string>(StringComparer.Ordinal));
+
+    /// <summary>What the renderer returns for a page without an image: zero bytes, 0 x 0, no anchors.</summary>
+    private static RenderedPage NoImage() => new(PageKey.ObjectiveDetails, Array.Empty<byte>(), 0, 0, Array.Empty<AnchorPlacement>());
+
     [Fact]
     public void Mon_Jan_4_page_validates_against_the_2013_schema()
     {
@@ -66,6 +73,59 @@ public class PageXmlBuilderTests
         image.Attribute("backgroundImage")!.Value.Should().Be("true");
         image.Element(One + "Size")!.Attribute("width")!.Value.Should().Be(OneNoteXml.Pt(M.PageWidthPt));
         image.Element(One + "Data")!.Value.Should().Be(Convert.ToBase64String(MonJan4.Png));
+    }
+
+    [Fact]
+    public void A_page_without_an_image_is_written_as_the_frame_alone_with_no_image_and_validates()
+    {
+        string xml = PageXmlBuilder.Build("{objectives}", ObjectiveDetails(), NoImage(), Array.Empty<ResolvedAnchor>(), MonJan4.Options(M));
+
+        SchemaValidator.AssertValid(xml);
+        XElement page = XElement.Parse(xml);
+        page.Elements().Select(e => e.Name.LocalName).Should().Equal("Meta", "PageSettings", "Title");
+        page.Descendants(One + "Image").Should().BeEmpty("OneNote refuses an image without data");
+        page.Descendants(One + "Data").Should().BeEmpty();
+        page.Descendants(One + "Outline").Should().BeEmpty("there is no sheet to place");
+        page.Element(One + "Meta")!.Attribute("content")!.Value.Should().Be("objectives", "the page key still lets Refresh find the page");
+        page.Element(One + "Title")!.Element(One + "OE")!.Element(One + "T")!.Value.Should().Be("Objective Details");
+        page.Attribute("dateTime")!.Value.Should().Be("2027-01-01T06:00:00-05:00");
+    }
+
+    [Fact]
+    public void A_page_without_an_image_keeps_its_anchors_where_a_sheet_page_puts_them()
+    {
+        IReadOnlyList<ResolvedAnchor> anchors = new[] { MonJan4.DateAnchor(M) };
+        RenderedPage art = NoImage() with { Anchors = anchors.Select(a => a.Placement).ToList() };
+
+        XElement frameOnly = XElement.Parse(PageXmlBuilder.Build("{objectives}", ObjectiveDetails(), art, anchors, MonJan4.Options(M)));
+        XElement withSheet = XElement.Parse(MonJan4.Build(M));
+
+        frameOnly.Descendants(One + "Image").Should().BeEmpty();
+        XElement anchor = frameOnly.Elements(One + "Outline").Should().ContainSingle().Subject;
+        anchor.Element(One + "Position")!.ToString().Should().Be(withSheet.Elements(One + "Outline").ElementAt(1).Element(One + "Position")!.ToString());
+        SchemaValidator.AssertValid(frameOnly.ToString());
+    }
+
+    [Fact]
+    public void A_page_without_an_image_and_a_hidden_title_is_the_meta_and_page_settings_alone()
+    {
+        PageXmlOptions hidden = MonJan4.Options(M, MonJan4.Generate() with { HideTitle = true });
+
+        string xml = PageXmlBuilder.Build("{objectives}", ObjectiveDetails(), NoImage(), Array.Empty<ResolvedAnchor>(), hidden);
+
+        XElement.Parse(xml).Elements().Select(e => e.Name.LocalName).Should().Equal("Meta", "PageSettings");
+        SchemaValidator.AssertValid(xml);
+    }
+
+    [Fact]
+    public void A_sheet_outline_is_refused_for_art_without_image_bytes()
+    {
+        PageXmlBuilder.HasSheet(NoImage()).Should().BeFalse();
+        PageXmlBuilder.HasSheet(MonJan4.Art(Array.Empty<ResolvedAnchor>())).Should().BeTrue();
+
+        Action act = () => PageXmlBuilder.SheetOutline(NoImage(), MonJan4.Options(M));
+
+        act.Should().Throw<ArgumentException>().WithMessage("*objectives*no image*");
     }
 
     [Fact]

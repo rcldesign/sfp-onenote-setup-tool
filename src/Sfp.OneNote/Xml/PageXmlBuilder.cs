@@ -11,20 +11,30 @@ namespace Sfp.OneNote.Xml;
 /// <summary>
 /// Pure function from a page of the plan, its rendered sheet and its resolved anchors to the one:Page XML that
 /// UpdatePageContent takes: page settings, the page key meta, the title, the locked background image in its own
-/// outline, then one small outline per anchor. Nothing here touches OneNote.
+/// outline (none for a page whose art has no image), then one small outline per anchor. Nothing here touches OneNote.
 /// </summary>
 public static class PageXmlBuilder
 {
     /// <summary>The whole page XML for <paramref name="page"/>, serialized.</summary>
+    /// <remarks>
+    /// A page whose art has no image (the blank Objective Details parent: the renderer returns a zero-length PNG) is
+    /// written as the frame alone (meta, page settings, title) plus its anchors, with no sheet outline: OneNote refuses
+    /// a one:Image whose one:Data is empty.
+    /// </remarks>
     /// <param name="pageId">The ID CreateNewPage returned for this page.</param>
     /// <param name="page">The page spec (key, title, date).</param>
-    /// <param name="art">The rendered sheet; its PNG goes in as the background image.</param>
+    /// <param name="art">The rendered sheet; its PNG goes in as the background image when it has any bytes.</param>
     /// <param name="anchors">Link anchors and propagated slots, already resolved to hrefs.</param>
     /// <param name="options">Run options.</param>
     public static string Build(string pageId, PageSpec page, RenderedPage art, IReadOnlyList<ResolvedAnchor> anchors, PageXmlOptions options)
     {
+        ArgumentNullException.ThrowIfNull(anchors);
         XElement root = Frame(pageId, page, options);
-        root.Add(SheetOutline(art, options));
+        if (HasSheet(art))
+        {
+            root.Add(SheetOutline(art, options));
+        }
+
         foreach (ResolvedAnchor anchor in anchors)
         {
             root.Add(AnchorOutline(anchor, options));
@@ -69,9 +79,22 @@ public static class PageXmlBuilder
         return new DateTimeOffset(local, offset).ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture);
     }
 
+    /// <summary>True when the rendered page carries image bytes; a zero-length PNG means the page has no sheet to place.</summary>
+    public static bool HasSheet(RenderedPage art)
+    {
+        ArgumentNullException.ThrowIfNull(art);
+        return art.Png.Length > 0;
+    }
+
     /// <summary>The outline holding the locked sheet image at (0, titleOffset), sized to the placed sheet.</summary>
+    /// <exception cref="ArgumentException">The art has no image bytes (see <see cref="HasSheet"/>).</exception>
     public static XElement SheetOutline(RenderedPage art, PageXmlOptions options)
     {
+        if (!HasSheet(art))
+        {
+            throw new ArgumentException($"Page {art.Key} has no image, so it has no sheet outline; OneNote refuses an image without data.", nameof(art));
+        }
+
         XNamespace one = options.OneNote.SchemaNamespace;
         double w = options.PlacedWidthPt;
         double h = options.PlacedHeightPt;
