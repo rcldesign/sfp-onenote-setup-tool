@@ -368,6 +368,41 @@ public class PlanBuilderTests
             .Should().OnlyContain(p => p.Level == 1);
     }
 
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(2, 3)]
+    [InlineData(7, 8)]
+    public void A_single_objective_template_takes_its_index_0_based_like_every_other_type(int index, int objective)
+    {
+        PageTemplate single = new() { Type = PageNames.Objective, Index = index, Title = "Objective {n}", Level = 1 };
+        PageTemplate firstMonth = new() { Type = PageNames.Calendar, Index = index % 3, Level = 1 };
+        PageTemplate annual = new() { Type = PageNames.Annual, Index = index % 2, Level = 1 };
+        SectionTemplate section = new() { Name = "Singles", Pages = new[] { single, firstMonth, annual } };
+        Manifest m = Shipped with { Notebook = Shipped.Notebook with { Sections = new[] { section } } };
+
+        NotebookPlan plan = new PlanBuilder(Engine).Build(m, Engine.Build(Q1_2027), new GenerateOptions { Start = Q1_2027 });
+
+        PageSpec page = plan.Pages.Single(p => p.Type == PageType.Objective);
+        page.Key.Should().Be(PageKey.Objective(objective));
+        page.Title.Should().Be($"Objective {objective}");
+        page.PdfPage.Should().Be(Shipped.PageTypes.Objective.PdfPages[index]);
+        plan.Pages.Single(p => p.Type == PageType.Calendar).IntToken(Tokens.Extra.MonthIndex).Should().Be(index % 3, "calendar counts the same way");
+        plan.Pages.Single(p => p.Type == PageType.Annual).PdfPage.Should().Be(Shipped.PageTypes.Annual.PdfPages[index % 2], "annual counts the same way");
+    }
+
+    [Theory]
+    [InlineData(8)]
+    [InlineData(-1)]
+    public void A_single_objective_template_index_outside_the_objectives_is_a_manifest_error(int index)
+    {
+        PageTemplate single = new() { Type = PageNames.Objective, Index = index, Title = "Objective {n}", Level = 1 };
+        Manifest m = Shipped with { Notebook = Shipped.Notebook with { Sections = new[] { new SectionTemplate { Name = "Singles", Pages = new[] { single } } } } };
+
+        Action act = () => new PlanBuilder(Engine).Build(m, Engine.Build(Q1_2027), new GenerateOptions { Start = Q1_2027 });
+
+        act.Should().Throw<ManifestException>().WithMessage($"Page template 'objective' index {index} is out of range: the valid indexes are 0 to 7.");
+    }
+
     [Fact]
     public void A_week_page_outside_an_each_week_section_is_a_manifest_error()
     {

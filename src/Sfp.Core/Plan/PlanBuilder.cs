@@ -197,7 +197,7 @@ public sealed class PlanBuilder : IPlanBuilder
     private static IEnumerable<PageSpec> MonthPages(PageTemplate t, Context ctx, Week? week, PageType type, string pdfPageName)
     {
         Manifest m = ctx.Manifest;
-        foreach (int i in Instances(t.EachMonth, t.Index + 1, ctx.Months.Count, t.Type).Select(n => n - 1))
+        foreach (int i in Instances(t.EachMonth, t.Index, ctx.Months.Count, t.Type).Select(n => n - 1))
         {
             (int year, int month) = ctx.Months[i];
             DateOnly first = new(year, month, 1);
@@ -223,28 +223,32 @@ public sealed class PlanBuilder : IPlanBuilder
     private static IEnumerable<PageSpec> NotesPages(PageTemplate t, Context ctx, Week? week)
     {
         IReadOnlyList<string> names = ctx.Options.NotesPages;
-        foreach (int n in Instances(t.EachNote, t.Index + 1, names.Count, PageNames.Notes))
+        foreach (int n in Instances(t.EachNote, t.Index, names.Count, PageNames.Notes))
         {
             string name = names[n - 1].Trim();
             yield return Page(t, ctx, week, PageType.Notes, PageKey.Notes(name), null, PageNames.Notes, ctx.Quarter.Start, note: name);
         }
     }
 
-    /// <summary>1-based instance numbers: all of them when the template repeats, else the one at the template index (default the first).</summary>
-    private static IEnumerable<int> Instances(bool each, int? single1, int count, string typeName)
+    /// <summary>
+    /// 1-based instance numbers: all of them when the template repeats, else the one at the template's 0-based
+    /// <see cref="PageTemplate.Index"/> (default 0, the first), the same rule as the annual and other fixed types.
+    /// </summary>
+    private static IEnumerable<int> Instances(bool each, int? index0, int count, string typeName)
     {
         if (each)
         {
             return Enumerable.Range(1, count);
         }
 
-        int n = single1 ?? 1;
-        if (n < 1 || n > count)
+        int index = index0 ?? 0;
+        if (index < 0 || index >= count)
         {
-            throw new ManifestException($"Page template '{typeName}' asks for instance {Int(n)} but only {Int(count)} exist.");
+            string range = count == 0 ? "there are none" : $"the valid indexes are 0 to {Int(count - 1)}";
+            throw new ManifestException($"Page template '{typeName}' index {Int(index)} is out of range: {range}.");
         }
 
-        return new[] { n };
+        return new[] { index + 1 };
     }
 
     private static PageSpec Page(

@@ -839,7 +839,11 @@ public sealed record PageTemplate
 
     public required int Level { get; init; }
 
-    /// <summary>For fixed multi-page types (annual): which of the type's PDF pages, 0-based.</summary>
+    /// <summary>
+    /// Which instance a template that does not repeat stands for, 0-based (default 0): for annual (and the other fixed
+    /// types) which of the type's PDF pages; for objective which objective (0 is Objective 1); for calendar and
+    /// monthlyReview which quarter month; for notes which configured Notes page name.
+    /// </summary>
     public int? Index { get; init; }
 
     /// <summary>Repeat per instance: objectives 1 to 8, or days of the week.</summary>
