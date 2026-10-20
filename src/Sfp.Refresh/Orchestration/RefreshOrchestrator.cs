@@ -149,7 +149,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         progress?.Report("Planning propagation");
         IPropagator propagator = services.Propagators(catalog, pages.Read);
-        List<PlannedChange> changes = propagator.Plan(plan, values, sidecar).ToList();
+        List<PlannedChange> changes = propagator.Plan(plan, values, sidecar, request.WriteInkedValues).ToList();
         HashSet<PlannedChange> calendarChanges = new(ReferenceEqualityComparer.Instance);
 
         CalendarOutcome? calendar = null;

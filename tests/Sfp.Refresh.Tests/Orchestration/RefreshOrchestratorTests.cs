@@ -206,17 +206,31 @@ public class RefreshOrchestratorTests
 
         RefreshResult dry = h.Run(Request(dryRun: true));
         dry.Summary!.Values.InkedSlots.Should().Equal("objective:3");
-        dry.Summary.Changes.Where(c => c.Inked).Should().HaveCount(104 + 1 + 1 + 1, "every legend plus objective 3's row, heading and scorecard row");
-        dry.Summary.Skipped.Should().Be(107, "inked changes count as skipped until confirmed");
+        dry.Summary.Changes.Where(c => c.Inked).Select(c => c.SlotId).Should().BeEquivalentTo(new[] { "annualRow:3", "objectiveHeading", "scorecardRow:3" }, "the inked objective is listed in its own slots");
+        dry.Summary.Changes.Where(c => c.SlotId == "objectiveLegend").Should().HaveCount(104).And.AllSatisfy(c =>
+        {
+            c.NewText.Should().Be("O1 Ship the connector", "without confirmation the legend is built from the typed values");
+            c.Inked.Should().BeFalse();
+        });
+        dry.Summary.Skipped.Should().Be(3, "inked changes count as skipped until confirmed");
 
         RefreshResult unconfirmed = h.Run(Request());
-        unconfirmed.Summary!.ValuesWritten.Should().Be(3, "objective 1's row, heading and scorecard row");
-        unconfirmed.Summary.Skipped.Should().Be(107);
-        unconfirmed.Summary.Changes.Where(c => c.Blocked).Should().AllSatisfy(c => c.Reason.Should().Be(RefreshOrchestrator.InkedSkipReason));
-        h.Notebook.Read(MonJan4).Outlines.Should().NotContain(o => o.PlainText.StartsWith("O1", StringComparison.Ordinal));
+        unconfirmed.Summary!.ValuesWritten.Should().Be(104 + 3, "every legend with objective 1, and objective 1's row, heading and scorecard row");
+        unconfirmed.Summary.Skipped.Should().Be(3);
+        unconfirmed.Summary.Changes.Where(c => c.Blocked).Should().AllSatisfy(c =>
+        {
+            c.Reason.Should().Be(RefreshOrchestrator.InkedSkipReason);
+            c.NewText.Should().Be("Launch v2");
+        });
+        h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "O1 Ship the connector", "one inked objective no longer holds back the legend on 104 pages");
 
         RefreshResult confirmed = h.Run(Request(writeInked: true));
-        confirmed.Summary!.ValuesWritten.Should().Be(107);
+        confirmed.Summary!.ValuesWritten.Should().Be(104 + 3, "every legend gains O3 and objective 3's row, heading and scorecard row are written");
+        confirmed.Summary.Changes.Where(c => c.SlotId == "objectiveLegend").Should().AllSatisfy(c =>
+        {
+            c.Kind.Should().Be(ChangeKind.Update);
+            c.Inked.Should().BeTrue("the legend now includes an inked value");
+        });
         confirmed.Summary.Skipped.Should().Be(0);
         h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "O1 Ship the connector  O3 Launch v2");
     }

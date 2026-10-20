@@ -41,18 +41,28 @@ public sealed class Propagator : IPropagator
         this.measure = measure;
     }
 
-    /// <inheritdoc />
-    public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s)
+    /// <summary>The plan with every value written, inked ones included (as when the run confirms inked values).</summary>
+    public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s) => Plan(plan, v, s, writeInkedValues: true);
+
+    /// <summary>
+    /// The plan for a run that writes inked values only when <paramref name="writeInkedValues"/> is true. The objective
+    /// and habit legends are built from every value when it is, else from the typed values only, and are marked inked
+    /// only when they include an inked value; the slots fed by one value (annual rows, headings, scorecard rows,
+    /// standing goals, metric names) carry it either way and are marked inked when it came from ink.
+    /// </summary>
+    public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s, bool writeInkedValues)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(v);
         ArgumentNullException.ThrowIfNull(s);
         Manifest m = catalog.Manifest;
+        IReadOnlyList<string?> legendObjectives = writeInkedValues ? v.Objectives : TypedOnly(v.Objectives, v, SetupSlots.Objective);
+        IReadOnlyList<string?> legendHabits = writeInkedValues ? v.Habits : TypedOnly(v.Habits, v, SetupSlots.Habit);
         Texts texts = new(
-            LegendText.ObjectiveLegend(v.Objectives, m.Slots.ObjectiveLegend, measure),
-            AnyInked(v, SetupSlots.Objective, v.Objectives.Count),
-            LegendText.HabitLegend(v.Habits, m.Slots.HabitLegend, measure),
-            AnyInked(v, SetupSlots.Habit, v.Habits.Count));
+            LegendText.ObjectiveLegend(legendObjectives, m.Slots.ObjectiveLegend, measure),
+            IncludesInked(legendObjectives, v, SetupSlots.Objective),
+            LegendText.HabitLegend(legendHabits, m.Slots.HabitLegend, measure),
+            IncludesInked(legendHabits, v, SetupSlots.Habit));
 
         List<PlannedChange> changes = new();
         foreach (PageSpec page in plan.Pages)
@@ -183,8 +193,13 @@ public sealed class Propagator : IPropagator
         return (text, text.Length > 0 && v.InkedSlots.Contains(setupSlot(i), StringComparer.Ordinal));
     }
 
-    private static bool AnyInked(SetupValues v, Func<int, string> setupSlot, int count) =>
-        Enumerable.Range(1, count).Any(i => v.InkedSlots.Contains(setupSlot(i), StringComparer.Ordinal));
+    /// <summary>The values with every one that came from ink left out (its slot number kept, so "O3" stays "O3").</summary>
+    private static string?[] TypedOnly(IReadOnlyList<string?> values, SetupValues v, Func<int, string> setupSlot) =>
+        values.Select((value, i) => v.InkedSlots.Contains(setupSlot(i + 1), StringComparer.Ordinal) ? null : value).ToArray();
+
+    /// <summary>True when a non-empty value among <paramref name="values"/> came from ink.</summary>
+    private static bool IncludesInked(IReadOnlyList<string?> values, SetupValues v, Func<int, string> setupSlot) =>
+        values.Select((value, i) => !string.IsNullOrWhiteSpace(value) && v.InkedSlots.Contains(setupSlot(i + 1), StringComparer.Ordinal)).Any(inked => inked);
 
     private sealed record Texts(string Legend, bool LegendInked, string Habits, bool HabitsInked);
 }
