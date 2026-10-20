@@ -125,6 +125,12 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         state.Enter(GeneratePhase.CheckingOneNote);
         PreflightResult preflight = _preflight.Check(request);
         state.Warnings.AddRange(preflight.Warnings);
+        state.NoOpenNotebooks = preflight.NoOpenNotebooks;
+        if (preflight.NoOpenNotebooks)
+        {
+            _log.Information("OneNote lists no open notebooks; if creating the notebook fails, OneNote is taken to be not signed in");
+        }
+
         if (!preflight.Ok)
         {
             int exitCode = preflight.Errors[0].ExitCode;
@@ -203,7 +209,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         INotebookWriter writer = _writerFactory();
         state.Writer = writer;
         string folder = string.IsNullOrWhiteSpace(o.OutputFolder) ? OutputFolders.Default() : o.OutputFolder;
-        NotebookHandle nb = writer.CreateNotebook(folder, plan.Name);
+        NotebookHandle nb = CreateNotebook(state, writer, folder, plan.Name);
         state.Notebook = nb;
 
         // A section group is created once, at the position of its first section, and holds every section that names it.
@@ -329,6 +335,25 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             SidecarPath = sidecarPath,
             NextQuarterLink = nextQuarterLink,
         };
+    }
+
+    /// <summary>
+    /// The run's first OpenHierarchy (CreateNotebook). The PRD's not-signed-in row has two parts: OneNote lists no open
+    /// notebooks (the preflight records it) and this first OpenHierarchy fails. Only then is the failure reported with
+    /// the sign-in message and exit 3; with notebooks open it stays a write error (exit 5), and an unavailable OneNote
+    /// keeps its own message (exit 3 as well).
+    /// </summary>
+    private NotebookHandle CreateNotebook(RunState state, INotebookWriter writer, string folder, string name)
+    {
+        try
+        {
+            return writer.CreateNotebook(folder, name);
+        }
+        catch (OneNoteException ex) when (state.NoOpenNotebooks && ex is not OneNoteUnavailableException)
+        {
+            _log.Warning("OneNote lists no open notebooks and creating the notebook failed ({HResult}); reporting OneNote as not signed in", ex.HResultHex);
+            throw new OneNoteUnavailableException(ex.Call ?? "OpenHierarchy", ex.HResult, GenerateText.SignInMessage + " " + ex.Message, ex);
+        }
     }
 
     /// <summary>
@@ -625,6 +650,9 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         public NotebookHandle? Notebook { get; set; }
 
         public string? SidecarPath { get; set; }
+
+        /// <summary>The preflight found no open notebook (half of the PRD's not-signed-in test).</summary>
+        public bool NoOpenNotebooks { get; set; }
 
         public List<string> Warnings { get; } = new();
 

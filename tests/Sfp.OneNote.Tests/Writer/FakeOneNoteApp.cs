@@ -36,6 +36,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     /// <summary>Decides whether a GetHierarchy call fails.</summary>
     public Func<Exception?>? GetHierarchyFailure { get; set; }
 
+    /// <summary>Decides whether an OpenHierarchy call fails: given the path and the create type, return the exception to throw or null.</summary>
+    public Func<string, CreateFileType, Exception?>? OpenHierarchyFailure { get; set; }
+
     public bool Disposed { get; private set; }
 
     public string Version => "16.0.fake";
@@ -130,6 +133,12 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     public string OpenHierarchy(string path, string? relativeToId, CreateFileType createFileType)
     {
         Record("OpenHierarchy", path + ":" + createFileType);
+        Exception? failure = OpenHierarchyFailure?.Invoke(path, createFileType);
+        if (failure is not null)
+        {
+            throw failure;
+        }
+
         switch (createFileType)
         {
             case CreateFileType.Notebook:

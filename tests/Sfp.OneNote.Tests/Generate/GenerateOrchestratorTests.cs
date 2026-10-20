@@ -68,6 +68,9 @@ public class GenerateOrchestratorTests
 
         public FakePreflight Preflight { get; set; } = new();
 
+        /// <summary>A real preflight to use instead of <see cref="Preflight"/>, or null.</summary>
+        public IGeneratePreflight? PreflightOverride { get; set; }
+
         public CapturingSink Log { get; } = new();
 
         public ProgressLog Progress { get; } = new();
@@ -91,7 +94,7 @@ public class GenerateOrchestratorTests
             new(options ?? Options(), M, TestPaths.TemplatesDir, renderDir is not null, renderDir);
 
         public GenerateOrchestrator Build() => new(
-            Preflight,
+            PreflightOverride ?? Preflight,
             new DateEngine(),
             Plans,
             Renderer,
@@ -628,6 +631,99 @@ public class GenerateOrchestratorTests
         GenerateResult goneResult = gone.Run();
         goneResult.ExitCode.Should().Be(3);
         goneResult.Error.Should().Contain("OneNote went away");
+    }
+
+    private static readonly OneNoteException OpenHierarchyRefused =
+        new("OpenHierarchy", OneNoteHResults.NotebookDoesNotExist, "OneNote call OpenHierarchy failed: hrNotebookDoesNotExist (0x80042016)", null);
+
+    private static FakePreflight NoOpenNotebooks() =>
+        new(new PreflightResult(Array.Empty<(string, int)>(), Array.Empty<string>()) { NoOpenNotebooks = true });
+
+    [Fact]
+    public void With_no_open_notebooks_a_failing_first_open_hierarchy_is_reported_as_not_signed_in_with_exit_3()
+    {
+        Harness h = new() { Preflight = NoOpenNotebooks() };
+        h.Writer.CreateNotebookFailure = OpenHierarchyRefused;
+
+        GenerateResult result = h.Run();
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(3);
+        result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
+        result.Error.Should().Contain(GenerateText.SignInMessage).And.Contain("0x80042016");
+        result.OutputPath.Should().BeNull("no notebook was created");
+        h.Writer.Written.Should().BeEmpty();
+        h.Renderer.Rendered.Should().BeEmpty();
+        h.Log.Messages.Should().Contain(m => m.Contains("not signed in", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void With_notebooks_open_a_failing_first_open_hierarchy_stays_a_write_error_with_exit_5()
+    {
+        Harness h = new();
+        h.Writer.CreateNotebookFailure = OpenHierarchyRefused;
+
+        GenerateResult result = h.Run();
+
+        result.ExitCode.Should().Be(5);
+        result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
+        result.Error.Should().Contain("0x80042016").And.NotContain(GenerateText.SignInMessage);
+    }
+
+    [Fact]
+    public void With_no_open_notebooks_an_unavailable_onenote_keeps_its_own_message_and_a_later_failure_stays_a_write_error()
+    {
+        Harness gone = new() { Preflight = NoOpenNotebooks() };
+        gone.Writer.CreateNotebookFailure = OneNoteHResults.Map("OpenHierarchy", new COMException("The RPC server is unavailable.", OneNoteHResults.RpcServerUnavailable), null);
+        GenerateResult goneResult = gone.Run();
+        goneResult.ExitCode.Should().Be(3);
+        goneResult.Error.Should().Contain(OneNoteUnavailableException.DisconnectedMessage).And.NotContain(GenerateText.SignInMessage);
+
+        Harness later = new() { Preflight = NoOpenNotebooks(), Parallelism = 1, Capacity = 1 };
+        later.Writer.WritePageFailure = key => key == TestPlans.Monday ? new OneNoteException("UpdatePageContent", OneNoteHResults.PageReadOnly, "OneNote call UpdatePageContent failed: hrPageReadOnly (0x8004200C)", null) : null;
+        GenerateResult laterResult = later.Run();
+        laterResult.ExitCode.Should().Be(5, "only the run's first OpenHierarchy takes part in the sign-in test");
+        laterResult.Error.Should().NotContain(GenerateText.SignInMessage);
+    }
+
+    [Theory]
+    [InlineData(false, true, 3)]
+    [InlineData(true, true, 5)]
+    [InlineData(false, false, 0)]
+    public void The_two_part_sign_in_rule_over_the_real_preflight_and_the_in_memory_onenote(bool notebooksOpen, bool openHierarchyFails, int exitCode)
+    {
+        Harness h = new();
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        if (!notebooksOpen)
+        {
+            app.PreexistingNotebooks.Clear();
+        }
+
+        if (openHierarchyFails)
+        {
+            app.OpenHierarchyFailure = (_, type) => type == CreateFileType.Notebook ? OpenHierarchyRefused : null;
+        }
+
+        h.PreflightOverride = new GeneratePreflight(new FakeManifestValidator(), new FakeOneNoteLocator(true, app), new PreflightFileSystem(), new SidecarStore(), new DateEngine());
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run();
+
+        result.ExitCode.Should().Be(exitCode, result.Error);
+        app.CallsOf("GetHierarchy").Should().StartWith(":Notebooks", "the preflight asks OneNote for its open notebooks first");
+        if (exitCode == 0)
+        {
+            result.Success.Should().BeTrue("no open notebooks alone never blocks a run");
+            app.WrittenPages.Should().HaveCount(7);
+        }
+        else
+        {
+            result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
+            result.Error.Should().Contain("0x80042016");
+            (result.Error!.Contains(GenerateText.SignInMessage, StringComparison.Ordinal)).Should().Be(exitCode == 3);
+            app.WrittenPages.Should().BeEmpty();
+        }
     }
 
     [Fact]
