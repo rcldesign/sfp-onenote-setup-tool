@@ -910,6 +910,36 @@ public class GenerateOrchestratorTests
         File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 2)]
+    [InlineData(4, 4)]
+    [InlineData(8, 4)]
+    [InlineData(64, 4)]
+    [InlineData(0, 1)]
+    public void The_default_render_worker_count_is_the_processor_count_capped_at_four(int processors, int workers)
+    {
+        GenerateOrchestratorOptions.DefaultParallelismFor(processors).Should().Be(workers);
+    }
+
+    [Fact]
+    public void Options_default_to_the_capped_worker_count_and_render_only_honors_the_setting()
+    {
+        GenerateOrchestratorOptions options = new() { FontFamily = "TeX Gyre Bonum" };
+        options.MaxDegreeOfParallelism.Should().Be(GenerateOrchestratorOptions.DefaultParallelismFor(Environment.ProcessorCount)).And.BeInRange(1, GenerateOrchestratorOptions.MaxDefaultParallelism);
+        GenerateOrchestratorOptions.DefaultParallelism.Should().Be(Math.Min(Environment.ProcessorCount, 4));
+
+        Harness single = new() { Parallelism = 1 };
+        single.Renderer.Delay = TimeSpan.FromMilliseconds(10);
+        single.Run(single.Request(single.Options(), Path.Combine(single.Root, "png"))).Success.Should().BeTrue();
+        single.Renderer.MaxConcurrent.Should().Be(1, "render-only runs the configured number of workers");
+
+        Harness three = new() { Parallelism = 3 };
+        three.Renderer.Delay = TimeSpan.FromMilliseconds(10);
+        three.Run(three.Request(three.Options(), Path.Combine(three.Root, "png"))).Success.Should().BeTrue();
+        three.Renderer.MaxConcurrent.Should().BeLessThanOrEqualTo(3);
+    }
+
     [Fact]
     public void Phase_labels_and_folder_size_helpers()
     {

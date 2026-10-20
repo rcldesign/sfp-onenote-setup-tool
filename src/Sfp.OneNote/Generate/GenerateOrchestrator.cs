@@ -27,8 +27,22 @@ public sealed record GenerateOrchestratorOptions
     /// <summary>This run's log file; rejected page XML is saved beside it.</summary>
     public string? LogPath { get; init; }
 
-    /// <summary>Render workers.</summary>
-    public int MaxDegreeOfParallelism { get; init; } = Environment.ProcessorCount;
+    /// <summary>The most render workers the default asks for.</summary>
+    public const int MaxDefaultParallelism = 4;
+
+    /// <summary>Render workers for the notebook pipeline and for render-only; <see cref="DefaultParallelism"/> unless set.</summary>
+    public int MaxDegreeOfParallelism { get; init; } = DefaultParallelism;
+
+    /// <summary>
+    /// The default worker count: the processor count capped at <see cref="MaxDefaultParallelism"/>. Sfp.Render exposes no
+    /// parallelism default to share yet, so the cap lives here: the pipeline holds <see cref="RenderPipeline.DefaultCapacity"/>
+    /// (4) pages at once, so more workers would only wait for a slot, the rasterizer serializes PDFium anyway, and every
+    /// worker holds sheet bitmaps of about 32 MB at 220 DPI.
+    /// </summary>
+    public static int DefaultParallelism => DefaultParallelismFor(Environment.ProcessorCount);
+
+    /// <summary>The default worker count on a machine with <paramref name="processorCount"/> processors: 1 to <see cref="MaxDefaultParallelism"/>.</summary>
+    public static int DefaultParallelismFor(int processorCount) => Math.Clamp(processorCount, 1, MaxDefaultParallelism);
 
     /// <summary>Rendered pages held at once.</summary>
     public int RenderBufferCapacity { get; init; } = RenderPipeline.DefaultCapacity;

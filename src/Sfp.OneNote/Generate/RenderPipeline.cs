@@ -61,7 +61,7 @@ public sealed class RenderPipeline : IDisposable
 
     /// <param name="pages">Pages to render, in the order the consumer wants them.</param>
     /// <param name="render">Renders one page; called concurrently.</param>
-    /// <param name="maxDegreeOfParallelism">Worker count (Environment.ProcessorCount in production).</param>
+    /// <param name="maxDegreeOfParallelism">Worker count (GenerateOrchestratorOptions.DefaultParallelism in production: the processor count, at most 4).</param>
     /// <param name="capacity">Pages held at once; at least 1.</param>
     /// <param name="cancellationToken">Stops rendering between pages.</param>
     /// <param name="onRendered">Called on a worker thread after each render with the page and the running count, before the page is handed to the consumer.</param>
