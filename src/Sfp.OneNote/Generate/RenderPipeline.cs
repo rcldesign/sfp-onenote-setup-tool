@@ -32,9 +32,11 @@ public sealed class RenderFailedException : Exception
 /// <summary>
 /// Renders pages on every core and hands them to one consumer in page order while holding only a few at a time.
 /// Workers take a slot from a bounded pool, then claim the next page index, so the pages in flight are always the
-/// next few in order and the consumer never waits on a page whose worker is starved of a slot. A render failure stops
-/// the workers and surfaces to the consumer as <see cref="RenderFailedException"/>; cancellation surfaces as
-/// <see cref="OperationCanceledException"/>. Dispose stops the workers.
+/// next few in order and the consumer never waits on a page whose worker is starved of a slot. The rendered callback
+/// of a page has finished before the page is handed to the consumer, so once the consumer holds page i the callbacks
+/// of pages 0 to i have all run and <see cref="RenderedCount"/> counts them. A render failure (or a callback that
+/// throws) stops the workers and surfaces to the consumer as <see cref="RenderFailedException"/>; cancellation
+/// surfaces as <see cref="OperationCanceledException"/>. Dispose stops the workers.
 /// </summary>
 public sealed class RenderPipeline : IDisposable
 {
@@ -62,7 +64,7 @@ public sealed class RenderPipeline : IDisposable
     /// <param name="maxDegreeOfParallelism">Worker count (Environment.ProcessorCount in production).</param>
     /// <param name="capacity">Pages held at once; at least 1.</param>
     /// <param name="cancellationToken">Stops rendering between pages.</param>
-    /// <param name="onRendered">Called on a worker thread after each render with the page and the running count.</param>
+    /// <param name="onRendered">Called on a worker thread after each render with the page and the running count, before the page is handed to the consumer.</param>
     public RenderPipeline(
         IReadOnlyList<PageSpec> pages,
         Func<PageSpec, RenderedPage> render,
@@ -192,14 +194,15 @@ public sealed class RenderPipeline : IDisposable
             try
             {
                 RenderedPage page = _render(spec);
+
+                // Count and report before the hand-off: once the consumer holds the page its callback has finished.
+                int count = Interlocked.Increment(ref _renderedCount);
+                _onRendered?.Invoke(spec, count);
                 lock (_gate)
                 {
                     _ready[index] = page;
                     Monitor.PulseAll(_gate);
                 }
-
-                int count = Interlocked.Increment(ref _renderedCount);
-                _onRendered?.Invoke(spec, count);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
