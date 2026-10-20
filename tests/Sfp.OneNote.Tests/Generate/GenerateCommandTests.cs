@@ -229,6 +229,24 @@ public class GenerateCommandTests
     }
 
     [Fact]
+    public void Generate_accepts_the_render_only_date_formats_and_finds_templates_the_same_way()
+    {
+        foreach ((string format, (DateFieldOrder order, bool padded)) in RenderOnlyCommand.DateFormats)
+        {
+            GenerateCommand.TryBuildOptions(Args() with { DateFormat = format }, new StringWriter(), out GenerateOptions? options, out _).Should().BeTrue(format);
+            (options!.DateOrder, options.PadDateFields).Should().Be((order, padded), format);
+        }
+
+        GenerateCommand.TryBuildOptions(Args() with { Templates = null }, new StringWriter(), out _, out string found).Should().BeTrue();
+        found.Should().Be(Path.GetFullPath(PlanCommand.FindTemplatesDir()!), "the lookup is PlanCommand.FindTemplatesDir: beside the executable, else above it");
+
+        StringWriter stderr = new();
+        string missing = Path.Combine(Root, "no-templates-here");
+        GenerateCommand.TryBuildOptions(Args() with { Templates = missing }, stderr, out _, out _).Should().BeFalse();
+        stderr.ToString().Should().Contain("Templates folder not found or has no sfp-quarterly.json: " + missing, "the same words as render-only and refresh");
+    }
+
+    [Fact]
     public void A_render_only_run_goes_through_the_injected_orchestrator_and_prints_the_summary()
     {
         string png = Path.Combine(Root, "png");
@@ -407,7 +425,10 @@ public class GenerateCommandTests
         (order, padded).Should().Be((DateFieldOrder.DayMonthYear, true));
         GenerateCommand.TryParseDateFormat("m/d/yy", out order, out padded).Should().BeTrue();
         (order, padded).Should().Be((DateFieldOrder.MonthDayYear, false));
-        GenerateCommand.TryParseDateFormat("d/m/yy", out _, out _).Should().BeFalse();
+        GenerateCommand.TryParseDateFormat(" D/M/YY ", out order, out padded).Should().BeTrue("generate accepts every format render-only and the app accept");
+        (order, padded).Should().Be((DateFieldOrder.DayMonthYear, false));
+        GenerateCommand.TryParseDateFormat("yy/mm/dd", out _, out _).Should().BeFalse();
+        GenerateCommand.TryParseDateFormat(null, out _, out _).Should().BeFalse();
 
         GenerateCommand.TryParseWeeksRemaining("as-printed", out WeeksRemainingMode mode).Should().BeTrue();
         mode.Should().Be(WeeksRemainingMode.AsPrinted);
