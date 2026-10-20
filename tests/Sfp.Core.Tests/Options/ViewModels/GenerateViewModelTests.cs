@@ -158,6 +158,44 @@ public class GenerateViewModelTests
         vm.CanGenerate.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData("1899")]
+    [InlineData("2200")]
+    [InlineData("1")]
+    [InlineData("202")]
+    public async Task A_year_outside_1900_to_2199_shows_the_start_message_and_blocks_generate_without_throwing(string year)
+    {
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+        vm.CanGenerate.Should().BeTrue();
+
+        Action type = () => vm.YearText = year;
+
+        type.Should().NotThrow("the date engine refuses these years, so the form must never hand them to it");
+        vm.Start.Should().BeNull();
+        vm.StartError.Should().Be("Year must be a whole number between 1900 and 2199.");
+        vm.CanGenerate.Should().BeFalse();
+        vm.GenerateCommand.CanExecute(null).Should().BeFalse();
+        vm.NotebookName.Should().Be("SFP Q1 2027", "the name keeps the default of the last valid start");
+        vm.SizeEstimate.Should().Be("About 42 MB for 144 pages at 220 DPI", "the estimate keeps the last valid start");
+        vm.ToOptions().Start.Should().Be(new QuarterSpec(2027, 1));
+        vm.Previews.Day.Status.Should().Be("Fix the start month to see previews.");
+
+        await vm.GenerateCommand.ExecuteAsync(null);
+        _h.Generator.Runs.Should().Be(0, "clicking Generate does nothing while the year is out of range");
+
+        Action other = () => vm.Month = 4;
+        other.Should().NotThrow();
+        vm.StartError.Should().Be("Year must be a whole number between 1900 and 2199.");
+
+        vm.YearText = "2027";
+        vm.Start.Should().Be(new QuarterSpec(2027, 4));
+        vm.StartError.Should().BeNull();
+        vm.CanGenerate.Should().BeTrue();
+        await Settle(vm);
+    }
+
     [Fact]
     public async Task Pdf_check_runs_in_the_background_and_shows_the_mismatch()
     {

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -197,8 +198,12 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     /// <summary>The fields unlock when no run is on.</summary>
     public bool FieldsEnabled => !Run.IsRunning;
 
-    /// <summary>The start month when the year parses and is in range, else null.</summary>
-    public QuarterSpec? Start => ParseYear() is int year && Month is >= 1 and <= 12 ? new QuarterSpec(year, Month) : null;
+    /// <summary>
+    /// The start month when the year parses and lies in 1900 to 2199 (the date engine's range) and the month is 1 to 12,
+    /// else null. Every year the user can type passes through here ("2", "20", "202" while typing 2027), so nothing
+    /// downstream ever hands the date engine a year it refuses.
+    /// </summary>
+    public QuarterSpec? Start => ParseYear() is int year && IsSupported(year, Month) ? new QuarterSpec(year, Month) : null;
 
     /// <summary>The default name for the current start ("SFP Q1 2027"), kept while the user has not edited the name.</summary>
     public string DefaultNotebookName => _defaultName;
@@ -216,13 +221,11 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         _loading = true;
         try
         {
-            QuarterSpec start = settings.Start is { } s && s.Year >= QuarterSpec.MinYear && s.Year <= QuarterSpec.MaxYear && s.Month is >= 1 and <= 12
-                ? s
-                : GenerateFormDefaults.NextQuarterStart(_env.Today);
+            QuarterSpec start = IsSupported(settings.Start) ? settings.Start : GenerateFormDefaults.NextQuarterStart(_env.Today);
             _lastValidStart = start;
             Month = start.Month;
             YearText = start.Year.ToString(CultureInfo.InvariantCulture);
-            _defaultName = GenerateFormDefaults.NotebookName(_manifest.Notebook.NamePattern, _dates.Build(start));
+            _defaultName = DefaultNameFor(start);
             NotebookName = string.IsNullOrWhiteSpace(settings.NotebookName) ? _defaultName : settings.NotebookName;
             _nameFollowsDefault = NotebookName == _defaultName;
             OutputFolder = string.IsNullOrWhiteSpace(settings.OutputFolder) ? _env.DefaultOutputFolder : settings.OutputFolder;
@@ -381,12 +384,24 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         }
 
         _lastValidStart = start;
-        _defaultName = GenerateFormDefaults.NotebookName(_manifest.Notebook.NamePattern, _dates.Build(start));
+        _defaultName = DefaultNameFor(start);
         if (_nameFollowsDefault && NotebookName != _defaultName)
         {
             NotebookName = _defaultName;
         }
     }
+
+    /// <summary>True for a year and month the date engine accepts (1900 to 2199, 1 to 12).</summary>
+    private static bool IsSupported(int year, int month) => year is >= QuarterSpec.MinYear and <= QuarterSpec.MaxYear && month is >= 1 and <= 12;
+
+    private static bool IsSupported([NotNullWhen(true)] QuarterSpec? spec) => spec is not null && IsSupported(spec.Year, spec.Month);
+
+    /// <summary>The quarter of a supported start, else null. Every date engine call goes through here because <see cref="IDateEngine.Build"/> throws outside 1900 to 2199.</summary>
+    private Quarter? QuarterOf(QuarterSpec? spec) => IsSupported(spec) ? _dates.Build(spec) : null;
+
+    /// <summary>"SFP Q1 2027" for a supported start; empty when the start is outside the supported years.</summary>
+    private string DefaultNameFor(QuarterSpec start) =>
+        QuarterOf(start) is { } quarter ? GenerateFormDefaults.NotebookName(_manifest.Notebook.NamePattern, quarter) : "";
 
     private int? ParseYear() =>
         int.TryParse(YearText.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int year) ? year : null;
@@ -444,8 +459,8 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         DpiError = _validation.ErrorFor(GenerateFormFields.Dpi);
         PageScaleError = _validation.ErrorFor(GenerateFormFields.PageScale);
         TimeBlocksError = _validation.ErrorFor(GenerateFormFields.TimeBlocks);
-        SizeEstimate = GenerateOptions.AllowedDpis.Contains(Dpi)
-            ? NotebookSizeEstimate.Describe(Dpi, GenerateFormDefaults.PageCount(_dates.Build(Start ?? _lastValidStart)))
+        SizeEstimate = GenerateOptions.AllowedDpis.Contains(Dpi) && QuarterOf(Start ?? _lastValidStart) is { } quarter
+            ? NotebookSizeEstimate.Describe(Dpi, GenerateFormDefaults.PageCount(quarter))
             : "";
         CanGenerate = _validation.CanGenerate && !Run.IsRunning;
         OnPropertyChanged(nameof(Start));
