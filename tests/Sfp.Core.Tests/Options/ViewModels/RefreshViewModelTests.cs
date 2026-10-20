@@ -254,11 +254,36 @@ public class RefreshViewModelTests
 
         vm.DailyRefreshEnabled = true;
         _h.Tasks.Registrations.Should().Equal(("SFP Q1 2027", Harness.Exe, 10));
+        _h.Tasks.Folders.Should().Equal(new[] { Harness.DefaultFolder }, "the task runs refresh with --folder set to the sidecar's folder");
         vm.ScheduleStatus.Should().Be("Scheduled: SFP Q1 2027 is refreshed every day at 05:00.");
 
         vm.DailyRefreshEnabled = false;
         _h.Tasks.Removals.Should().Equal("SFP Q1 2027");
         vm.ScheduleStatus.Should().Be("The daily refresh task was removed.");
+
+        vm.SelectedNotebook = vm.Notebooks[1];
+        vm.DailyRefreshEnabled = true;
+        _h.Tasks.Folders.Should().Equal(Harness.DefaultFolder, @"D:\Notebooks");
+    }
+
+    [Fact]
+    public async Task A_notebook_moved_to_onedrive_is_refreshed_and_scheduled_from_the_folder_of_its_sidecar()
+    {
+        // After File, Share, Move Notebook the sidecar's notebook path is the OneDrive URL; the sidecar itself stays put.
+        KnownNotebook moved = Q1 with { Path = "https://d.docs.live.net/0123456789abcdef/Documents/SFP Q1 2027" };
+        _h.Registry.Notebooks.Add(moved);
+        _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() };
+        RefreshViewModel vm = _h.NewRefresh();
+        vm.SetKnownFolders(Array.Empty<string>());
+        await vm.PendingReload;
+
+        await vm.PreviewChangesCommand.ExecuteAsync(null);
+        vm.DailyRefreshEnabled = true;
+
+        _h.Refresher.LastRequest!.NotebooksFolder.Should().Be(Harness.DefaultFolder, "the sidecar lives there, not under the OneDrive URL");
+        _h.Tasks.Folders.Should().Equal(Harness.DefaultFolder);
+        RefreshViewModel.NotebooksFolderOf(moved).Should().Be(Harness.DefaultFolder);
+        RefreshViewModel.NotebooksFolderOf(moved with { SidecarPath = "" }).Should().BeNull("no sidecar path means the default folders are searched");
     }
 
     [Fact]

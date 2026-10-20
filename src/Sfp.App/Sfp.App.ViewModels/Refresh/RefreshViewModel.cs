@@ -155,6 +155,19 @@ public sealed partial class RefreshViewModel : ObservableObject
         SelectedNotebook = Notebooks.FirstOrDefault(n => n.Name == selectedName) ?? Notebooks.FirstOrDefault();
     }
 
+    /// <summary>
+    /// The folder that holds a notebook's sidecar: what the orchestrator's NotebooksFolder and the verb's --folder mean.
+    /// It comes from the sidecar's own path, never from the notebook path, which turns into a OneDrive URL
+    /// (https://d.docs.live.net/...) once the notebook is moved while the sidecar stays in the local output folder.
+    /// Null when the sidecar path is unknown (the orchestrator then searches the default folders).
+    /// </summary>
+    public static string? NotebooksFolderOf(KnownNotebook notebook)
+    {
+        ArgumentNullException.ThrowIfNull(notebook);
+        string? folder = string.IsNullOrWhiteSpace(notebook.SidecarPath) ? null : PathText.ParentOf(notebook.SidecarPath);
+        return string.IsNullOrEmpty(folder) ? null : folder;
+    }
+
     /// <summary>The request for the selected notebook, dated by the clock at the moment it is built (never the app's start date).</summary>
     public RefreshRequest? ToRequest(bool dryRun)
     {
@@ -163,10 +176,9 @@ public sealed partial class RefreshViewModel : ObservableObject
             return null;
         }
 
-        string? folder = PathText.ParentOf(notebook.Path);
         return new RefreshRequest(
             notebook.Name,
-            string.IsNullOrEmpty(folder) ? null : folder,
+            NotebooksFolderOf(notebook.Notebook),
             IncludeCalendar,
             Math.Max(0, HorizonDays),
             dryRun,
@@ -240,7 +252,8 @@ public sealed partial class RefreshViewModel : ObservableObject
         {
             if (value)
             {
-                _tasks.Register(notebook.Name, _env.RefreshExecutablePath, Math.Max(0, HorizonDays));
+                // --folder lets the 05:00 run find the sidecar of a notebook generated outside Documents\OneNote Notebooks.
+                _tasks.Register(notebook.Name, _env.RefreshExecutablePath, Math.Max(0, HorizonDays), NotebooksFolderOf(notebook.Notebook));
                 ScheduleStatus = string.Format(CultureInfo.InvariantCulture, "Scheduled: {0} is refreshed every day at 05:00.", notebook.Name);
             }
             else
