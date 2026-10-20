@@ -28,6 +28,8 @@ public sealed record Manifest
 
     public required GeneratedSpec Generated { get; init; }
 
+    /// <summary>The JSON key is "onenote" (one word, as the PRD writes it), not the camelCase "oneNote".</summary>
+    [JsonPropertyName("onenote")]
     public required OneNoteSpec OneNote { get; init; }
 
     public required NotebookSpec Notebook { get; init; }
@@ -179,6 +181,25 @@ public sealed record SlotsSpec
     public required OverviewDayColumnsSlot OverviewDayColumns { get; init; }
 
     public required CalendarEventLinesSlot CalendarEventLines { get; init; }
+
+    /// <summary>Every slot's manifest name with the page names it applies to, in manifest order.</summary>
+    public IReadOnlyList<(string Slot, IReadOnlyList<string> AppliesTo)> AppliesToBySlot() => new[]
+    {
+        ("date", Date.AppliesTo),
+        ("weeksRemaining", WeeksRemaining.AppliesTo),
+        ("monthName", MonthName.AppliesTo),
+        ("dayGrid", DayGrid.AppliesTo),
+        ("coverLabel", CoverLabel.AppliesTo),
+        ("dayCounter", DayCounter.AppliesTo),
+        ("objectiveLegend", ObjectiveLegend.AppliesTo),
+        ("standingGoals", StandingGoals.AppliesTo),
+        ("metricNames", MetricNames.AppliesTo),
+        ("habitLegend", HabitLegend.AppliesTo),
+        ("timeBlocks", TimeBlocks.AppliesTo),
+        ("allDayBand", AllDayBand.AppliesTo),
+        ("overviewDayColumns", OverviewDayColumns.AppliesTo),
+        ("calendarEventLines", CalendarEventLines.AppliesTo),
+    };
 }
 
 public sealed record DateField(string Name, TextAlign Align, double X);
@@ -485,6 +506,7 @@ public sealed record FixedAnchor
     /// <summary>Optional text pattern with {title} for navigation anchors.</summary>
     public string? TextFormat { get; init; }
 
+    [JsonIgnore]
     public RectPt Rect => new(X, Y, W, H);
 }
 
@@ -503,6 +525,7 @@ public sealed record RightAlignedAnchor
 
     public TextAlign Align { get; init; } = TextAlign.Right;
 
+    [JsonIgnore]
     public RectPt Rect => new(RightX - W, Y, W, H);
 }
 
