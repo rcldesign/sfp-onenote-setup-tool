@@ -7,6 +7,8 @@
     <ProjectReference Include="../../src/Sfp.Render/Sfp.Render.csproj" />
     <ProjectReference Include="../../src/Sfp.OneNote/Sfp.OneNote.csproj" />
     <ProjectReference Include="../../src/Sfp.Refresh/Sfp.Refresh.csproj" />
+    <!-- The plan verb (M1.8) is tested here through PlanCommand.Run with TextWriters; no separate CLI test project exists. -->
+    <ProjectReference Include="../../src/Sfp.Cli/Sfp.Cli.csproj" />
     <ProjectReference Include="../Sfp.TestSupport/Sfp.TestSupport.csproj" />
   </ItemGroup>
   <ItemGroup>

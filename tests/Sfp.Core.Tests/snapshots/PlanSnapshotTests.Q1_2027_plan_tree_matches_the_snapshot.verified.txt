@@ -1,0 +1,165 @@
+﻿SFP Q1 2027: Q1 2027, 2027-01-01 to 2027-03-31, 14 weeks, 90 days
+19 sections, 144 pages
+Quarter
+  Cover  [cover]  pdf 1  2027-01-01
+  Contents  [contents]  pdf none  2027-01-01
+  Setup  [setup]  pdf none  2027-01-01
+Objectives
+  Annual Objectives  [annual:1]  pdf 3  2027-01-01
+    Annual Objectives, continued  [annual:2]  pdf 4  2027-01-01
+  Objective Details  [objectives]  pdf none  2027-01-01
+    Objective 1  [objective:1]  pdf 5  2027-01-01
+    Objective 2  [objective:2]  pdf 6  2027-01-01
+    Objective 3  [objective:3]  pdf 7  2027-01-01
+    Objective 4  [objective:4]  pdf 8  2027-01-01
+    Objective 5  [objective:5]  pdf 9  2027-01-01
+    Objective 6  [objective:6]  pdf 10  2027-01-01
+    Objective 7  [objective:7]  pdf 11  2027-01-01
+    Objective 8  [objective:8]  pdf 12  2027-01-01
+Calendar
+  January 2027  [calendar:2027-01]  pdf 13  2027-01-01
+  February 2027  [calendar:2027-02]  pdf 14  2027-02-01
+  March 2027  [calendar:2027-03]  pdf 15  2027-03-01
+Week 01 (Jan 1 to Jan 3)  color #F0E6D8
+  Weekly Overview  [week:01:overview]  pdf 16  2026-12-28
+    Fri Jan 1  [day:2027-01-01]  pdf 21  2027-01-01
+    Sat Jan 2  [day:2027-01-02]  pdf 22  2027-01-02
+    Sun Jan 3  [day:2027-01-03]  pdf 23  2027-01-03
+  Weekly Reflection  [week:01:reflection]  pdf 24  2027-01-03
+Week 02 (Jan 4 to Jan 10)  color #F0E6D8
+  Weekly Overview  [week:02:overview]  pdf 25  2027-01-04
+    Mon Jan 4  [day:2027-01-04]  pdf 26  2027-01-04
+    Tue Jan 5  [day:2027-01-05]  pdf 27  2027-01-05
+    Wed Jan 6  [day:2027-01-06]  pdf 28  2027-01-06
+    Thu Jan 7  [day:2027-01-07]  pdf 29  2027-01-07
+    Fri Jan 8  [day:2027-01-08]  pdf 30  2027-01-08
+    Sat Jan 9  [day:2027-01-09]  pdf 31  2027-01-09
+    Sun Jan 10  [day:2027-01-10]  pdf 32  2027-01-10
+  Weekly Reflection  [week:02:reflection]  pdf 33  2027-01-10
+Week 03 (Jan 11 to Jan 17)  color #F0E6D8
+  Weekly Overview  [week:03:overview]  pdf 34  2027-01-11
+    Mon Jan 11  [day:2027-01-11]  pdf 35  2027-01-11
+    Tue Jan 12  [day:2027-01-12]  pdf 36  2027-01-12
+    Wed Jan 13  [day:2027-01-13]  pdf 37  2027-01-13
+    Thu Jan 14  [day:2027-01-14]  pdf 38  2027-01-14
+    Fri Jan 15  [day:2027-01-15]  pdf 39  2027-01-15
+    Sat Jan 16  [day:2027-01-16]  pdf 40  2027-01-16
+    Sun Jan 17  [day:2027-01-17]  pdf 41  2027-01-17
+  Weekly Reflection  [week:03:reflection]  pdf 42  2027-01-17
+Week 04 (Jan 18 to Jan 24)  color #F0E6D8
+  Weekly Overview  [week:04:overview]  pdf 43  2027-01-18
+    Mon Jan 18  [day:2027-01-18]  pdf 44  2027-01-18
+    Tue Jan 19  [day:2027-01-19]  pdf 45  2027-01-19
+    Wed Jan 20  [day:2027-01-20]  pdf 46  2027-01-20
+    Thu Jan 21  [day:2027-01-21]  pdf 47  2027-01-21
+    Fri Jan 22  [day:2027-01-22]  pdf 48  2027-01-22
+    Sat Jan 23  [day:2027-01-23]  pdf 49  2027-01-23
+    Sun Jan 24  [day:2027-01-24]  pdf 50  2027-01-24
+  Weekly Reflection  [week:04:reflection]  pdf 51  2027-01-24
+Week 05 (Jan 25 to Jan 31)  color #F0E6D8
+  Weekly Overview  [week:05:overview]  pdf 52  2027-01-25
+    Mon Jan 25  [day:2027-01-25]  pdf 53  2027-01-25
+    Tue Jan 26  [day:2027-01-26]  pdf 54  2027-01-26
+    Wed Jan 27  [day:2027-01-27]  pdf 55  2027-01-27
+    Thu Jan 28  [day:2027-01-28]  pdf 56  2027-01-28
+    Fri Jan 29  [day:2027-01-29]  pdf 57  2027-01-29
+    Sat Jan 30  [day:2027-01-30]  pdf 58  2027-01-30
+    Sun Jan 31  [day:2027-01-31]  pdf 59  2027-01-31
+  Weekly Reflection  [week:05:reflection]  pdf 60  2027-01-31
+Week 06 (Feb 1 to Feb 7)  color #E4D6C4
+  Weekly Overview  [week:06:overview]  pdf 61  2027-02-01
+    Mon Feb 1  [day:2027-02-01]  pdf 62  2027-02-01
+    Tue Feb 2  [day:2027-02-02]  pdf 63  2027-02-02
+    Wed Feb 3  [day:2027-02-03]  pdf 64  2027-02-03
+    Thu Feb 4  [day:2027-02-04]  pdf 65  2027-02-04
+    Fri Feb 5  [day:2027-02-05]  pdf 66  2027-02-05
+    Sat Feb 6  [day:2027-02-06]  pdf 67  2027-02-06
+    Sun Feb 7  [day:2027-02-07]  pdf 68  2027-02-07
+  Weekly Reflection  [week:06:reflection]  pdf 69  2027-02-07
+Week 07 (Feb 8 to Feb 14)  color #E4D6C4
+  Weekly Overview  [week:07:overview]  pdf 70  2027-02-08
+    Mon Feb 8  [day:2027-02-08]  pdf 71  2027-02-08
+    Tue Feb 9  [day:2027-02-09]  pdf 72  2027-02-09
+    Wed Feb 10  [day:2027-02-10]  pdf 73  2027-02-10
+    Thu Feb 11  [day:2027-02-11]  pdf 74  2027-02-11
+    Fri Feb 12  [day:2027-02-12]  pdf 75  2027-02-12
+    Sat Feb 13  [day:2027-02-13]  pdf 76  2027-02-13
+    Sun Feb 14  [day:2027-02-14]  pdf 77  2027-02-14
+  Weekly Reflection  [week:07:reflection]  pdf 78  2027-02-14
+Week 08 (Feb 15 to Feb 21)  color #E4D6C4
+  Weekly Overview  [week:08:overview]  pdf 79  2027-02-15
+    Mon Feb 15  [day:2027-02-15]  pdf 80  2027-02-15
+    Tue Feb 16  [day:2027-02-16]  pdf 81  2027-02-16
+    Wed Feb 17  [day:2027-02-17]  pdf 82  2027-02-17
+    Thu Feb 18  [day:2027-02-18]  pdf 83  2027-02-18
+    Fri Feb 19  [day:2027-02-19]  pdf 84  2027-02-19
+    Sat Feb 20  [day:2027-02-20]  pdf 85  2027-02-20
+    Sun Feb 21  [day:2027-02-21]  pdf 86  2027-02-21
+  Weekly Reflection  [week:08:reflection]  pdf 87  2027-02-21
+Week 09 (Feb 22 to Feb 28)  color #E4D6C4
+  Weekly Overview  [week:09:overview]  pdf 88  2027-02-22
+    Mon Feb 22  [day:2027-02-22]  pdf 89  2027-02-22
+    Tue Feb 23  [day:2027-02-23]  pdf 90  2027-02-23
+    Wed Feb 24  [day:2027-02-24]  pdf 91  2027-02-24
+    Thu Feb 25  [day:2027-02-25]  pdf 92  2027-02-25
+    Fri Feb 26  [day:2027-02-26]  pdf 93  2027-02-26
+    Sat Feb 27  [day:2027-02-27]  pdf 94  2027-02-27
+    Sun Feb 28  [day:2027-02-28]  pdf 95  2027-02-28
+  Weekly Reflection  [week:09:reflection]  pdf 96  2027-02-28
+Week 10 (Mar 1 to Mar 7)  color #D8C8B2
+  Weekly Overview  [week:10:overview]  pdf 97  2027-03-01
+    Mon Mar 1  [day:2027-03-01]  pdf 98  2027-03-01
+    Tue Mar 2  [day:2027-03-02]  pdf 99  2027-03-02
+    Wed Mar 3  [day:2027-03-03]  pdf 100  2027-03-03
+    Thu Mar 4  [day:2027-03-04]  pdf 101  2027-03-04
+    Fri Mar 5  [day:2027-03-05]  pdf 102  2027-03-05
+    Sat Mar 6  [day:2027-03-06]  pdf 103  2027-03-06
+    Sun Mar 7  [day:2027-03-07]  pdf 104  2027-03-07
+  Weekly Reflection  [week:10:reflection]  pdf 105  2027-03-07
+Week 11 (Mar 8 to Mar 14)  color #D8C8B2
+  Weekly Overview  [week:11:overview]  pdf 106  2027-03-08
+    Mon Mar 8  [day:2027-03-08]  pdf 107  2027-03-08
+    Tue Mar 9  [day:2027-03-09]  pdf 108  2027-03-09
+    Wed Mar 10  [day:2027-03-10]  pdf 109  2027-03-10
+    Thu Mar 11  [day:2027-03-11]  pdf 110  2027-03-11
+    Fri Mar 12  [day:2027-03-12]  pdf 111  2027-03-12
+    Sat Mar 13  [day:2027-03-13]  pdf 112  2027-03-13
+    Sun Mar 14  [day:2027-03-14]  pdf 113  2027-03-14
+  Weekly Reflection  [week:11:reflection]  pdf 114  2027-03-14
+Week 12 (Mar 15 to Mar 21)  color #D8C8B2
+  Weekly Overview  [week:12:overview]  pdf 115  2027-03-15
+    Mon Mar 15  [day:2027-03-15]  pdf 116  2027-03-15
+    Tue Mar 16  [day:2027-03-16]  pdf 117  2027-03-16
+    Wed Mar 17  [day:2027-03-17]  pdf 118  2027-03-17
+    Thu Mar 18  [day:2027-03-18]  pdf 119  2027-03-18
+    Fri Mar 19  [day:2027-03-19]  pdf 120  2027-03-19
+    Sat Mar 20  [day:2027-03-20]  pdf 121  2027-03-20
+    Sun Mar 21  [day:2027-03-21]  pdf 122  2027-03-21
+  Weekly Reflection  [week:12:reflection]  pdf 123  2027-03-21
+Week 13 (Mar 22 to Mar 28)  color #D8C8B2
+  Weekly Overview  [week:13:overview]  pdf 124  2027-03-22
+    Mon Mar 22  [day:2027-03-22]  pdf 125  2027-03-22
+    Tue Mar 23  [day:2027-03-23]  pdf 126  2027-03-23
+    Wed Mar 24  [day:2027-03-24]  pdf 127  2027-03-24
+    Thu Mar 25  [day:2027-03-25]  pdf 128  2027-03-25
+    Fri Mar 26  [day:2027-03-26]  pdf 129  2027-03-26
+    Sat Mar 27  [day:2027-03-27]  pdf 130  2027-03-27
+    Sun Mar 28  [day:2027-03-28]  pdf 131  2027-03-28
+  Weekly Reflection  [week:13:reflection]  pdf 132  2027-03-28
+Week 14 (Mar 29 to Mar 31)  color #D8C8B2
+  Weekly Overview  [week:14:overview]  pdf 124  2027-03-29
+    Mon Mar 29  [day:2027-03-29]  pdf 125  2027-03-29
+    Tue Mar 30  [day:2027-03-30]  pdf 126  2027-03-30
+    Wed Mar 31  [day:2027-03-31]  pdf 127  2027-03-31
+  Weekly Reflection  [week:14:reflection]  pdf 132  2027-04-04
+Reviews
+  Quarter scorecard  [scorecard]  pdf none  2027-01-01
+  January Review  [review:2027-01]  pdf 132  2027-01-01
+  February Review  [review:2027-02]  pdf 132  2027-02-01
+  March Review  [review:2027-03]  pdf 132  2027-03-01
+  Q1 2027 Review  [review:quarter]  pdf 132  2027-01-01
+Notes
+  Backlog  [notes:backlog]  pdf none  2027-01-01
+  Ideas  [notes:ideas]  pdf none  2027-01-01
+  Notes  [notes:notes]  pdf none  2027-01-01
+  Contacts  [notes:contacts]  pdf none  2027-01-01
