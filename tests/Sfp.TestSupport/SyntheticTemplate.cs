@@ -19,7 +19,7 @@ namespace Sfp.TestSupport;
 public static class SyntheticTemplate
 {
     /// <summary>Bump when the drawing changes so cached copies from earlier runs are regenerated.</summary>
-    public const string Version = "1";
+    public const string Version = "2";
 
     /// <summary>Section labels printed on daily pages that the manifest does not model (positions from the PRD's measured daily-page table).</summary>
     private static readonly (string Text, double X, double BaselineY)[] DailyLabels =
@@ -223,14 +223,15 @@ public static class SyntheticTemplate
             sheet.Text(text, x, baselineY, m.Slots.Date.SizePt);
         }
 
+        // As the planner prints it: one rule per hour line from the column top (25 of them, 12 midnight to 12 midnight),
+        // each 7 pt label right-aligned at the label edge and vertically centered on its rule.
         TimeBlocksSlot blocks = m.Slots.TimeBlocks;
         for (int row = 0; row < blocks.PrintedRows; row++)
         {
             string label = (((row + 11) % 12) + 1).ToString(CultureInfo.InvariantCulture);
-            double baseline = blocks.Top + (blocks.PrintedPitch * row) + blocks.PrintedLabelSizePt;
-            sheet.TextRight(label, blocks.LabelRightX, baseline, blocks.PrintedLabelSizePt);
-            double ruleY = blocks.Top + (blocks.PrintedPitch * (row + 1));
-            sheet.Line(blocks.LabelRightX + 4, ruleY, blocks.ColumnRight, ruleY, blocks.RuleWidthPt);
+            double ruleY = blocks.Top + (blocks.PrintedPitch * row);
+            sheet.TextRight(label, blocks.LabelRightX, ruleY + (blocks.PrintedLabelSizePt * 0.35), blocks.PrintedLabelSizePt);
+            sheet.Line(blocks.ColumnX, ruleY, blocks.ColumnRight, ruleY, blocks.RuleWidthPt);
         }
     }
 

@@ -1,0 +1,28 @@
+﻿day:2027-01-04: 27 anchors
+dailyDate  Link  x=900 y=22 w=110 h=20  "01 / 04 / 27"  Right  15pt  opacity=1
+timeBlockEvent:6  Propagated  x=900 y=95.5 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:7  Propagated  x=900 y=129.41 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:8  Propagated  x=900 y=163.31 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:9  Propagated  x=900 y=197.22 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:10  Propagated  x=900 y=231.13 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:11  Propagated  x=900 y=265.03 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:12  Propagated  x=900 y=298.94 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:13  Propagated  x=900 y=332.84 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:14  Propagated  x=900 y=366.75 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:15  Propagated  x=900 y=400.66 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:16  Propagated  x=900 y=434.56 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:17  Propagated  x=900 y=468.47 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:18  Propagated  x=900 y=502.38 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:19  Propagated  x=900 y=536.28 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:20  Propagated  x=900 y=570.19 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+timeBlockEvent:21  Propagated  x=900 y=604.09 w=182.7 h=33.91  ""  Left  8pt  opacity=0.7
+objectiveLegend  Propagated  x=230 y=49 w=640 h=13  ""  Left  8pt  opacity=1
+standingGoal:1  Propagated  x=111 y=92 w=234 h=16  ""  Left  10pt  opacity=0.6
+standingGoal:2  Propagated  x=111 y=164 w=234 h=16  ""  Left  10pt  opacity=0.6
+standingGoal:3  Propagated  x=111 y=236 w=234 h=16  ""  Left  10pt  opacity=0.6
+metricName:1  Propagated  x=33 y=694 w=248 h=16  ""  Left  10pt  opacity=1
+metricName:2  Propagated  x=392 y=694 w=245 h=16  ""  Left  10pt  opacity=1
+metricName:3  Propagated  x=749 y=694 w=244 h=16  ""  Left  10pt  opacity=1
+allDayBand  Propagated  x=560 y=49 w=300 h=13  ""  Left  8pt  opacity=0.7
+prev  Link  x=23 y=48 w=95 h=14  "‹ Sun Jan 3"  Left  10pt  opacity=1
+next  Link  x=122 y=48 w=95 h=14  "Tue Jan 5 ›"  Left  10pt  opacity=1

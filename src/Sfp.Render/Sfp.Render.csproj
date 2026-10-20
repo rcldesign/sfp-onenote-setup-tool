@@ -10,4 +10,8 @@
     <PackageReference Include="PDFtoImage" />
     <PackageReference Include="SkiaSharp" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The page painters are internal; the render tests exercise them directly. -->
+    <InternalsVisibleTo Include="Sfp.Render.Tests" />
+  </ItemGroup>
 </Project>

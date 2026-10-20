@@ -182,6 +182,12 @@ public sealed record SlotsSpec
 
     public required CalendarEventLinesSlot CalendarEventLines { get; init; }
 
+    /// <summary>The objective title cell in the header band of each Annual Objectives block (propagated "annualRow:{n}").</summary>
+    public required AnnualTitleSlot AnnualTitle { get; init; }
+
+    /// <summary>The objective title beside the heading of each Objective Details page (propagated "objectiveHeading").</summary>
+    public required BandSlot ObjectiveHeading { get; init; }
+
     /// <summary>Every slot's manifest name with the page names it applies to, in manifest order.</summary>
     public IReadOnlyList<(string Slot, IReadOnlyList<string> AppliesTo)> AppliesToBySlot() => new[]
     {
@@ -199,7 +205,31 @@ public sealed record SlotsSpec
         ("allDayBand", AllDayBand.AppliesTo),
         ("overviewDayColumns", OverviewDayColumns.AppliesTo),
         ("calendarEventLines", CalendarEventLines.AppliesTo),
+        ("annualTitle", AnnualTitle.AppliesTo),
+        ("objectiveHeading", ObjectiveHeading.AppliesTo),
     };
+}
+
+/// <summary>
+/// Annual Objectives title cells: one per block, x fixed, y = block top + offset. The block tops are the ones in
+/// links.annualObjective (not repeated here), so the two slots of a block always move together.
+/// </summary>
+public sealed record AnnualTitleSlot
+{
+    public required IReadOnlyList<string> AppliesTo { get; init; }
+
+    public required double X { get; init; }
+
+    public required double YOffset { get; init; }
+
+    public required double W { get; init; }
+
+    public required double H { get; init; }
+
+    public required double SizePt { get; init; }
+
+    /// <summary>The cell rectangle for a block whose top is <paramref name="blockTop"/>.</summary>
+    public RectPt Rect(double blockTop) => new(X, blockTop + YOffset, W, H);
 }
 
 public sealed record DateField(string Name, TextAlign Align, double X);

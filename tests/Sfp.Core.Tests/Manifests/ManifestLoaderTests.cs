@@ -317,8 +317,8 @@ public class ManifestLoaderTests : IDisposable
 
         var slots = m.Slots.AppliesToBySlot();
 
-        slots.Should().HaveCount(14);
-        slots.Select(s => s.Slot).Should().Contain(new[] { "date", "weeksRemaining", "dayGrid", "timeBlocks", "calendarEventLines" });
+        slots.Should().HaveCount(16);
+        slots.Select(s => s.Slot).Should().Contain(new[] { "date", "weeksRemaining", "dayGrid", "timeBlocks", "calendarEventLines", "annualTitle", "objectiveHeading" });
         slots.Should().OnlyContain(s => s.AppliesTo.Count > 0);
     }
 

@@ -5,6 +5,8 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Sfp.Core/Sfp.Core.csproj" />
     <ProjectReference Include="../../src/Sfp.Render/Sfp.Render.csproj" />
+    <!-- The render-only verb (M2.10) is tested here through RenderOnlyCommand.Run with TextWriters; no separate CLI test project exists. -->
+    <ProjectReference Include="../../src/Sfp.Cli/Sfp.Cli.csproj" />
     <ProjectReference Include="../Sfp.TestSupport/Sfp.TestSupport.csproj" />
   </ItemGroup>
   <ItemGroup>
