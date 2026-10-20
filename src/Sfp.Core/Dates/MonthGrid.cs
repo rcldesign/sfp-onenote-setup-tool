@@ -21,4 +21,8 @@ public sealed record MonthGrid(int Year, int Month, IReadOnlyList<IReadOnlyList<
 /// <param name="InMonth">False for leading days of the previous month and trailing days of the next.</param>
 /// <param name="InQuarter">False for days outside the quarter (these are baked greyed and never linked).</param>
 /// <param name="StackedDay">For a six-row month, the overflow day number stacked into this fifth-row cell ("23 / 30"), otherwise null.</param>
-public sealed record DayCell(DateOnly Date, bool InMonth, bool InQuarter, int? StackedDay);
+public sealed record DayCell(DateOnly Date, bool InMonth, bool InQuarter, int? StackedDay)
+{
+    /// <summary>The date of the stacked overflow day (always one week after <see cref="Date"/>), or null when nothing is stacked.</summary>
+    public DateOnly? StackedDate => StackedDay is null ? null : Date.AddDays(MonthGrid.ColumnCount);
+}
