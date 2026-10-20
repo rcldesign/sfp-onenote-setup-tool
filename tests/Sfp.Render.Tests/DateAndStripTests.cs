@@ -1,3 +1,4 @@
+using System.Globalization;
 using Sfp.Core;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
@@ -134,19 +135,128 @@ public sealed class DateAndStripTests
     }
 
     [Fact]
-    public void Thirteen_numbers_use_the_printed_positions_and_fourteen_tighten_the_pitch()
+    public void Week_2_Monday_strip_keeps_more_air_between_numbers_than_inside_them()
+    {
+        // Measured on the pixels, independent of StripPositions: with the even pitch the two-digit numbers ran together
+        // ("14", the disc on 13, "12 11 10" had 1.6 to 3.3 pt of air between them, less than the 2.6 pt inside "11").
+        using SKBitmap sheet = RenderFixture.Decode(f.Render(MonJan4));
+        WeeksRemainingSlot strip = M.Slots.WeeksRemaining;
+        string[] numbers = DateSlots.StripNumbers(14);
+        double cap = f.Fonts.TextWidth("0", strip.SizePt) * 1.4;
+        RectPt band = new(strip.NumberSpan.From - 4, strip.BaselineY - cap, strip.NumberSpan.To - strip.NumberSpan.From + 10, cap + 1);
+        IReadOnlyList<InkCluster> clusters = Pixels.InkClusters(sheet, band, RenderFixture.Dpi, f.Background, mergeGapPt: 0.3);
+
+        // One cluster per digit glyph, the circled 13 (index 1) one disc: group the clusters back into numbers.
+        int[] glyphs = numbers.Select((n, i) => i == 1 ? 1 : n.Length).ToArray();
+        clusters.Should().HaveCount(glyphs.Sum(), "the digits and the disc are separate: " + string.Join(" ", clusters.Select(c => $"{c.LeftPt:0.0}-{c.RightPt:0.0}")));
+        List<double> between = new();
+        List<double> inside = new();
+        int next = 0;
+        for (int i = 0; i < numbers.Length; i++)
+        {
+            for (int g = 1; g < glyphs[i]; g++)
+            {
+                inside.Add(clusters[next + g].LeftPt - clusters[next + g - 1].RightPt);
+            }
+
+            next += glyphs[i];
+            if (i < numbers.Length - 1)
+            {
+                between.Add(clusters[next].LeftPt - clusters[next - 1].RightPt);
+            }
+        }
+
+        between.Should().HaveCount(13);
+        between.Min().Should().BeGreaterThan(4.0, "every pair of neighbors has clear air: " + string.Join(" ", between.Select(g => g.ToString("0.0", CultureInfo.InvariantCulture))));
+        between.Min().Should().BeGreaterThan(inside.Max(), "the space between two numbers is wider than the space inside one, so 14 13 12 11 10 read apart");
+    }
+
+    [Fact]
+    public void Thirteen_numbers_use_the_printed_positions_exactly()
+    {
+        WeeksRemainingSlot strip = M.Slots.WeeksRemaining;
+        string[] thirteen = DateSlots.StripNumbers(13);
+
+        DateSlots.StripPositions(strip, thirteen, t => f.Fonts.TextWidth(t, strip.SizePt)).Should().Equal(strip.NumberX);
+        DateSlots.StripPositions(strip, thirteen, t => 3.0 * t.Length).Should().Equal(strip.NumberX, "the printed left edges win whatever the face's digit widths");
+    }
+
+    [Fact]
+    public void Fourteen_numbers_have_equal_gaps_from_the_span_start_to_the_span_end()
     {
         WeeksRemainingSlot strip = M.Slots.WeeksRemaining;
         Func<string, double> width = t => f.Fonts.TextWidth(t, strip.SizePt);
+        string[] numbers = DateSlots.StripNumbers(14);
+        numbers.Should().StartWith(new[] { "14", "13" }).And.EndWith("1");
 
-        DateSlots.StripPositions(strip, DateSlots.StripNumbers(13), width).Should().Equal(strip.NumberX);
+        IReadOnlyList<double> x = DateSlots.StripPositions(strip, numbers, width);
 
-        IReadOnlyList<double> fourteen = DateSlots.StripPositions(strip, DateSlots.StripNumbers(14), width);
-        fourteen.Should().HaveCount(14);
-        fourteen[0].Should().Be(strip.NumberSpan.From);
-        (fourteen[^1] + width("1")).Should().BeApproximately(strip.NumberSpan.To, 0.01, "the last number ends at the span end");
-        (fourteen[1] - fourteen[0]).Should().BeInRange(13.5, 14.2, "the PRD expects a pitch of about 13.8 pt");
-        DateSlots.StripNumbers(14).Should().StartWith(new[] { "14", "13" }).And.EndWith("1");
+        x.Should().HaveCount(14);
+        x[0].Should().Be(strip.NumberSpan.From, "the first number starts at numberSpan.from");
+        (x[^1] + width(numbers[^1])).Should().BeApproximately(strip.NumberSpan.To, 0.001, "the last number ends at numberSpan.to");
+        double[] gaps = Enumerable.Range(0, 13).Select(i => x[i + 1] - (x[i] + width(numbers[i]))).ToArray();
+        gaps.Should().OnlyContain(g => g > 0, "neighbors never touch");
+        (gaps.Max() - gaps.Min()).Should().BeLessThanOrEqualTo(0.1, "the air between neighbors is equal: " + string.Join(" ", gaps.Select(g => g.ToString("0.00", CultureInfo.InvariantCulture))));
+        double expectedGap = (strip.NumberSpan.To - strip.NumberSpan.From - numbers.Sum(width)) / 13;
+        gaps.Should().OnlyContain(g => Math.Abs(g - expectedGap) < 1e-9);
+        ((x[^1] - x[0]) / 13).Should().BeInRange(13.5, 14.2, "the left edges still average the PRD's 'about 13.8 pt'");
+        (x[1] - x[0]).Should().BeGreaterThan(x[^1] - x[^2], "a two-digit number takes a wider pitch than a one-digit one");
+    }
+
+    [Fact]
+    public void Equal_gaps_follow_the_widths_of_the_numbers()
+    {
+        // Bookman's measured tabular digits (6.2 pt at 10 pt): 19 digits leave (186 - 117.8) / 13 pt between neighbors.
+        WeeksRemainingSlot strip = M.Slots.WeeksRemaining with { NumberSpan = new Span(537, 723) };
+        string[] numbers = DateSlots.StripNumbers(14);
+        IReadOnlyList<double> x = DateSlots.StripPositions(strip, numbers, t => 6.2 * t.Length);
+        double gap = (186 - 117.8) / 13;
+        double[] expected = new double[14];
+        double before = 0;
+        for (int k = 0; k < 14; k++)
+        {
+            expected[k] = 537 + before + (k * gap);
+            before += 6.2 * numbers[k].Length;
+        }
+
+        x.Should().HaveCount(14);
+        for (int k = 0; k < 14; k++)
+        {
+            x[k].Should().BeApproximately(expected[k], 1e-9, $"number {numbers[k]} starts after the widths of the numbers before it and {k} gaps");
+        }
+
+        x[1].Should().BeApproximately(537 + 12.4 + gap, 1e-9);
+        x[^1].Should().BeApproximately(723 - 6.2, 1e-9);
+
+        // A proportional face (a narrow "1") still gets equal air; only the pitch changes.
+        Func<string, double> proportional = t => t.Sum(ch => ch == '1' ? 4.0 : 6.2);
+        IReadOnlyList<double> p = DateSlots.StripPositions(strip, numbers, proportional);
+        double[] gaps = Enumerable.Range(0, 13).Select(i => p[i + 1] - (p[i] + proportional(numbers[i]))).ToArray();
+        gaps.Should().OnlyContain(g => Math.Abs(g - gaps[0]) < 1e-9);
+        (p[^1] + proportional("1")).Should().BeApproximately(723, 1e-9);
+    }
+
+    [Fact]
+    public void Numbers_too_wide_for_the_span_are_reported_against_the_manifest_key()
+    {
+        // 6.25 pt per digit is exact in binary: the 19 digits of 14 down to 1 are 118.75 pt wide.
+        string[] numbers = DateSlots.StripNumbers(14);
+        IReadOnlyList<double> Layout(double to) =>
+            DateSlots.StripPositions(M.Slots.WeeksRemaining with { NumberSpan = new Span(537, to) }, numbers, t => 6.25 * t.Length);
+
+        FluentActions.Invoking(() => Layout(650)).Should().Throw<InvalidOperationException>()
+            .WithMessage("*slots.weeksRemaining.numberSpan (537 to 650, 113 pt) is too narrow for 14 numbers at 10 pt*118.8 pt wide*");
+        FluentActions.Invoking(() => Layout(537 + 118.75)).Should().Throw<InvalidOperationException>("touching numbers leave no space between them");
+        Layout(537 + 119).Should().HaveCount(14, "a quarter point spread over 13 gaps still separates the numbers");
+    }
+
+    [Fact]
+    public void One_number_starts_at_the_span_start_and_none_gives_no_positions()
+    {
+        WeeksRemainingSlot strip = M.Slots.WeeksRemaining;
+
+        DateSlots.StripPositions(strip, DateSlots.StripNumbers(1), t => 6.2 * t.Length).Should().Equal(strip.NumberSpan.From);
+        DateSlots.StripPositions(strip, DateSlots.StripNumbers(0), t => 6.2 * t.Length).Should().BeEmpty();
     }
 
     [SkippableFact]

@@ -50,8 +50,9 @@ internal static class DateSlots
     }
 
     /// <summary>
-    /// Erases the printed strip and draws N numbers counting down from N, then the filled circle with its number in
-    /// white on N - k + 1 (Corrected) or k (AsPrinted).
+    /// Erases the printed strip and draws N numbers counting down from N (laid out by <see cref="StripPositions"/>),
+    /// then the filled circle, centered on its number's text, with that number in white on N - k + 1 (Corrected) or
+    /// k (AsPrinted).
     /// </summary>
     public static void DrawWeeksRemaining(RenderContext c)
     {
@@ -108,9 +109,17 @@ internal static class DateSlots
 
     /// <summary>
     /// Left edges of the strip numbers. When the count equals the printed count the printed positions (numberX) are
-    /// used exactly; otherwise the numbers are spread evenly so the first starts at numberSpan.from and the last ends
-    /// at numberSpan.to (with 14 numbers the printed 14.9 pt pitch tightens to about 13.8 pt).
+    /// used exactly. Otherwise the numbers get equal air between their glyph runs, the way the printed strip is set
+    /// (6.4 pt between neighbors, so a two-digit number takes a wider pitch than a one-digit one):
+    /// gap = (numberSpan.to - numberSpan.from - the sum of the N widths) / (N - 1), and number k (0-based) starts at
+    /// numberSpan.from plus the widths of the numbers before it plus k gaps. The first number therefore starts at
+    /// numberSpan.from and the last ends at numberSpan.to; with 14 numbers the left edges still average about 13.8 pt
+    /// apart. A single number starts at numberSpan.from.
     /// </summary>
+    /// <param name="slot">The manifest strip: printed positions and the span to spread across.</param>
+    /// <param name="numbers">The numbers left to right, as <see cref="StripNumbers"/> gives them.</param>
+    /// <param name="widthPt">Advance width of a number in points at the strip size.</param>
+    /// <exception cref="InvalidOperationException">The numbers are too wide for numberSpan to leave any air between them.</exception>
     public static IReadOnlyList<double> StripPositions(WeeksRemainingSlot slot, IReadOnlyList<string> numbers, Func<string, double> widthPt)
     {
         ArgumentNullException.ThrowIfNull(slot);
@@ -126,7 +135,31 @@ internal static class DateSlots
             return numbers.Count == 0 ? Array.Empty<double>() : new[] { slot.NumberSpan.From };
         }
 
-        double pitch = (slot.NumberSpan.To - slot.NumberSpan.From - widthPt(numbers[^1])) / (numbers.Count - 1);
-        return Enumerable.Range(0, numbers.Count).Select(i => slot.NumberSpan.From + (i * pitch)).ToList();
+        double[] widths = numbers.Select(widthPt).ToArray();
+        double span = slot.NumberSpan.To - slot.NumberSpan.From;
+        double totalWidth = widths.Sum();
+        double gap = (span - totalWidth) / (numbers.Count - 1);
+        if (gap is not > 0)
+        {
+            throw new InvalidOperationException(string.Format(
+                CultureInfo.InvariantCulture,
+                "slots.weeksRemaining.numberSpan ({0} to {1}, {2:0.#} pt) is too narrow for {3} numbers at {4} pt: they are {5:0.#} pt wide and leave no space between them.",
+                slot.NumberSpan.From,
+                slot.NumberSpan.To,
+                span,
+                numbers.Count,
+                slot.SizePt,
+                totalWidth));
+        }
+
+        double[] x = new double[numbers.Count];
+        double widthsBefore = 0;
+        for (int k = 0; k < numbers.Count; k++)
+        {
+            x[k] = slot.NumberSpan.From + widthsBefore + (k * gap);
+            widthsBefore += widths[k];
+        }
+
+        return x;
     }
 }

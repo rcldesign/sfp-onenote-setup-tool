@@ -36,4 +36,22 @@
   <ItemGroup>
     <None Include="$(TemplatesDir)**/*" Link="templates/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <PropertyGroup>
+    <!-- Publishing (build/publish.sh, build/publish.ps1): a self-contained single-file win-x64 sfp2onenote-app.exe in the
+         same release folder as sfp2onenote.exe, which the daily scheduled task runs. Never trimmed: WPF is not
+         trim-safe. Symbols and XML documentation stay out of the release folder. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishDocumentationFile>false</PublishDocumentationFile>
+    <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+  </PropertyGroup>
+  <Target Name="ExcludeSymbolsFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <!-- The referenced projects' .pdb files and the native libSkiaSharp.pdb (89 MB) of the SkiaSharp package. -->
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb'" />
+      <!-- The SDK hands a referenced executable's runtimeconfig.json and deps.json to the referencing project. The
+           sfp2onenote.exe in the release folder is a single-file bundle with its own, so a loose copy is only clutter. -->
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(RelativePath)' == 'sfp2onenote.runtimeconfig.json' or '%(RelativePath)' == 'sfp2onenote.deps.json'" />
+    </ItemGroup>
+  </Target>
 </Project>
