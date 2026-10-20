@@ -189,14 +189,21 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
 
         progress?.Report("Writing changes");
-        WriteOutcome written = WriteAll(changes, calendarChanges, plan, catalog, pages, request.WriteInkedValues, progress, cancellationToken);
-        sidecar = sidecar with
+        WriteState writeState = new(sidecar);
+        WriteOutcome written;
+        try
         {
-            Pages = written.Pages,
-            LastRefresh = services.Clock(),
-            FrozenThrough = calendar?.FrozenThrough ?? sidecar.FrozenThrough,
-        };
-        services.Sidecars.Save(opened.SidecarPath, sidecar);
+            written = WriteAll(changes, calendarChanges, plan, catalog, pages, writeState, request.WriteInkedValues, progress, cancellationToken);
+        }
+        catch
+        {
+            // Cancelled, OneNote gone or an unexpected failure part way through: the outlines written so far are still
+            // recorded, or the next run would find them unowned and block their own slots.
+            SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, afterFailure: true);
+            throw;
+        }
+
+        sidecar = SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, afterFailure: false);
 
         RefreshSummary summary = new()
         {
@@ -270,21 +277,54 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         return window;
     }
 
-    /// <summary>Writes the unblocked changes page by page; inked values are skipped unless confirmed; the first OneNote failure stops the run with the page named.</summary>
+    /// <summary>
+    /// The sidecar with what the write phase recorded (anchors and the texts written), LastRefresh and FrozenThrough,
+    /// saved. After a failure part way through the save is best effort: a save error is logged so the failure itself
+    /// still reaches the result.
+    /// </summary>
+    private Sidecar SaveWritten(string path, Sidecar sidecar, WriteState state, CalendarOutcome? calendar, bool afterFailure)
+    {
+        Sidecar updated = sidecar with
+        {
+            Pages = state.Pages(sidecar),
+            LastRefresh = services.Clock(),
+            FrozenThrough = calendar?.FrozenThrough ?? sidecar.FrozenThrough,
+        };
+        if (!afterFailure)
+        {
+            services.Sidecars.Save(path, updated);
+            return updated;
+        }
+
+        try
+        {
+            services.Sidecars.Save(path, updated);
+            services.Log.Information("The run stopped part way; the objects written so far were recorded in {Path}", path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            services.Log.Error(ex, "The run stopped part way and the sidecar {Path} could not be saved", path);
+        }
+
+        return updated;
+    }
+
+    /// <summary>
+    /// Writes the unblocked changes page by page; inked values are skipped unless confirmed; the first OneNote failure
+    /// stops the run with the page named. What each page write did is recorded in <paramref name="state"/> as soon as it
+    /// is done, so a run that stops part way still saves it.
+    /// </summary>
     private WriteOutcome WriteAll(
         List<PlannedChange> changes,
         HashSet<PlannedChange> calendarChanges,
         NotebookPlan plan,
         SlotCatalog catalog,
         PageCache pages,
+        WriteState state,
         bool writeInked,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
-        Dictionary<string, Dictionary<string, string>> anchors = pages.Sidecar.Pages.ToDictionary(
-            p => p.Key, p => new Dictionary<string, string>(p.Value.Anchors, StringComparer.Ordinal), StringComparer.Ordinal);
-        Dictionary<string, Dictionary<string, string>> texts = pages.Sidecar.Pages.ToDictionary(
-            p => p.Key, p => new Dictionary<string, string>(p.Value.AnchorTexts, StringComparer.Ordinal), StringComparer.Ordinal);
         List<PlannedChange> outcome = new();
         List<string> warnings = new();
         int touched = 0;
@@ -316,8 +356,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                     continue;
                 }
 
-                anchors.TryGetValue(group.Key.Value, out Dictionary<string, string>? pageAnchors);
-                string? ownedId = pageAnchors is not null && pageAnchors.TryGetValue(change.SlotId, out string? id) ? id : null;
+                string? ownedId = state.Anchors(group.Key).TryGetValue(change.SlotId, out string? id) ? id : null;
                 PageSpec? spec = plan.FindPage(group.Key);
                 SlotGeometry? geometry = spec is null ? null : catalog.Slot(spec, change.SlotId);
                 writes.Add(new AnchorWrite(change, geometry, ownedId));
@@ -357,31 +396,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
             pages.Invalidate(group.Key);
             touched++;
-            Dictionary<string, string> updatedAnchors = anchors.TryGetValue(group.Key.Value, out Dictionary<string, string>? existing)
-                ? existing
-                : new Dictionary<string, string>(StringComparer.Ordinal);
-            anchors[group.Key.Value] = updatedAnchors;
-            Dictionary<string, string> updatedTexts = texts.TryGetValue(group.Key.Value, out Dictionary<string, string>? known)
-                ? known
-                : new Dictionary<string, string>(StringComparer.Ordinal);
-            texts[group.Key.Value] = updatedTexts;
-            foreach ((string slotId, string objectId) in result.Created)
-            {
-                updatedAnchors[slotId] = objectId;
-                updatedTexts[slotId] = writes.First(w => w.Change.SlotId == slotId).Change.NewText;
-            }
-
-            foreach (string slotId in result.Updated)
-            {
-                updatedTexts[slotId] = writes.First(w => w.Change.SlotId == slotId).Change.NewText;
-            }
-
-            foreach (string slotId in result.Removed)
-            {
-                updatedAnchors.Remove(slotId);
-                updatedTexts.Remove(slotId);
-            }
-
+            state.Record(group.Key, result, writes);
             foreach (string slotId in result.Unresolved)
             {
                 warnings.Add($"Page {title}: the object written for {slotId} could not be found again; it will be re-planned next run.");
@@ -404,15 +419,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             }
         }
 
-        Dictionary<string, SidecarPage> pagesWithAnchors = pages.Sidecar.Pages.ToDictionary(
-            p => p.Key,
-            p => p.Value with
-            {
-                Anchors = anchors.TryGetValue(p.Key, out Dictionary<string, string>? a) ? a : p.Value.Anchors,
-                AnchorTexts = texts.TryGetValue(p.Key, out Dictionary<string, string>? t) ? t : p.Value.AnchorTexts,
-            },
-            StringComparer.Ordinal);
-        return new WriteOutcome(outcome, pagesWithAnchors, touched, valuesWritten, eventsWritten, warnings, error);
+        return new WriteOutcome(outcome, touched, valuesWritten, eventsWritten, warnings, error);
     }
 
     /// <summary>
@@ -652,12 +659,90 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
     private sealed record WriteOutcome(
         List<PlannedChange> Changes,
-        Dictionary<string, SidecarPage> Pages,
         int PagesTouched,
         int ValuesWritten,
         int EventsWritten,
         List<string> Warnings,
         string? Error);
+
+    /// <summary>
+    /// The sidecar's ownership records (slot to object ID, slot to the text the tool wrote) as the write phase changes
+    /// them, page by page, so the sidecar saved at the end, or after a run that stopped part way, holds every object the
+    /// run wrote.
+    /// </summary>
+    private sealed class WriteState
+    {
+        private static readonly IReadOnlyDictionary<string, string> None = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        private readonly Dictionary<string, Dictionary<string, string>> anchors;
+        private readonly Dictionary<string, Dictionary<string, string>> texts;
+
+        public WriteState(Sidecar sidecar)
+        {
+            anchors = sidecar.Pages.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value.Anchors, StringComparer.Ordinal), StringComparer.Ordinal);
+            texts = sidecar.Pages.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value.AnchorTexts, StringComparer.Ordinal), StringComparer.Ordinal);
+        }
+
+        /// <summary>Slot id to object ID of the page's tool-owned outlines, as of now.</summary>
+        public IReadOnlyDictionary<string, string> Anchors(PageKey page) => anchors.TryGetValue(page.Value, out Dictionary<string, string>? a) ? a : None;
+
+        /// <summary>Slot id to the text the tool last wrote there, as of now.</summary>
+        public IReadOnlyDictionary<string, string> Texts(PageKey page) => texts.TryGetValue(page.Value, out Dictionary<string, string>? t) ? t : None;
+
+        /// <summary>Records one page write: created outlines get their ID and text, updated ones their text, removed ones lose both.</summary>
+        public void Record(PageKey page, AnchorWriteResult result, IReadOnlyList<AnchorWrite> writes)
+        {
+            Dictionary<string, string> pageAnchors = Get(anchors, page);
+            Dictionary<string, string> pageTexts = Get(texts, page);
+            foreach ((string slotId, string objectId) in result.Created)
+            {
+                pageAnchors[slotId] = objectId;
+                pageTexts[slotId] = TextOf(writes, slotId);
+            }
+
+            foreach (string slotId in result.Updated)
+            {
+                pageTexts[slotId] = TextOf(writes, slotId);
+            }
+
+            Forget(page, result.Removed);
+        }
+
+        /// <summary>Drops the records of slots whose outline is gone.</summary>
+        public void Forget(PageKey page, IEnumerable<string> slotIds)
+        {
+            Dictionary<string, string> pageAnchors = Get(anchors, page);
+            Dictionary<string, string> pageTexts = Get(texts, page);
+            foreach (string slotId in slotIds)
+            {
+                pageAnchors.Remove(slotId);
+                pageTexts.Remove(slotId);
+            }
+        }
+
+        /// <summary>The sidecar's pages with the records as of now.</summary>
+        public Dictionary<string, SidecarPage> Pages(Sidecar sidecar) => sidecar.Pages.ToDictionary(
+            p => p.Key,
+            p => p.Value with
+            {
+                Anchors = anchors.TryGetValue(p.Key, out Dictionary<string, string>? a) ? new Dictionary<string, string>(a, StringComparer.Ordinal) : p.Value.Anchors,
+                AnchorTexts = texts.TryGetValue(p.Key, out Dictionary<string, string>? t) ? new Dictionary<string, string>(t, StringComparer.Ordinal) : p.Value.AnchorTexts,
+            },
+            StringComparer.Ordinal);
+
+        private static string TextOf(IReadOnlyList<AnchorWrite> writes, string slotId) => writes.First(w => w.Change.SlotId == slotId).Change.NewText;
+
+        private static Dictionary<string, string> Get(Dictionary<string, Dictionary<string, string>> records, PageKey page)
+        {
+            if (!records.TryGetValue(page.Value, out Dictionary<string, string>? record))
+            {
+                record = new Dictionary<string, string>(StringComparer.Ordinal);
+                records[page.Value] = record;
+            }
+
+            return record;
+        }
+    }
 
     /// <summary>Used when no notifier is injected: the toast text goes to the log only.</summary>
     private sealed class LogOnlyNotifier : ISourceFailureNotifier

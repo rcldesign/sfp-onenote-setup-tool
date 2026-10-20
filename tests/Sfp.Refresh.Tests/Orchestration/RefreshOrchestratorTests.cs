@@ -95,6 +95,9 @@ public class RefreshOrchestratorTests
         public RefreshResult Run(RefreshRequest request, List<string>? progress = null) =>
             new RefreshOrchestrator(Services).Run(request, progress is null ? null : new ListProgress(progress), CancellationToken.None);
 
+        public RefreshResult Run(RefreshRequest request, IProgress<string> progress, CancellationToken cancellationToken) =>
+            new RefreshOrchestrator(Services).Run(request, progress, cancellationToken);
+
         public Sidecar SavedSidecar() => Store.Load(SidecarPath)!;
 
         public void Type(RectPt rect, string text) => Notebook.TypeUserText(PageKey.Setup, rect, text);
@@ -610,6 +613,81 @@ public class RefreshOrchestratorTests
         calendars.Created.Select(s => s.Kind).Should().Equal(CalendarSourceKind.Holidays);
         h.Run(Request(dryRun: true, calendar: true, today: new DateOnly(2027, 1, 10))).Summary!.Changes
             .Should().Contain(c => c.Page == PageKey.Day(new DateOnly(2027, 1, 18)) && c.SlotId == "allDayBand" && c.NewText.Contains("Martin Luther King", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Outlines_written_before_a_cancel_are_recorded_and_the_next_run_has_no_blocked_slots()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        using CancellationTokenSource cancel = new();
+        OnPageWrite progress = new(2, cancel.Cancel);
+
+        RefreshResult cancelled = h.Run(Request(), progress, cancel.Token);
+
+        cancelled.Success.Should().BeFalse();
+        cancelled.ExitCode.Should().Be(5);
+        cancelled.Error.Should().Be("Cancelled.");
+        progress.Pages.Should().Equal("Writing Annual Objectives", "Writing Objective 1");
+        Sidecar saved = h.SavedSidecar();
+        saved.Pages[PageKey.Annual(1).Value].Anchors.Should().ContainKey("annualRow:1", "the outlines written before the cancel are recorded");
+        saved.Pages[PageKey.Objective(1).Value].Anchors.Should().ContainKey("objectiveHeading");
+        saved.Pages[PageKey.Objective(1).Value].AnchorTexts.Should().Contain("objectiveHeading", "Ship the connector");
+        saved.Pages[MonJan4.Value].Anchors.Should().NotContainKey("objectiveLegend");
+        File.Exists(FailureCounter.PathBeside(h.SidecarPath)).Should().BeFalse("a cancelled run is not a failure of the daily task");
+
+        RefreshResult next = h.Run(Request());
+
+        next.Success.Should().BeTrue(next.Error);
+        next.Summary!.Changes.Should().NotContain(c => c.Blocked, "the outlines the cancelled run wrote are the tool's, not user objects in the slots");
+        next.Summary.ValuesWritten.Should().Be(104 + 1, "every legend and the scorecard row; the two pages written before the cancel are current");
+        h.Run(Request()).Summary!.Changes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Outlines_written_before_OneNote_went_away_are_recorded_too()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        OnPageWrite progress = new(3, () => h.App.Unavailable = new OneNoteUnavailableException());
+
+        RefreshResult failed = h.Run(Request(), progress, CancellationToken.None);
+
+        failed.ExitCode.Should().Be(3);
+        h.App.Unavailable = null;
+        Sidecar saved = h.SavedSidecar();
+        saved.Pages[PageKey.Annual(1).Value].Anchors.Should().ContainKey("annualRow:1");
+        saved.Pages[PageKey.Objective(1).Value].Anchors.Should().ContainKey("objectiveHeading");
+        h.Run(Request()).Summary!.Changes.Should().NotContain(c => c.Blocked);
+    }
+
+    /// <summary>Runs an action when the run reports it is writing its n-th page (not the "Writing changes" phase line).</summary>
+    private sealed class OnPageWrite : IProgress<string>
+    {
+        private readonly int page;
+        private readonly Action action;
+
+        public OnPageWrite(int page, Action action)
+        {
+            this.page = page;
+            this.action = action;
+        }
+
+        public List<string> Pages { get; } = new();
+
+        public void Report(string value)
+        {
+            if (!value.StartsWith("Writing ", StringComparison.Ordinal) || value == "Writing changes")
+            {
+                return;
+            }
+
+            Pages.Add(value);
+            if (Pages.Count == page)
+            {
+                action();
+            }
+        }
     }
 
     /// <summary>A calendar source factory handing out one stub source for every Setup line, with the events and failure the test sets.</summary>
