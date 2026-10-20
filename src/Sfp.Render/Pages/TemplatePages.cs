@@ -11,11 +11,13 @@ namespace Sfp.Render.Pages;
 /// ("objectiveBack" link, "objectiveHeading" cell), the Weekly Overview (date baked, day-name headers erased and
 /// placed as links, event columns), the daily page (date, strip, counter, time blocks, propagated bands, rows and
 /// cells) and the Weekly Reflection (date baked, navigation and scorecard links). The fixed-position link anchors are
-/// placed by <see cref="AnchorLayout"/>.
+/// placed by <see cref="AnchorLayout"/>. With no link for them (links off), the block labels and the detail page's
+/// "Objective n" are baked in their anchor rectangles instead, so the pages printed from the same art still differ.
 /// </summary>
 internal static class TemplatePages
 {
     public const string AnnualObjectiveAnchor = "annualObjective";
+    public const string ObjectiveBackAnchor = "objectiveBack";
     public const string AnnualRowSlot = "annualRow";
     public const string ObjectiveHeadingSlot = "objectiveHeading";
     public const string OverviewDayHeaderAnchor = "overviewDayHeader";
@@ -53,15 +55,20 @@ internal static class TemplatePages
             int n = (pageIndex * blocks) + block + 1;
             string number = n.ToString(CultureInfo.InvariantCulture);
             LinkSpec? link = c.Link(AnnualObjectiveAnchor + ":" + number);
+            RectPt rect = anchor.Rect(block);
+            if (anchor.Erase)
+            {
+                c.Erase(rect);
+            }
+
             if (link is not null)
             {
-                RectPt rect = anchor.Rect(block);
-                if (anchor.Erase)
-                {
-                    c.Erase(rect);
-                }
-
                 c.AddLink(link.AnchorId, rect, link.Text, anchor.Align, anchor.SizePt);
+            }
+            else
+            {
+                // No link for this block (links off): the label is baked so each block still names its objective.
+                c.TextIn(rect, LinkGraphBuilder.ObjectiveLabel(n), anchor.Align, anchor.SizePt);
             }
 
             if (c.Applies(title.AppliesTo))
@@ -77,6 +84,19 @@ internal static class TemplatePages
         if (c.Applies(heading.AppliesTo))
         {
             c.AddPropagated(ObjectiveHeadingSlot, heading.Rect, heading.SizePt);
+        }
+
+        if (c.Link(ObjectiveBackAnchor) is null)
+        {
+            // No back link (links off): "Objective n" is baked where the link would sit, beside the printed heading,
+            // so the eight detail pages printed from the same art still say which objective they hold.
+            FixedAnchor back = c.Manifest.Links.ObjectiveBack;
+            if (back.Erase)
+            {
+                c.Erase(back.Rect);
+            }
+
+            c.TextIn(back.Rect, LinkGraphBuilder.ObjectiveLabel(c.Page.IntToken(Tokens.ObjectiveNumber)), back.Align, back.SizePt);
         }
     }
 

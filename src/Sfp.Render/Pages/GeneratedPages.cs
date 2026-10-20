@@ -1,5 +1,6 @@
 using System.Globalization;
 using Sfp.Core;
+using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
 using Sfp.Core.Plan;
@@ -9,7 +10,8 @@ namespace Sfp.Render.Pages;
 /// <summary>
 /// M2.8: the pages the tool draws itself in the template style from manifest.generated: Setup (labels, numbered ruled
 /// slots, the time-block window boxes with hint digits, hint lines), the Quarter scorecard (objective rows, week
-/// columns whose headers are link placements, a final Quarter column, row label cells as propagated placements), the
+/// columns whose headers are link placements, or baked week numbers when links are off, a final Quarter column, row
+/// label cells as propagated placements), the
 /// monthly and quarterly reviews (the week-13 reflection art with its heading erased and the review title drawn), and
 /// the ruled Notes pages. Headings use generated.heading, the same spot as the printed page titles.
 /// </summary>
@@ -65,10 +67,20 @@ internal static class GeneratedPages
         double top = s.FirstRowTop;
         double bottom = s.FirstRowTop + (s.RowPitch * s.RowCount);
 
-        foreach (LinkSpec link in c.LinksOfType(ScorecardWeekAnchor))
+        for (int week = 1; week <= weeks; week++)
         {
-            int week = int.Parse(link.AnchorInstance ?? "", CultureInfo.InvariantCulture);
-            c.AddLink(link.AnchorId, s.WeekHeader(week - 1), link.Text, header.Align, header.SizePt);
+            string nn = PlannerText.WeekNumber(week);
+            RectPt cell = s.WeekHeader(week - 1);
+            LinkSpec? link = c.Link(ScorecardWeekAnchor + ":" + nn);
+            if (link is not null)
+            {
+                c.AddLink(link.AnchorId, cell, link.Text, header.Align, header.SizePt);
+            }
+            else
+            {
+                // No link to the week's reflection (links off): the column header is baked so the grid still reads.
+                c.TextIn(cell, nn, header.Align, header.SizePt, s.HeaderBaselineY);
+            }
         }
 
         c.Text(QuarterColumnTitle, s.FinalColumnX + (s.FinalColumnW / 2), s.HeaderBaselineY, TextAlign.Center, s.LabelSizePt);

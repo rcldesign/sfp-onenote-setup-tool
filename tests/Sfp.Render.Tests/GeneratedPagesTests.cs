@@ -101,6 +101,39 @@ public sealed class GeneratedPagesTests
     }
 
     [Fact]
+    public void Scorecard_with_links_off_bakes_every_week_number_in_its_header_cell()
+    {
+        RenderedPage page = f.Render(PageKey.Scorecard, o => o with { Links = false });
+        using SKBitmap sheet = RenderFixture.Decode(page);
+        ScorecardPageSpec s = M.Generated.Scorecard;
+
+        page.Anchors.Should().NotContain(a => a.Kind == AnchorKind.Link, "links are off");
+        for (int week = 0; week < 14; week++)
+        {
+            RectPt cell = s.WeekHeader(week);
+            f.HasInk(sheet, new RectPt(cell.X + 2, cell.Y + 1, cell.W - 4, cell.H - 2)).Should().BeTrue($"week {week + 1:00} is baked in its header cell");
+            f.HasInk(sheet, new RectPt(cell.X + 2, cell.Y + 1, (cell.W / 2) - 9, cell.H - 2)).Should().BeFalse($"week {week + 1:00} is centered in its cell, not at its left edge");
+        }
+    }
+
+    [SkippableFact]
+    public void Scorecard_with_links_off_reads_the_week_numbers_in_the_header()
+    {
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        using SKBitmap sheet = RenderFixture.Decode(f.Render(PageKey.Scorecard, o => o with { Links = false }));
+        ScorecardPageSpec s = M.Generated.Scorecard;
+
+        // Tesseract reads the fallback face's "0" as the letter O when it leads ("01" comes back as "Ol"), so the OCR
+        // check reads the cells it reads reliably; the pixel test above covers all fourteen.
+        foreach (int week in new[] { 2, 9, 10, 14 })
+        {
+            RectPt cell = s.WeekHeader(week - 1);
+            string text = RenderFixture.Read(sheet, new RectPt(cell.X + 3, cell.Y, cell.W - 6, cell.H), paddingPt: 1);
+            RenderFixture.Digits(text).Should().Be(week.ToString("00", System.Globalization.CultureInfo.InvariantCulture), "OCR read '" + text + "'");
+        }
+    }
+
+    [Fact]
     public void Q2_2024_scorecard_has_13_week_columns()
     {
         Core.Options.GenerateOptions q2 = f.Q1Options with { Start = new Core.Dates.QuarterSpec(2024, 4) };

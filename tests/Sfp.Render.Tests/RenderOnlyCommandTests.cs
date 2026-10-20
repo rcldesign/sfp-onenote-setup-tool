@@ -2,8 +2,11 @@ using System.CommandLine;
 using System.Globalization;
 using Sfp.Cli;
 using Sfp.Cli.Verbs;
+using Sfp.Core.Manifests;
 using Sfp.Core.Options;
+using Sfp.Render.Colors;
 using Sfp.TestSupport;
+using SkiaSharp;
 
 namespace Sfp.Render.Tests;
 
@@ -75,6 +78,18 @@ public sealed class RenderOnlyCommandTests
             RenderIndexPage jan4 = index.Pages.Single(p => p.Key == "day:2027-01-04");
             jan4.Anchors.Should().NotContain(a => a.Kind == AnchorKind.Link);
             jan4.Anchors.Count(a => a.AnchorId.StartsWith("timeBlockEvent:", StringComparison.Ordinal)).Should().Be(10);
+
+            // --no-links bakes the labels that would otherwise be links, so pages printed from the same art still differ.
+            File.ReadAllBytes(Path.Combine(dir, "annual-1.png")).Should().NotEqual(File.ReadAllBytes(Path.Combine(dir, "annual-2.png")), "the block labels name objectives 1 to 4 and 5 to 8");
+            File.ReadAllBytes(Path.Combine(dir, "objective-1.png")).Should().NotEqual(File.ReadAllBytes(Path.Combine(dir, "objective-2.png")), "each detail page names its objective");
+            using SKBitmap scorecard = SKBitmap.Decode(Path.Combine(dir, "scorecard.png"));
+            ScorecardPageSpec s = TestManifest.Shipped.Generated.Scorecard;
+            SKColor background = ColorParser.Parse(TestManifest.Shipped.Colors.Background);
+            for (int week = 0; week < 14; week++)
+            {
+                RectPt cell = s.WeekHeader(week);
+                Pixels.HasInk(scorecard, new RectPt(cell.X + 2, cell.Y + 1, cell.W - 4, cell.H - 2), 144, background).Should().BeTrue($"week {week + 1:00} is baked in the scorecard header");
+            }
         }
         finally
         {
