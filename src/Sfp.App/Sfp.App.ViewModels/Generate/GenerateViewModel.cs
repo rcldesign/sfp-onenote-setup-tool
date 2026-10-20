@@ -162,7 +162,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         Previews = previews;
         Run = run;
         PendingPdfCheck = Task.CompletedTask;
-        _lastValidStart = GenerateFormDefaults.NextQuarterStart(env.Today);
+        _lastValidStart = GenerateFormDefaults.NextQuarterStart(env.CurrentDate());
         Run.PropertyChanged += OnRunPropertyChanged;
         LoadFrom(new AppSettings());
     }
@@ -221,7 +221,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         _loading = true;
         try
         {
-            QuarterSpec start = IsSupported(settings.Start) ? settings.Start : GenerateFormDefaults.NextQuarterStart(_env.Today);
+            QuarterSpec start = IsSupported(settings.Start) ? settings.Start : GenerateFormDefaults.NextQuarterStart(_env.CurrentDate());
             _lastValidStart = start;
             Month = start.Month;
             YearText = start.Year.ToString(CultureInfo.InvariantCulture);

@@ -348,15 +348,22 @@ public sealed class Harness
     {
         Paths.Files.Add(Pdf);
         Paths.Directories.Add(DefaultFolder);
-        Env = new AppEnvironment(new DateOnly(2026, 10, 20), TestPaths.TemplatesDir, DefaultFolder, new[] { @"C:\Users\me\OneDrive" }, Exe);
+        Env = new AppEnvironment(new DateOnly(2026, 10, 20), TestPaths.TemplatesDir, DefaultFolder, new[] { @"C:\Users\me\OneDrive" }, Exe)
+        {
+            Clock = () => Now,
+        };
         Validator = new GenerateFormValidator(PdfValidator, Paths, Env.OneDriveRoots);
     }
+
+    /// <summary>The date <see cref="Env"/>'s clock reads; a test moves it to simulate the window staying open past midnight.</summary>
+    public DateOnly Now { get; set; } = new(2026, 10, 20);
 
     public Manifest Manifest { get; } = TestManifest.Shipped;
 
     public DateEngine Dates { get; } = new();
 
-    public AppEnvironment Env { get; }
+    /// <summary>The machine facts the view models get; a test may replace it (with <c>with</c>) before creating them.</summary>
+    public AppEnvironment Env { get; set; }
 
     public FakePathProbe Paths { get; } = new();
 

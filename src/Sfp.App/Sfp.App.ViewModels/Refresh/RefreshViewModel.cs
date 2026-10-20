@@ -150,7 +150,7 @@ public sealed partial class RefreshViewModel : ObservableObject
         SelectedNotebook = Notebooks.FirstOrDefault(n => n.Name == selectedName) ?? Notebooks.FirstOrDefault();
     }
 
-    /// <summary>The request for the selected notebook.</summary>
+    /// <summary>The request for the selected notebook, dated by the clock at the moment it is built (never the app's start date).</summary>
     public RefreshRequest? ToRequest(bool dryRun)
     {
         if (SelectedNotebook is not { } notebook)
@@ -166,7 +166,7 @@ public sealed partial class RefreshViewModel : ObservableObject
             Math.Max(0, HorizonDays),
             dryRun,
             WriteInkedValues,
-            _env.Today);
+            _env.CurrentDate());
     }
 
     /// <summary>Runs a dry run or a real refresh and fills the listing and the summary.</summary>

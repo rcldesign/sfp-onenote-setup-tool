@@ -148,6 +148,22 @@ public class RefreshViewModelTests
     }
 
     [Fact]
+    public async Task Each_run_is_dated_by_the_clock_when_it_starts_not_by_the_day_the_app_opened()
+    {
+        _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() };
+        RefreshViewModel vm = await Loaded();
+
+        await vm.PreviewChangesCommand.ExecuteAsync(null);
+        _h.Refresher.LastRequest!.Today.Should().Be(new DateOnly(2026, 10, 20));
+
+        _h.Now = new DateOnly(2026, 10, 21);
+        await vm.RefreshNowCommand.ExecuteAsync(null);
+
+        _h.Refresher.LastRequest!.Today.Should().Be(new DateOnly(2026, 10, 21), "the window stayed open past midnight, so yesterday is frozen now");
+        _h.Env.Today.Should().Be(new DateOnly(2026, 10, 20), "the start date itself does not move");
+    }
+
+    [Fact]
     public async Task Refresh_now_writes_and_reloads_the_list_afterwards()
     {
         _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() with { Values = SetupValues.Empty }, Elapsed = TimeSpan.FromSeconds(30) };

@@ -50,18 +50,22 @@ public sealed class AppServices : IDisposable
 
     public Manifest Manifest { get; }
 
-    /// <summary>Builds every service from the machine: templates beside the executable, settings under %APPDATA%, today's date.</summary>
+    /// <summary>Builds every service from the machine: templates beside the executable, settings under %APPDATA%, the local clock.</summary>
     public static AppServices Create(Dispatcher dispatcher)
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
         string baseDir = AppContext.BaseDirectory;
         string templatesDir = Path.Combine(baseDir, "templates");
         AppEnvironment env = new(
-            DateOnly.FromDateTime(DateTime.Today),
+            LocalDate(),
             templatesDir,
             GenerateFormDefaults.OutputFolder(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments)),
             OneDriveRoots(),
-            RefreshExecutable(baseDir));
+            RefreshExecutable(baseDir))
+        {
+            // Read per request: the window may stay open past midnight, and Refresh freezes the days before today.
+            Clock = LocalDate,
+        };
 
         Manifest manifest = new ManifestLoader().LoadShipped(templatesDir);
         IDateEngine dates = new DateEngine();
@@ -100,6 +104,9 @@ public sealed class AppServices : IDisposable
 
     /// <summary>The sfp2onenote.exe beside the app that the daily scheduled task runs (M6.6 packaging places it there).</summary>
     public static string RefreshExecutable(string baseDir) => Path.Combine(baseDir, "sfp2onenote.exe");
+
+    /// <summary>The machine's local date: the composition root is the one place that reads the system clock.</summary>
+    private static DateOnly LocalDate() => DateOnly.FromDateTime(DateTime.Today);
 
     public void Dispose()
     {
