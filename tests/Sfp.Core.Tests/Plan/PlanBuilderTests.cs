@@ -141,6 +141,46 @@ public class PlanBuilderTests
         plan.Pages.Should().HaveCount(142);
     }
 
+    [Theory]
+    [InlineData(new[] { "Backlog", " ", "Ideas" }, "Notes page name 2 of 3 is blank; every Notes page needs a name.")]
+    [InlineData(new[] { "" }, "Notes page name 1 of 1 is blank; every Notes page needs a name.")]
+    [InlineData(new[] { "Ideas", "Backlog", "ideas" }, "Notes page names 'Ideas' and 'ideas' both give the page key 'notes:ideas'; give each Notes page a distinct name.")]
+    [InlineData(new[] { "Reading list", " reading-list " }, "Notes page names 'Reading list' and 'reading-list' both give the page key 'notes:reading-list'; give each Notes page a distinct name.")]
+    public void Blank_or_colliding_notes_page_names_are_rejected_with_or_without_links(string[] names, string message)
+    {
+        foreach (bool links in new[] { true, false })
+        {
+            Action act = () => Build(Q1_2027, o => o with { NotesPages = names, Links = links });
+
+            act.Should().Throw<ArgumentException>().WithMessage(message);
+        }
+    }
+
+    [Fact]
+    public void A_null_notes_page_name_is_rejected_as_blank()
+    {
+        Action act = () => Build(Q1_2027, o => o with { NotesPages = new[] { "Backlog", null! } });
+
+        act.Should().Throw<ArgumentException>().WithMessage("Notes page name 2 of 2 is blank*");
+    }
+
+    [Fact]
+    public void A_page_the_template_repeats_by_mistake_is_rejected_with_or_without_links()
+    {
+        // A cover inside the eachWeek section would be the page "cover" fourteen times over.
+        SectionTemplate weeks = Shipped.Notebook.Sections[3];
+        SectionTemplate broken = weeks with { Pages = weeks.Pages.Append(new PageTemplate { Type = PageNames.Cover, Level = 1 }).ToList() };
+        Manifest m = Shipped with { Notebook = Shipped.Notebook with { Sections = Shipped.Notebook.Sections.Select(s => s == weeks ? broken : s).ToList() } };
+
+        foreach (bool links in new[] { true, false })
+        {
+            Action act = () => new PlanBuilder(Engine).Build(m, Engine.Build(Q1_2027), new GenerateOptions { Start = Q1_2027, Links = links });
+
+            act.Should().Throw<ManifestException>()
+                .WithMessage("The notebook template produces page key 'cover' twice (in sections 'Quarter' and 'Week 01 (Jan 1 to Jan 3)')*");
+        }
+    }
+
     [Fact]
     public void Q2_2024_has_18_sections_13_weeks_and_91_day_pages()
     {
