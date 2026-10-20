@@ -7,8 +7,14 @@ using Sfp.OneNote.Generate;
 
 namespace Sfp.App.ViewModels.Generate;
 
-/// <summary>Creates the orchestrator for one run, writing to that run's log.</summary>
-public delegate IGenerateOrchestrator GenerateOrchestratorFactory(ILogger logger);
+/// <summary>
+/// Creates the orchestrator for one run, writing to that run's log. <paramref name="logPath"/> is the run log's file,
+/// which the orchestrator reports as <see cref="GenerateResult.LogPath"/> (shown and copied by Save log) and beside
+/// which it saves rejected page XML.
+/// </summary>
+/// <param name="logger">The run log's logger.</param>
+/// <param name="logPath">The run log's file path.</param>
+public delegate IGenerateOrchestrator GenerateOrchestratorFactory(ILogger logger, string logPath);
 
 /// <summary>
 /// The Generate flow below the fields: the phased progress bar with Cancel while a run is on, then the success view
@@ -171,7 +177,7 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         GenerateResult result;
         try
         {
-            IGenerateOrchestrator orchestrator = _orchestrators(log.Logger);
+            IGenerateOrchestrator orchestrator = _orchestrators(log.Logger, log.Path);
             UiProgress<GenerateProgress> progress = new(_ui, OnProgress);
             result = await Task.Run(() => orchestrator.Run(request, progress, token), CancellationToken.None);
         }

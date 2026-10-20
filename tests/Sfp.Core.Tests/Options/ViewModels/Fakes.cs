@@ -96,6 +96,42 @@ public sealed class FakeShellService : IShellService
     }
 }
 
+/// <summary>A run log with a fixed path and its own logger instance, so a test can tell which log an orchestrator was given.</summary>
+public sealed class FakeRunLog : IRunLog
+{
+    private readonly Serilog.Core.Logger _logger = new Serilog.LoggerConfiguration().CreateLogger();
+
+    public FakeRunLog(string path)
+    {
+        Path = path;
+    }
+
+    public Serilog.ILogger Logger => _logger;
+
+    public string Path { get; }
+
+    public bool Disposed { get; private set; }
+
+    public void Dispose()
+    {
+        Disposed = true;
+        _logger.Dispose();
+    }
+}
+
+/// <summary>Starts <see cref="FakeRunLog"/>s with paths like the real log folder's, keeping every one started.</summary>
+public sealed class FakeRunLogFactory : IRunLogFactory
+{
+    public List<FakeRunLog> Started { get; } = new();
+
+    public IRunLog Start(string verb)
+    {
+        FakeRunLog log = new(@"C:\Users\me\AppData\Local\sfp2onenote\logs\20261020-0930" + Started.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + "-" + verb + ".log");
+        Started.Add(log);
+        return log;
+    }
+}
+
 public sealed class FakeSettingsStore : ISettingsStore
 {
     public AppSettings Stored { get; set; } = new();
@@ -396,12 +432,12 @@ public sealed class Harness
     public PreviewStripViewModel NewPreviews(TimeSpan? debounce = null) =>
         new(Plans, Renderer, Manifest, Dates, Ui, debounce ?? TimeSpan.Zero);
 
-    public GenerateRunViewModel NewRun() => new(Logs, _ => Generator, Ui, Shell, Dialogs);
+    public GenerateRunViewModel NewRun() => new(Logs, (_, _) => Generator, Ui, Shell, Dialogs);
 
     public GenerateViewModel NewGenerate(TimeSpan? debounce = null) =>
         new(Manifest, Dates, Validator, NewPreviews(debounce), NewRun(), Dialogs, Ui, Env);
 
-    public RefreshViewModel NewRefresh() => new(Registry, Tasks, Logs, _ => Refresher, Ui, Env);
+    public RefreshViewModel NewRefresh() => new(Registry, Tasks, Logs, (_, _) => Refresher, Ui, Env);
 
     public MainViewModel NewMain() => new(NewGenerate(), NewRefresh(), Settings);
 }

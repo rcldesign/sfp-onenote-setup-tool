@@ -5,7 +5,6 @@ using Sfp.App.ViewModels;
 using Sfp.App.ViewModels.Generate;
 using Sfp.App.ViewModels.Refresh;
 using Sfp.App.ViewModels.Services;
-using Sfp.Cli.Logging;
 using Sfp.Cli.Verbs;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
@@ -81,13 +80,13 @@ public sealed class AppServices : IDisposable
         List<IDisposable> owned = new();
         IPageRenderer previewRenderer = CreatePageRenderer(manifest, templatesDir, dates, owned);
         PreviewStripViewModel previews = new(new PlanBuilder(dates), previewRenderer, manifest, dates, ui);
-        GenerateRunViewModel run = new(logs, logger => CreateGenerateOrchestrator(logger), ui, shell, dialogs);
+        GenerateRunViewModel run = new(logs, CreateGenerateOrchestrator, ui, shell, dialogs);
         GenerateViewModel generate = new(manifest, dates, validator, previews, run, dialogs, ui, env);
         RefreshViewModel refresh = new(
             new NotebookRegistry(new SidecarStore()),
             new ScheduledTaskService(new ProcessRunner(), Serilog.Core.Logger.None),
             logs,
-            logger => CreateRefreshOrchestrator(logger, manifest, templatesDir),
+            (logger, logPath) => CreateRefreshOrchestrator(logger, logPath, manifest, templatesDir),
             ui,
             env);
         MainViewModel main = new(generate, refresh, settings);
@@ -127,14 +126,15 @@ public sealed class AppServices : IDisposable
         return new PageRenderer(manifest, rasterizer, fonts, dates);
     }
 
-    /// <summary>Rejected page XML is saved beside the run logs; the run's own file name is not known to the factory.</summary>
-    private static string RejectedXmlLogPath() => Path.Combine(RunLog.DefaultDirectory, "rejected-page.log");
+    /// <summary>
+    /// The run's own log file is the orchestrator's log path: the result reports it (the failure view shows it and Save
+    /// log copies it) and rejected page XML is saved beside it.
+    /// </summary>
+    private static IGenerateOrchestrator CreateGenerateOrchestrator(ILogger logger, string logPath) =>
+        new DeferredGenerateOrchestrator(request => GenerateCommand.CreateProductionOrchestrator(request, logger, logPath));
 
-    private static IGenerateOrchestrator CreateGenerateOrchestrator(ILogger logger) =>
-        new DeferredGenerateOrchestrator(request => GenerateCommand.CreateProductionOrchestrator(request, logger, RejectedXmlLogPath()));
-
-    private static IRefreshOrchestrator CreateRefreshOrchestrator(ILogger logger, Manifest manifest, string templatesDir) =>
-        new DeferredRefreshOrchestrator(request => RefreshCommand.CreateProductionOrchestrator(request, manifest, templatesDir, logger, RejectedXmlLogPath()));
+    private static IRefreshOrchestrator CreateRefreshOrchestrator(ILogger logger, string logPath, Manifest manifest, string templatesDir) =>
+        new DeferredRefreshOrchestrator(request => RefreshCommand.CreateProductionOrchestrator(request, manifest, templatesDir, logger, logPath));
 
     /// <summary>Builds the production orchestrator when the request is known, runs it once and disposes it (the COM session and fonts).</summary>
     private sealed class DeferredGenerateOrchestrator : IGenerateOrchestrator

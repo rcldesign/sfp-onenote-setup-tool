@@ -103,6 +103,42 @@ public class GenerateRunViewModelTests
     }
 
     [Fact]
+    public async Task The_orchestrator_is_given_the_run_log_and_the_failure_view_shows_that_file()
+    {
+        FakeRunLogFactory logs = new();
+        Serilog.ILogger? givenLogger = null;
+        string? givenPath = null;
+        GenerateResult failed = new() { Success = false, ExitCode = 5, Phase = GeneratePhase.WritingPages, Error = "0x80042001 invalid XML" };
+        using GenerateRunViewModel run = new(
+            logs,
+            (logger, logPath) =>
+            {
+                givenLogger = logger;
+                givenPath = logPath;
+
+                // As the production orchestrator does: the result reports the log path it was composed with.
+                _h.Generator.Result = failed with { LogPath = logPath };
+                return _h.Generator;
+            },
+            _h.Ui,
+            _h.Shell,
+            _h.Dialogs);
+
+        await run.StartAsync(Request());
+
+        FakeRunLog log = logs.Started.Should().ContainSingle().Subject;
+        givenLogger.Should().BeSameAs(log.Logger);
+        givenPath.Should().Be(log.Path, "the orchestrator writes the run's own log file, not a stand-in path");
+        run.Result!.LogPath.Should().Be(log.Path);
+        run.LogPath.Should().Be(log.Path);
+        log.Disposed.Should().BeTrue("the log is closed (flushed) before Save log copies it");
+
+        _h.Dialogs.NextSaveFile = @"C:\Users\me\Desktop\sfp.log";
+        run.SaveLogCommand.Execute(null);
+        _h.Shell.Copies.Should().Equal((log.Path, @"C:\Users\me\Desktop\sfp.log"));
+    }
+
+    [Fact]
     public async Task Save_log_copies_the_run_log_to_the_chosen_path()
     {
         _h.Generator.Result = new GenerateResult { Success = false, ExitCode = 4, Phase = GeneratePhase.Rendering, Error = "boom", LogPath = @"C:\logs\run.log" };

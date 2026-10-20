@@ -9,8 +9,13 @@ using Sfp.Refresh;
 
 namespace Sfp.App.ViewModels.Refresh;
 
-/// <summary>Creates the Refresh orchestrator for one run, writing to that run's log.</summary>
-public delegate IRefreshOrchestrator RefreshOrchestratorFactory(ILogger logger);
+/// <summary>
+/// Creates the Refresh orchestrator for one run, writing to that run's log. <paramref name="logPath"/> is the run log's
+/// file, which the orchestrator reports as <see cref="RefreshResult.LogPath"/> and the tab shows with a failure.
+/// </summary>
+/// <param name="logger">The run log's logger.</param>
+/// <param name="logPath">The run log's file path.</param>
+public delegate IRefreshOrchestrator RefreshOrchestratorFactory(ILogger logger, string logPath);
 
 /// <summary>
 /// The Refresh tab: the notebooks the tool built (from their sidecars under the known output folders plus the default
@@ -190,7 +195,7 @@ public sealed partial class RefreshViewModel : ObservableObject
         RefreshResult result;
         try
         {
-            IRefreshOrchestrator orchestrator = _orchestrators(log.Logger);
+            IRefreshOrchestrator orchestrator = _orchestrators(log.Logger, log.Path);
             UiProgress<string> progress = new(_ui, text => ProgressText = text);
             result = await Task.Run(() => orchestrator.Run(request, progress, CancellationToken.None), CancellationToken.None);
         }

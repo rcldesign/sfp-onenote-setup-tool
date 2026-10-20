@@ -200,6 +200,39 @@ public class RefreshViewModelTests
     }
 
     [Fact]
+    public async Task The_orchestrator_is_given_the_run_log_and_a_failure_names_that_file()
+    {
+        FakeRunLogFactory logs = new();
+        Serilog.ILogger? givenLogger = null;
+        string? givenPath = null;
+        _h.Registry.Notebooks.Add(Q1);
+        RefreshViewModel vm = new(
+            _h.Registry,
+            _h.Tasks,
+            logs,
+            (logger, logPath) =>
+            {
+                givenLogger = logger;
+                givenPath = logPath;
+
+                // As the production orchestrator does: the result reports the log path it was composed with.
+                _h.Refresher.Result = new RefreshResult { Success = false, ExitCode = 5, Error = "Writing page 'Mon Jan 4' failed", LogPath = logPath };
+                return _h.Refresher;
+            },
+            _h.Ui,
+            _h.Env);
+        vm.SetKnownFolders(Array.Empty<string>());
+        await vm.PendingReload;
+
+        await vm.RefreshNowCommand.ExecuteAsync(null);
+
+        FakeRunLog log = logs.Started.Should().ContainSingle().Subject;
+        givenLogger.Should().BeSameAs(log.Logger);
+        givenPath.Should().Be(log.Path);
+        vm.ErrorText.Should().Be("Writing page 'Mon Jan 4' failed Log: " + log.Path);
+    }
+
+    [Fact]
     public async Task An_orchestrator_that_throws_is_reported_not_rethrown()
     {
         _h.Refresher.Throw = new InvalidOperationException("OneNote is busy");

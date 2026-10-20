@@ -378,6 +378,31 @@ public class GenerateCommandTests
     }
 
     [Fact]
+    public void The_production_orchestrator_reports_the_log_path_it_was_composed_with()
+    {
+        // The app composes this orchestrator with its run log's path (finding 2); the failure view shows and Save log
+        // copies whatever path the result reports, so it must be the one passed in.
+        string png = Path.Combine(Root, "png-logpath");
+        string logPath = Path.Combine(Root, "logs", "20261020-093000-generate.log");
+        GenerateCommand.TryBuildOptions(Args() with { RenderOnly = png }, new StringWriter(), out GenerateOptions? options, out string templates).Should().BeTrue();
+        GenerateRequest request = new(options!, TestManifest.Shipped, templates, RenderOnly: true, RenderOutputDir: png);
+
+        IGenerateOrchestrator orchestrator = GenerateCommand.CreateProductionOrchestrator(request, Serilog.Core.Logger.None, logPath);
+        GenerateResult result;
+        try
+        {
+            result = orchestrator.Run(request, null, CancellationToken.None);
+        }
+        finally
+        {
+            (orchestrator as IDisposable)?.Dispose();
+        }
+
+        result.ExitCode.Should().Be(ExitCodes.ValidationError, "the placeholder PDF is not the planner");
+        result.LogPath.Should().Be(logPath);
+    }
+
+    [Fact]
     public void The_production_composition_runs_on_this_machine_and_reports_what_is_missing()
     {
         // No stubs are injected: the real services are composed. Off Windows the preflight reports OneNote as
