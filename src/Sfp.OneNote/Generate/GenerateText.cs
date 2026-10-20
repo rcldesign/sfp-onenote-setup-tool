@@ -1,4 +1,5 @@
 using System.Globalization;
+using Sfp.Core.Options;
 
 namespace Sfp.OneNote.Generate;
 
@@ -8,8 +9,8 @@ public static class GenerateText
     /// <summary>PRD error table: OneNote not signed in.</summary>
     public const string SignInMessage = "Open OneNote and sign in once, then retry.";
 
-    /// <summary>PRD error table: the output folder sits under OneDrive sync (warn only).</summary>
-    public const string OneDriveWarningReason = "OneNote desktop refuses to open local notebooks placed under the OneDrive sync folder; choose another folder and move the notebook from inside OneNote afterwards.";
+    /// <summary>PRD error table: the output folder sits under OneDrive sync (warn only). The text lives in Sfp.Core so the Generate form shows the same words.</summary>
+    public const string OneDriveWarningReason = GenerateMessages.OneDriveWarningReason;
 
     /// <summary>The one-paragraph instruction shown after a successful run.</summary>
     public const string OneDriveMoveInstruction =
@@ -20,8 +21,8 @@ public static class GenerateText
     /// <summary>PRD error table: a notebook of that name already exists in the output folder.</summary>
     public static string Collision(string name) => string.Format(CultureInfo.InvariantCulture, "A notebook named {0} already exists here. Rename or choose another folder.", name);
 
-    /// <summary>The OneDrive warning with the folder named.</summary>
-    public static string OneDriveWarning(string folder) => string.Format(CultureInfo.InvariantCulture, "The output folder {0} is under the OneDrive sync folder: {1}", folder, OneDriveWarningReason);
+    /// <summary>The OneDrive warning with the folder named: the one text the form and the preflight share (<see cref="GenerateMessages.OneDriveWarning"/>).</summary>
+    public static string OneDriveWarning(string folder) => GenerateMessages.OneDriveWarning(folder);
 
     /// <summary>Start month outside the supported range.</summary>
     public static string StartMonthOutOfRange(int year, int month) =>

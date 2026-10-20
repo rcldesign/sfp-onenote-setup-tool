@@ -225,9 +225,8 @@ public sealed class GenerateFormValidator
 
         if (IsUnderOneDrive(folder))
         {
-            messages.Add(Warning(
-                GenerateFormFields.OutputFolder,
-                "This folder is inside a OneDrive sync folder; OneNote desktop refuses local notebooks there. Generate elsewhere, then move the notebook to OneDrive from inside OneNote."));
+            // The same sentence the run's preflight reports (GenerateText.OneDriveWarning delegates here).
+            messages.Add(Warning(GenerateFormFields.OutputFolder, GenerateMessages.OneDriveWarning(folder.Trim())));
         }
 
         return true;
