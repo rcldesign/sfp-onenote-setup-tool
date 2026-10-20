@@ -390,11 +390,27 @@ public static class GenerateCommand
         ArgumentNullException.ThrowIfNull(stderr);
         if (result.Cancelled)
         {
+            // The partial notebook is said to be deleted only when the run reports no failed deletion. A notebook left
+            // on disk is reported even with --quiet: the user has to remove it before the name can be used again.
+            List<string> notDeleted = result.Warnings.Where(GenerateMessages.IsPartialNotebookNotDeleted).ToList();
+            if (notDeleted.Count > 0)
+            {
+                stderr.WriteLine("Cancelled, but the partial notebook could not be deleted.");
+                foreach (string warning in notDeleted)
+                {
+                    stderr.WriteLine("Warning: " + warning);
+                }
+
+                return;
+            }
+
             if (!quiet)
             {
                 stdout.WriteLine(request.RenderOnly
                     ? "Cancelled. The rendered files so far were left in " + request.RenderOutputDir + "."
-                    : "Cancelled. The partial notebook was deleted.");
+                    : result.NotebookName is null
+                        ? "Cancelled before the notebook was created; nothing was written."
+                        : "Cancelled. The partial notebook was deleted.");
             }
 
             return;

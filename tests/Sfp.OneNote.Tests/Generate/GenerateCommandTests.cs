@@ -387,13 +387,44 @@ public class GenerateCommandTests
     [Fact]
     public void A_cancelled_run_says_so_and_returns_zero()
     {
-        GenerateResult canned = new() { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, Error = "Cancelled" };
+        // The orchestrator names the notebook in a cancelled result once it had created it (and then deleted it).
+        GenerateResult canned = new() { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, Error = "Cancelled", NotebookName = "SFP Q1 2027" };
 
         (int code, string stdout, string stderr, _, _, _) = RunWith(Args(), canned);
 
         code.Should().Be(0);
         stderr.Should().BeEmpty();
         stdout.Should().Contain("Cancelled. The partial notebook was deleted.");
+
+        (_, string early, _, _, _, _) = RunWith(Args(), canned with { NotebookName = null });
+        early.Should().Contain("Cancelled before the notebook was created; nothing was written.");
+    }
+
+    [Fact]
+    public void A_cancelled_run_never_claims_a_deletion_that_failed()
+    {
+        string notebook = Path.Combine(Root, "out", "SFP Q1 2027");
+        string warning = GenerateMessages.PartialNotebookNotDeleted(notebook, "The process cannot access the file because it is being used by another process.");
+        GenerateResult canned = new()
+        {
+            Success = false,
+            Cancelled = true,
+            ExitCode = 0,
+            Phase = GeneratePhase.Cancelled,
+            Error = "Cancelled",
+            NotebookName = "SFP Q1 2027",
+            Warnings = new[] { "Font 'Bookman Old Style' is not installed; using the bundled 'TeX Gyre Bonum' instead.", warning },
+        };
+
+        (int code, string stdout, string stderr, _, _, _) = RunWith(Args(), canned);
+        (_, string quietOut, string quietErr, _, _, _) = RunWith(Args() with { Quiet = true }, canned);
+
+        code.Should().Be(0);
+        stdout.Should().NotContain("was deleted");
+        stderr.Should().Contain("Cancelled, but the partial notebook could not be deleted.").And.Contain("Warning: " + warning);
+        stderr.Should().NotContain("Bookman", "only the deletion failure is reported for a cancelled run");
+        quietOut.Should().BeEmpty();
+        quietErr.Should().Contain(warning, "a notebook left on disk is reported even with --quiet");
     }
 
     [Fact]
