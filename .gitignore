@@ -1,0 +1,29 @@
+# Build output
+bin/
+obj/
+out/
+publish/
+artifacts/
+*.user
+*.suo
+.vs/
+.vscode/
+.idea/
+*.swp
+
+# Test output
+TestResults/
+*.received.*
+tests/**/golden/**/*.png
+docs/renders/*.png
+
+# Local tooling
+.dotnet/
+*.log
+tools/spike/__pycache__/
+tools/spike/*.png
+tools/spike/scratch/
+
+# The planner PDF is the owner's licensed copy and is never committed.
+*.pdf
+!tests/**/fixtures/*.pdf

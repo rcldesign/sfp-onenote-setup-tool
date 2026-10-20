@@ -1,0 +1,25 @@
+namespace Sfp.Core.Dates;
+
+/// <summary>A quarter: three calendar months from the 1st of the first month through the last day of the third.</summary>
+/// <param name="Start">S, the 1st of the first month.</param>
+/// <param name="End">E, the last day of the third month.</param>
+/// <param name="WeekCount">N, always 13 or 14.</param>
+/// <param name="Label">"Q1 2027" for an on-cycle start, otherwise the month span such as "Feb to Apr 2027".</param>
+public sealed record Quarter(DateOnly Start, DateOnly End, int WeekCount, string Label)
+{
+    /// <summary>L, the number of days in the quarter (90, 91 or 92).</summary>
+    public int Length => End.DayNumber - Start.DayNumber + 1;
+
+    /// <summary>The first month of the quarter as a spec.</summary>
+    public QuarterSpec Spec => new(Start.Year, Start.Month);
+
+    /// <summary>The three (year, month) pairs the quarter covers, in order.</summary>
+    public IReadOnlyList<(int Year, int Month)> Months =>
+        new[] { 0, 1, 2 }.Select(i => { DateOnly d = Start.AddMonths(i); return (d.Year, d.Month); }).ToList();
+
+    /// <summary>The "Q1" or "Feb to Apr" part of the label, without the year.</summary>
+    public string ShortLabel => Label.Length > 5 ? Label[..^5] : Label;
+
+    /// <summary>True when the date lies inside the quarter.</summary>
+    public bool Contains(DateOnly date) => date >= Start && date <= End;
+}
