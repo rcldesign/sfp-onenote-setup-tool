@@ -10,6 +10,8 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="PdfPig" />
+    <!-- Bitmap crops and PNG encoding for the OCR helper. -->
+    <PackageReference Include="SkiaSharp" />
     <PackageReference Include="xunit" />
     <PackageReference Include="Xunit.SkippableFact" />
   </ItemGroup>
