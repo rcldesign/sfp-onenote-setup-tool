@@ -9,7 +9,8 @@ namespace Sfp.Render;
 /// PDFium rasterizer (through PDFtoImage). Pages render with antialiasing on, annotations and form fill off, and the
 /// manifest background color behind the page. The pixel size is set explicitly from the page size so that
 /// 1112 x 770 pt at 220 DPI is exactly 3398 x 2353 px. Rendered pages are kept in a small least-recently-used cache
-/// keyed by (path, page, dpi) and handed out as copies, so callers can draw on their copy without touching the cache.
+/// keyed by (path, page, dpi) and handed out as pixel copies (<see cref="BitmapCopy"/>, never SKBitmap.Copy, whose
+/// shader would keep an evicted page alive), so callers can draw on their copy without touching the cache.
 /// PDFium is not thread-safe, so every render runs under one lock.
 /// </summary>
 public sealed class Rasterizer : IRasterizer
@@ -66,7 +67,7 @@ public sealed class Rasterizer : IRasterizer
             {
                 recency.Remove(node);
                 recency.AddFirst(node);
-                return node.Value.Bitmap.Copy();
+                return BitmapCopy.Clone(node.Value.Bitmap);
             }
 
             PdfPageSize size = doc.PageSizes[index];
@@ -103,7 +104,7 @@ public sealed class Rasterizer : IRasterizer
 
             rendered.SetImmutable();
             Remember(key, rendered);
-            return rendered.Copy();
+            return BitmapCopy.Clone(rendered);
         }
     }
 
