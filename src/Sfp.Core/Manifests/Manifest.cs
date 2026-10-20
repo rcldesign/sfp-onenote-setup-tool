@@ -211,14 +211,17 @@ public sealed record SlotsSpec
 }
 
 /// <summary>
-/// Annual Objectives title cells: one per block, x fixed, y = block top + offset. The block tops are the ones in
-/// links.annualObjective (not repeated here), so the two slots of a block always move together.
+/// Annual Objectives title cells: one per block, x fixed, y = block top + offset (the "annualRow:{n}" slots Refresh fills).
+/// The block tops repeat links.annualObjective.blockTops so a consumer can address a block by index.
 /// </summary>
 public sealed record AnnualTitleSlot
 {
     public required IReadOnlyList<string> AppliesTo { get; init; }
 
     public required double X { get; init; }
+
+    /// <summary>Tops of the four objective blocks on an annual page, the same values as links.annualObjective.blockTops.</summary>
+    public required IReadOnlyList<double> BlockTops { get; init; }
 
     public required double YOffset { get; init; }
 
@@ -228,8 +231,13 @@ public sealed record AnnualTitleSlot
 
     public required double SizePt { get; init; }
 
+    public TextAlign Align { get; init; } = TextAlign.Left;
+
     /// <summary>The cell rectangle for a block whose top is <paramref name="blockTop"/>.</summary>
     public RectPt Rect(double blockTop) => new(X, blockTop + YOffset, W, H);
+
+    /// <summary>Rectangle for block index 0 to 3 on a page.</summary>
+    public RectPt Rect(int blockIndex) => Rect(BlockTops[blockIndex]);
 }
 
 public sealed record DateField(string Name, TextAlign Align, double X);

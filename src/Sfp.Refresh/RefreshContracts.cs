@@ -42,6 +42,12 @@ public sealed record RefreshSummary
     public bool SidecarRebuilt { get; init; }
 
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
+
+    /// <summary>Page key value to page title, so the listing can name pages the way the page list does (added by M4.6).</summary>
+    public IReadOnlyDictionary<string, string> PageTitles { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>The FrozenThrough date after a calendar run, or null when the calendar was not imported (added by M4.6).</summary>
+    public DateOnly? FrozenThrough { get; init; }
 }
 
 /// <summary>Outcome of a Refresh run.</summary>
