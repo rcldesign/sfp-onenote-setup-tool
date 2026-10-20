@@ -63,8 +63,10 @@ Nothing drawn in the bitmap is editable later, and nothing that becomes a link i
 native text object there), so an empty spot on a PNG is usually a link slot. Check these pages first:
 
 - `day-2027-01-04.png` (Mon Jan 4, week 2): the date slashes at the top right are erased (the date is a link); the
-  strip reads 14 down to 1 with 13 circled; "Day 4 of 90 · Week 2 of 14" sits under the date at 60% ink; the Time
-  Blocks column is rebuilt for the window with 9 pt labels (6, 7 ... 12, 1 ... 9) on the hour rules.
+  strip reads 14 down to 1 with 13 circled and the same air between every pair of neighbors, so "14 13 12 11 10"
+  read apart (two-digit numbers take a wider pitch than one-digit ones, as on the printed 13-number strip);
+  "Day 4 of 90 · Week 2 of 14" sits under the date at 60% ink; the Time Blocks column is rebuilt for the window with
+  9 pt labels (6, 7 ... 12, 1 ... 9) on the hour rules.
 - `week-02-overview.png`: the date is baked (01 / 04 / 27, the Monday); the seven day-name header cells are erased
   (they become links); the column rules between them survive.
 - `week-14-reflection.png`: the Sunday date 04 / 04 / 27 is baked; the printed "Progress %" is erased (it becomes
