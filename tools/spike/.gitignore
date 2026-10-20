@@ -1,0 +1,2 @@
+# Byte-code from the scripts and the fake package; scratch/ and *.png are ignored at the repository root.
+__pycache__/

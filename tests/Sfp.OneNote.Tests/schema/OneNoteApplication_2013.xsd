@@ -1,0 +1,478 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RECONSTRUCTION of the OneNote 2013 application XML schema, to be replaced by the official file.
+
+  The official 0336.OneNoteApplication_2013.xsd (Microsoft, "OneNote 2013 COM API XML schema") could not be downloaded
+  from the build environment. This file is a faithful subset written from the published schema and from the XML OneNote
+  desktop returns, covering only what sfp2onenote writes and reads: Page, PageSettings, PageSize, Automatic, Dimensions,
+  RuleLines, Title, Meta, Outline, Position, Size, OEChildren, OE, T, Image, Data, Section, the ink elements InkWord,
+  InkDrawing and InkParagraph, and the style definitions a page from GetPageContent carries (QuickStyleDef, TagDef, Tag).
+
+  On the owner's PC: copy the official file over this one (same path, same name) and run the Sfp.OneNote.Tests suite.
+  Every generated XML must still validate. Attributes not in the official schema are errors there, as they are here.
+
+  Rules kept from the original: all elements are namespace-qualified; attributes are not; element order in Page is
+  QuickStyleDef, TagDef, Meta, PageSettings, Title, then content; Position and Size carry floats in points.
+-->
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+            xmlns:one="http://schemas.microsoft.com/office/onenote/2013/onenote"
+            targetNamespace="http://schemas.microsoft.com/office/onenote/2013/onenote"
+            elementFormDefault="qualified"
+            attributeFormDefault="unqualified">
+
+  <!-- Simple types -->
+
+  <xsd:simpleType name="Selected">
+    <xsd:restriction base="xsd:string">
+      <xsd:enumeration value="none" />
+      <xsd:enumeration value="partial" />
+      <xsd:enumeration value="all" />
+    </xsd:restriction>
+  </xsd:simpleType>
+
+  <xsd:simpleType name="Alignment">
+    <xsd:restriction base="xsd:string">
+      <xsd:enumeration value="left" />
+      <xsd:enumeration value="center" />
+      <xsd:enumeration value="right" />
+    </xsd:restriction>
+  </xsd:simpleType>
+
+  <!-- "#RRGGBB", "automatic" or "none". -->
+  <xsd:simpleType name="Color">
+    <xsd:restriction base="xsd:string">
+      <xsd:pattern value="#[0-9A-Fa-f]{6}|automatic|none" />
+    </xsd:restriction>
+  </xsd:simpleType>
+
+  <xsd:simpleType name="ObjectID">
+    <xsd:restriction base="xsd:string" />
+  </xsd:simpleType>
+
+  <!-- Attribute groups -->
+
+  <xsd:attributeGroup name="AuthorAttributes">
+    <xsd:attribute name="author" type="xsd:string" use="optional" />
+    <xsd:attribute name="authorInitials" type="xsd:string" use="optional" />
+    <xsd:attribute name="authorResolutionID" type="xsd:string" use="optional" />
+    <xsd:attribute name="lastModifiedBy" type="xsd:string" use="optional" />
+    <xsd:attribute name="lastModifiedByInitials" type="xsd:string" use="optional" />
+    <xsd:attribute name="lastModifiedByResolutionID" type="xsd:string" use="optional" />
+  </xsd:attributeGroup>
+
+  <!-- Shared complex types -->
+
+  <xsd:complexType name="PositionType">
+    <xsd:attribute name="x" type="xsd:float" use="required" />
+    <xsd:attribute name="y" type="xsd:float" use="required" />
+    <xsd:attribute name="z" type="xsd:int" use="optional" />
+  </xsd:complexType>
+
+  <xsd:complexType name="SizeType">
+    <xsd:attribute name="width" type="xsd:float" use="required" />
+    <xsd:attribute name="height" type="xsd:float" use="required" />
+    <xsd:attribute name="isSetByUser" type="xsd:boolean" use="optional" />
+  </xsd:complexType>
+
+  <xsd:complexType name="PageDimension">
+    <xsd:attribute name="value" type="xsd:float" use="required" />
+  </xsd:complexType>
+
+  <xsd:complexType name="CallbackIDType">
+    <xsd:attribute name="callbackID" type="one:ObjectID" use="required" />
+  </xsd:complexType>
+
+  <xsd:complexType name="RuleLineType">
+    <xsd:attribute name="color" type="one:Color" use="optional" />
+    <xsd:attribute name="spacing" type="xsd:float" use="optional" />
+  </xsd:complexType>
+
+  <!-- Hierarchy -->
+
+  <xsd:element name="Section">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element ref="one:Page" minOccurs="0" maxOccurs="unbounded" />
+      </xsd:sequence>
+      <xsd:attribute name="ID" type="one:ObjectID" use="optional" />
+      <xsd:attribute name="name" type="xsd:string" use="optional" />
+      <xsd:attribute name="path" type="xsd:string" use="optional" />
+      <xsd:attribute name="color" type="one:Color" use="optional" />
+      <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="isCurrentlyViewed" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="locked" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="isUnread" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="isDeletedPages" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="isInRecycleBin" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="encrypted" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="readOnly" type="xsd:boolean" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <!-- Page: the same global element serves the hierarchy (ID, name, pageLevel) and the page content root. -->
+
+  <xsd:element name="Page">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element ref="one:QuickStyleDef" minOccurs="0" maxOccurs="unbounded" />
+        <xsd:element ref="one:TagDef" minOccurs="0" maxOccurs="unbounded" />
+        <xsd:element ref="one:Meta" minOccurs="0" maxOccurs="unbounded" />
+        <xsd:element ref="one:PageSettings" minOccurs="0" maxOccurs="1" />
+        <xsd:element ref="one:Title" minOccurs="0" maxOccurs="1" />
+        <xsd:choice minOccurs="0" maxOccurs="unbounded">
+          <xsd:element ref="one:Outline" />
+          <xsd:element ref="one:Image" />
+          <xsd:element ref="one:InkDrawing" />
+        </xsd:choice>
+      </xsd:sequence>
+      <xsd:attribute name="ID" type="one:ObjectID" use="optional" />
+      <xsd:attribute name="name" type="xsd:string" use="optional" />
+      <xsd:attribute name="dateTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="pageLevel" type="xsd:int" use="optional" />
+      <xsd:attribute name="isCurrentlyViewed" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="lang" type="xsd:string" use="optional" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+      <xsd:attribute name="isInRecycleBin" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="isUnread" type="xsd:boolean" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="QuickStyleDef">
+    <xsd:complexType>
+      <xsd:attribute name="index" type="xsd:int" use="required" />
+      <xsd:attribute name="name" type="xsd:string" use="required" />
+      <xsd:attribute name="fontColor" type="one:Color" use="optional" />
+      <xsd:attribute name="highlightColor" type="one:Color" use="optional" />
+      <xsd:attribute name="font" type="xsd:string" use="optional" />
+      <xsd:attribute name="fontSize" type="xsd:float" use="optional" />
+      <xsd:attribute name="spaceBefore" type="xsd:float" use="optional" />
+      <xsd:attribute name="spaceAfter" type="xsd:float" use="optional" />
+      <xsd:attribute name="bold" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="italic" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="underline" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="strikethrough" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="superscript" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="subscript" type="xsd:boolean" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="TagDef">
+    <xsd:complexType>
+      <xsd:attribute name="index" type="xsd:int" use="required" />
+      <xsd:attribute name="type" type="xsd:int" use="required" />
+      <xsd:attribute name="symbol" type="xsd:int" use="optional" />
+      <xsd:attribute name="fontColor" type="one:Color" use="optional" />
+      <xsd:attribute name="highlightColor" type="one:Color" use="optional" />
+      <xsd:attribute name="name" type="xsd:string" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="Meta">
+    <xsd:complexType>
+      <xsd:attribute name="name" type="xsd:string" use="required" />
+      <xsd:attribute name="content" type="xsd:string" use="required" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <!-- Page settings -->
+
+  <xsd:element name="PageSettings">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element ref="one:PageSize" minOccurs="0" maxOccurs="1" />
+        <xsd:element ref="one:RuleLines" minOccurs="0" maxOccurs="1" />
+      </xsd:sequence>
+      <xsd:attribute name="RTL" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="color" type="one:Color" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="PageSize">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:choice minOccurs="1" maxOccurs="1">
+          <xsd:element ref="one:Automatic" />
+          <xsd:element ref="one:Dimensions" />
+        </xsd:choice>
+        <xsd:element ref="one:Margins" minOccurs="0" maxOccurs="1" />
+      </xsd:sequence>
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="Automatic">
+    <xsd:complexType />
+  </xsd:element>
+
+  <xsd:element name="Dimensions">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="Width" type="one:PageDimension" />
+        <xsd:element name="Height" type="one:PageDimension" />
+      </xsd:sequence>
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="Margins">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="Top" type="one:PageDimension" />
+        <xsd:element name="Bottom" type="one:PageDimension" />
+        <xsd:element name="Left" type="one:PageDimension" />
+        <xsd:element name="Right" type="one:PageDimension" />
+      </xsd:sequence>
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="RuleLines">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="Horizontal" type="one:RuleLineType" minOccurs="0" maxOccurs="1" />
+        <xsd:element name="Vertical" type="one:RuleLineType" minOccurs="0" maxOccurs="1" />
+        <xsd:element name="Margin" type="one:RuleLineType" minOccurs="0" maxOccurs="1" />
+      </xsd:sequence>
+      <xsd:attribute name="visible" type="xsd:boolean" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <!-- Title and content -->
+
+  <xsd:element name="Title">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element ref="one:OE" minOccurs="0" maxOccurs="1" />
+      </xsd:sequence>
+      <xsd:attribute name="lang" type="xsd:string" use="optional" />
+      <xsd:attribute name="styleFromPreviousPage" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="Outline">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="Position" type="one:PositionType" minOccurs="0" maxOccurs="1" />
+        <xsd:element name="Size" type="one:SizeType" minOccurs="0" maxOccurs="1" />
+        <xsd:element ref="one:Indents" minOccurs="0" maxOccurs="1" />
+        <xsd:element ref="one:OEChildren" minOccurs="0" maxOccurs="unbounded" />
+      </xsd:sequence>
+      <xsd:attributeGroup ref="one:AuthorAttributes" />
+      <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="objectID" type="one:ObjectID" use="optional" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="Indents">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="Indent" minOccurs="0" maxOccurs="unbounded">
+          <xsd:complexType>
+            <xsd:attribute name="level" type="xsd:int" use="required" />
+            <xsd:attribute name="indent" type="xsd:float" use="required" />
+          </xsd:complexType>
+        </xsd:element>
+      </xsd:sequence>
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="OEChildren">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element ref="one:OE" minOccurs="0" maxOccurs="unbounded" />
+      </xsd:sequence>
+      <xsd:attributeGroup ref="one:AuthorAttributes" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="OE">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element ref="one:Tag" minOccurs="0" maxOccurs="unbounded" />
+        <xsd:choice minOccurs="0" maxOccurs="unbounded">
+          <xsd:element ref="one:T" />
+          <xsd:element ref="one:Image" />
+          <xsd:element ref="one:InkWord" />
+          <xsd:element ref="one:InkParagraph" />
+          <xsd:element ref="one:InkDrawing" />
+          <xsd:element ref="one:Table" />
+        </xsd:choice>
+        <xsd:element ref="one:OEChildren" minOccurs="0" maxOccurs="unbounded" />
+      </xsd:sequence>
+      <xsd:attributeGroup ref="one:AuthorAttributes" />
+      <xsd:attribute name="creationTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="objectID" type="one:ObjectID" use="optional" />
+      <xsd:attribute name="alignment" type="one:Alignment" use="optional" />
+      <xsd:attribute name="quickStyleIndex" type="xsd:int" use="optional" />
+      <xsd:attribute name="style" type="xsd:string" use="optional" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+      <xsd:attribute name="spaceBefore" type="xsd:float" use="optional" />
+      <xsd:attribute name="spaceAfter" type="xsd:float" use="optional" />
+      <xsd:attribute name="lineSpacing" type="xsd:float" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="Tag">
+    <xsd:complexType>
+      <xsd:attribute name="index" type="xsd:int" use="required" />
+      <xsd:attribute name="completed" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="disabled" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="creationDate" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="completionDate" type="xsd:dateTime" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <!-- A text run: the CDATA holds HTML (span, a, br). -->
+  <xsd:element name="T">
+    <xsd:complexType>
+      <xsd:simpleContent>
+        <xsd:extension base="xsd:string">
+          <xsd:attribute name="lang" type="xsd:string" use="optional" />
+          <xsd:attribute name="selected" type="one:Selected" use="optional" />
+          <xsd:attribute name="style" type="xsd:string" use="optional" />
+        </xsd:extension>
+      </xsd:simpleContent>
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="Image">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="Position" type="one:PositionType" minOccurs="0" maxOccurs="1" />
+        <xsd:element name="Size" type="one:SizeType" minOccurs="0" maxOccurs="1" />
+        <xsd:element name="CallbackID" type="one:CallbackIDType" minOccurs="0" maxOccurs="1" />
+        <xsd:element ref="one:Data" minOccurs="0" maxOccurs="1" />
+        <xsd:element ref="one:OCRData" minOccurs="0" maxOccurs="1" />
+      </xsd:sequence>
+      <xsd:attribute name="format" type="xsd:string" use="optional" />
+      <xsd:attribute name="originalPageNumber" type="xsd:int" use="optional" />
+      <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="objectID" type="one:ObjectID" use="optional" />
+      <xsd:attribute name="alt" type="xsd:string" use="optional" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+      <xsd:attribute name="backgroundImage" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="hyperlink" type="xsd:string" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <!-- Base64 image or ink bytes. -->
+  <xsd:element name="Data" type="xsd:string" />
+
+  <xsd:element name="OCRData">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="OCRText" type="xsd:string" minOccurs="0" maxOccurs="1" />
+        <xsd:element name="OCRToken" minOccurs="0" maxOccurs="unbounded">
+          <xsd:complexType>
+            <xsd:attribute name="startPos" type="xsd:int" use="optional" />
+            <xsd:attribute name="region" type="xsd:int" use="optional" />
+            <xsd:attribute name="line" type="xsd:int" use="optional" />
+            <xsd:attribute name="x" type="xsd:float" use="optional" />
+            <xsd:attribute name="y" type="xsd:float" use="optional" />
+            <xsd:attribute name="width" type="xsd:float" use="optional" />
+            <xsd:attribute name="height" type="xsd:float" use="optional" />
+          </xsd:complexType>
+        </xsd:element>
+      </xsd:sequence>
+      <xsd:attribute name="lang" type="xsd:string" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <!-- Ink -->
+
+  <xsd:element name="InkDrawing">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="Position" type="one:PositionType" minOccurs="0" maxOccurs="1" />
+        <xsd:element name="Size" type="one:SizeType" minOccurs="0" maxOccurs="1" />
+        <xsd:element name="CallbackID" type="one:CallbackIDType" minOccurs="0" maxOccurs="1" />
+        <xsd:element ref="one:Data" minOccurs="0" maxOccurs="1" />
+      </xsd:sequence>
+      <xsd:attribute name="objectID" type="one:ObjectID" use="optional" />
+      <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+      <xsd:attribute name="recognizedText" type="xsd:string" use="optional" />
+      <xsd:attribute name="inkOriginX" type="xsd:float" use="optional" />
+      <xsd:attribute name="inkOriginY" type="xsd:float" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="InkWord">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="CallbackID" type="one:CallbackIDType" minOccurs="0" maxOccurs="1" />
+        <xsd:element ref="one:Data" minOccurs="0" maxOccurs="1" />
+      </xsd:sequence>
+      <xsd:attribute name="objectID" type="one:ObjectID" use="optional" />
+      <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+      <xsd:attribute name="recognizedText" type="xsd:string" use="optional" />
+      <xsd:attribute name="inkOriginX" type="xsd:float" use="optional" />
+      <xsd:attribute name="inkOriginY" type="xsd:float" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <xsd:element name="InkParagraph">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element ref="one:InkWord" minOccurs="0" maxOccurs="unbounded" />
+      </xsd:sequence>
+      <xsd:attribute name="objectID" type="one:ObjectID" use="optional" />
+      <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+  <!-- Table, kept minimal so a user table on a page still validates. -->
+
+  <xsd:element name="Table">
+    <xsd:complexType>
+      <xsd:sequence>
+        <xsd:element name="Columns" minOccurs="0" maxOccurs="1">
+          <xsd:complexType>
+            <xsd:sequence>
+              <xsd:element name="Column" minOccurs="0" maxOccurs="unbounded">
+                <xsd:complexType>
+                  <xsd:attribute name="index" type="xsd:int" use="required" />
+                  <xsd:attribute name="width" type="xsd:float" use="optional" />
+                  <xsd:attribute name="isLocked" type="xsd:boolean" use="optional" />
+                </xsd:complexType>
+              </xsd:element>
+            </xsd:sequence>
+          </xsd:complexType>
+        </xsd:element>
+        <xsd:element name="Row" minOccurs="0" maxOccurs="unbounded">
+          <xsd:complexType>
+            <xsd:sequence>
+              <xsd:element name="Cell" minOccurs="0" maxOccurs="unbounded">
+                <xsd:complexType>
+                  <xsd:sequence>
+                    <xsd:element ref="one:OEChildren" minOccurs="0" maxOccurs="unbounded" />
+                  </xsd:sequence>
+                  <xsd:attributeGroup ref="one:AuthorAttributes" />
+                  <xsd:attribute name="objectID" type="one:ObjectID" use="optional" />
+                  <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+                  <xsd:attribute name="selected" type="one:Selected" use="optional" />
+                  <xsd:attribute name="shadingColor" type="one:Color" use="optional" />
+                </xsd:complexType>
+              </xsd:element>
+            </xsd:sequence>
+            <xsd:attributeGroup ref="one:AuthorAttributes" />
+            <xsd:attribute name="objectID" type="one:ObjectID" use="optional" />
+            <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+            <xsd:attribute name="selected" type="one:Selected" use="optional" />
+          </xsd:complexType>
+        </xsd:element>
+      </xsd:sequence>
+      <xsd:attributeGroup ref="one:AuthorAttributes" />
+      <xsd:attribute name="objectID" type="one:ObjectID" use="optional" />
+      <xsd:attribute name="lastModifiedTime" type="xsd:dateTime" use="optional" />
+      <xsd:attribute name="selected" type="one:Selected" use="optional" />
+      <xsd:attribute name="bordersVisible" type="xsd:boolean" use="optional" />
+      <xsd:attribute name="hasHeaderRow" type="xsd:boolean" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
+</xsd:schema>

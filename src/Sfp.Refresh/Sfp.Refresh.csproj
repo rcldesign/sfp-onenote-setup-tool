@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Setup reader, propagation, calendar import, scheduler registration. Depends on Core and OneNote. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sfp.Core/Sfp.Core.csproj" />
+    <ProjectReference Include="../Sfp.OneNote/Sfp.OneNote.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Ical.Net" />
+    <PackageReference Include="Serilog" />
+  </ItemGroup>
+</Project>

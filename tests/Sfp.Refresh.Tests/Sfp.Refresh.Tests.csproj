@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Sfp.Core/Sfp.Core.csproj" />
+    <ProjectReference Include="../../src/Sfp.OneNote/Sfp.OneNote.csproj" />
+    <ProjectReference Include="../../src/Sfp.Refresh/Sfp.Refresh.csproj" />
+    <ProjectReference Include="../Sfp.TestSupport/Sfp.TestSupport.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Verify.Xunit" />
+    <PackageReference Include="Xunit.SkippableFact" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
