@@ -12,6 +12,10 @@ public static class Program
     public static int Main(string[] args)
     {
         RootCommand root = new("sfp2onenote: builds a dated OneNote notebook from the Structured Focus Planner PDF.");
+        root.Subcommands.Add(Verbs.PlanCommand.Build());
+        root.Subcommands.Add(Verbs.RenderOnlyCommand.Build());
+        root.Subcommands.Add(Verbs.GenerateCommand.Build());
+        root.Subcommands.Add(Verbs.RefreshCommand.Build());
         root.Subcommands.Add(Verbs.MeasureCommand.Build());
         return root.Parse(args).Invoke();
     }

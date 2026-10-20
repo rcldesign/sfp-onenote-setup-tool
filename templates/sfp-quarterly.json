@@ -160,7 +160,7 @@
     "next": { "x": 122, "y": 48, "w": 95, "h": 14, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
     "prevCalendar": { "x": 785, "y": 56, "w": 100, "h": 14, "sizePt": 10, "align": "left", "textFormat": "‹ {title}" },
     "nextCalendar": { "x": 890, "y": 56, "w": 100, "h": 14, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
-    "reflectionNext": { "x": 770, "y": 524, "w": 200, "h": 16, "sizePt": 10, "align": "left", "textFormat": "Next week ›" },
+    "reflectionNext": { "x": 770, "y": 524, "w": 200, "h": 16, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
     "progressScorecard": { "x": 1000, "y": 71, "w": 82, "h": 14, "sizePt": 10, "align": "right", "erase": true, "textFormat": "Progress %" },
     "scorecardWeek": { "sizePt": 10, "align": "center" },
     "calendarReview": { "x": 1000, "y": 56, "w": 82, "h": 14, "sizePt": 10, "align": "right", "textFormat": "Review ›" },

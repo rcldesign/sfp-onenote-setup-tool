@@ -228,7 +228,7 @@ public class LinkGraphBuilderTests
         PageKey week14 = PageKey.WeekReflection(14);
 
         Link(Plan, week13, "reflectionNext").Should().Be(new LinkSpec(week13, "reflectionNext", PageKey.WeekOverview(14), "Week 14 ›"));
-        Link(Plan, week13, "progressScorecard").Should().Be(new LinkSpec(week13, "progressScorecard", PageKey.Scorecard, "Scorecard ›"));
+        Link(Plan, week13, "progressScorecard").Should().Be(new LinkSpec(week13, "progressScorecard", PageKey.Scorecard, "Progress %"));
         Plan.LinksFrom(week13).Should().NotContain(l => l.AnchorId == "reflectionQuarterReview");
 
         Plan.LinksFrom(week14).Should().NotContain(l => l.AnchorId == "reflectionNext");

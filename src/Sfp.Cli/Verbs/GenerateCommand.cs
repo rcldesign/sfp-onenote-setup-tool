@@ -494,6 +494,17 @@ public static class GenerateCommand
     /// the page renderer, the date engine and plan builder, the OneNote locator and the COM writer, the preflight and
     /// the orchestrator. Owns the disposable services for the run.
     /// </summary>
+    /// <summary>
+    /// The production composition (fonts, rasterizer, COM session, writer, orchestrator) for one run. Public so the app's
+    /// Generate tab composes the same services; the returned orchestrator is disposable and owns the COM session.
+    /// </summary>
+    public static IGenerateOrchestrator CreateProductionOrchestrator(GenerateRequest request, ILogger log, string logPath)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(log);
+        return ProductionOrchestrator.Create(request, log, logPath);
+    }
+
     private sealed class ProductionOrchestrator : IGenerateOrchestrator, IDisposable
     {
         private readonly GenerateOrchestrator _inner;
