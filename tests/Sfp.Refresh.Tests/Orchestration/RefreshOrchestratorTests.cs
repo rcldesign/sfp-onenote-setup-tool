@@ -84,7 +84,7 @@ public class RefreshOrchestratorTests
 
         public FakeSourceFailureNotifier Notifier { get; } = new();
 
-        public RefreshServices Services { get; }
+        public RefreshServices Services { get; set; }
 
         public FakeOneNoteApp App => Notebook.App;
 
@@ -236,6 +236,23 @@ public class RefreshOrchestratorTests
         rebuilt.Pages.Should().HaveCount(144);
         rebuilt.ToolVersion.Should().Be("9.9.9");
         rebuilt.Quarter.Should().Be(new QuarterSpec(2027, 1));
+    }
+
+    [Fact]
+    public void A_sidecar_outside_the_search_folders_is_found_beside_the_notebook_and_not_rebuilt()
+    {
+        Harness h = new();
+        h.Services = h.Services with { SearchFolders = new[] { TestPaths.NewTempDir("refresh-elsewhere") } };
+        h.Type(S.Objectives[0], "Ship the connector");
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Summary!.SidecarRebuilt.Should().BeFalse("the sidecar beside the notebook's folder is the one generated with it");
+        result.Summary.Warnings.Should().NotContain(SidecarRecovery.RebuiltWarning);
+        Sidecar saved = h.SavedSidecar();
+        saved.Generated.Should().Be(FakeNotebook.GeneratedAt, "the generated sidecar was updated, not replaced by a rebuilt one");
+        saved.Pages[MonJan4.Value].Anchors.Should().ContainKey("objectiveLegend");
     }
 
     [Fact]

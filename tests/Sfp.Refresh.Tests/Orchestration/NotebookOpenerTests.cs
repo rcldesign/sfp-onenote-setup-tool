@@ -30,6 +30,24 @@ public class NotebookOpenerTests
     }
 
     [Fact]
+    public void A_sidecar_beside_the_notebook_is_loaded_when_the_search_folders_do_not_hold_it()
+    {
+        string generatedInto = TestPaths.NewTempDir("opener-a");
+        string searched = TestPaths.NewTempDir("opener-b");
+        FakeNotebook nb = FakeNotebook.Generate(folder: generatedInto);
+        SidecarStore store = new();
+        store.Save(store.PathFor(nb.NotebookPath), nb.Sidecar);
+        CapturingLog log = new();
+
+        OpenedNotebook? opened = Opener(nb.App, store, log).Open("SFP Q1 2027", null, new[] { searched });
+
+        opened.Should().NotBeNull();
+        opened!.Sidecar.Should().BeEquivalentTo(nb.Sidecar, "the notebook's own folder is where its sidecar lives");
+        opened.SidecarPath.Should().Be(store.PathFor(nb.NotebookPath));
+        log.Messages(Serilog.Events.LogEventLevel.Information).Should().Contain(m => m.Contains("found beside the notebook", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Without_a_sidecar_the_open_notebook_still_resolves_and_the_sidecar_path_is_beside_its_folder()
     {
         FakeNotebook nb = FakeNotebook.Generate();
