@@ -1,4 +1,5 @@
 using Sfp.Core.Plan;
+using Sfp.OneNote.Xml;
 using Sfp.Render;
 
 namespace Sfp.OneNote;
@@ -10,7 +11,11 @@ namespace Sfp.OneNote;
 public sealed record NotebookHandle(string Id, string Path, string Name);
 
 /// <summary>A section inside a notebook.</summary>
-public sealed record SectionHandle(string Id, string Name, NotebookHandle Notebook);
+public sealed record SectionHandle(string Id, string Name, NotebookHandle Notebook)
+{
+    /// <summary>Section tab color as #RRGGBB from the plan, or null for OneNote's default. Written with the hierarchy.</summary>
+    public string? ColorHex { get; init; }
+}
 
 /// <summary>A page inside a section.</summary>
 public sealed record PageHandle(string Id, PageKey Key, SectionHandle Section);
@@ -46,4 +51,22 @@ public interface INotebookWriter
     PageXml ReadPage(PageHandle p);
 
     void Sync(NotebookHandle nb);
+
+    /// <summary>
+    /// Reads the page back once after <see cref="WritePage"/> and returns the OneNote object ID of the outline written for
+    /// each anchor, keyed by its AnchorId, so the sidecar can record them. Anchors whose outline cannot be found are left out.
+    /// </summary>
+    IReadOnlyDictionary<string, string> ReadAnchorIds(PageHandle p, IReadOnlyList<ResolvedAnchor> anchors);
+
+    /// <summary>Writes the native Contents page: the frame plus one outline of links grouped by section.</summary>
+    void WriteContentsPage(PageHandle p, PageSpec spec, IReadOnlyList<ContentsSectionEntry> sections);
+
+    /// <summary>Opens OneNote on the page (the cover at the end of Generate).</summary>
+    void NavigateTo(PageHandle p);
+
+    /// <summary>Closes the notebook in OneNote so its folder can be deleted (the cancel path).</summary>
+    void CloseNotebook(NotebookHandle nb);
+
+    /// <summary>Non-fatal notes recorded while writing (a page color or page date OneNote refused and the writer dropped).</summary>
+    IReadOnlyList<string> Warnings { get; }
 }

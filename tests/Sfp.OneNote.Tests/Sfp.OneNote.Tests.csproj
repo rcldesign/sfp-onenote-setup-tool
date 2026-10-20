@@ -6,6 +6,8 @@
     <ProjectReference Include="../../src/Sfp.Core/Sfp.Core.csproj" />
     <ProjectReference Include="../../src/Sfp.Render/Sfp.Render.csproj" />
     <ProjectReference Include="../../src/Sfp.OneNote/Sfp.OneNote.csproj" />
+    <!-- The generate verb (src/Sfp.Cli/Verbs/GenerateCommand.cs) is tested here because the CLI has no test project of its own. -->
+    <ProjectReference Include="../../src/Sfp.Cli/Sfp.Cli.csproj" />
     <ProjectReference Include="../Sfp.TestSupport/Sfp.TestSupport.csproj" />
   </ItemGroup>
   <ItemGroup>
