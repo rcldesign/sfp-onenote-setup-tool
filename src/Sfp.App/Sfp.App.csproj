@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- WPF window: Generate tab, Refresh tab. No logic in the UI layer; everything goes through the same services the CLI uses. -->
+  <!-- WPF window: Generate tab, Refresh tab. No logic in the UI layer: the view models, validators and service seams live
+       in the nested net8.0 library Sfp.App.ViewModels (excluded from this project's globs) so they build and test on any OS.
+       This project holds XAML, the composition root (Composition/AppServices.cs) and the OS-facing service implementations. -->
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <OutputType>WinExe</OutputType>
@@ -10,8 +12,16 @@
     <SelfContained>false</SelfContained>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Sfp.App.ViewModels/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="Sfp.App.ViewModels/**" />
+    <None Remove="Sfp.App.ViewModels/**" />
+    <Page Remove="Sfp.App.ViewModels/**" />
+    <EmbeddedResource Remove="Sfp.App.ViewModels/**" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="Sfp.App.ViewModels/Sfp.App.ViewModels.csproj" />
     <ProjectReference Include="../Sfp.Core/Sfp.Core.csproj" />
     <ProjectReference Include="../Sfp.Render/Sfp.Render.csproj" />
     <ProjectReference Include="../Sfp.OneNote/Sfp.OneNote.csproj" />

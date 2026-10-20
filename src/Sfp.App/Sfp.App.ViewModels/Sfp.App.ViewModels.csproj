@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The app's view models, validators and service seams as a plain net8.0 library so they build and test on any OS.
+       The WPF project (../Sfp.App.csproj) holds only XAML, the composition root and the OS-facing service implementations.
+       Nested under the app folder on purpose: the parent project excludes this folder from its own compile globs. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Sfp.App.ViewModels</RootNamespace>
+    <AssemblyName>Sfp.App.ViewModels</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../Sfp.Core/Sfp.Core.csproj" />
+    <ProjectReference Include="../../Sfp.Render/Sfp.Render.csproj" />
+    <ProjectReference Include="../../Sfp.OneNote/Sfp.OneNote.csproj" />
+    <ProjectReference Include="../../Sfp.Refresh/Sfp.Refresh.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Serilog" />
+  </ItemGroup>
+</Project>

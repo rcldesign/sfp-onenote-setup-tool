@@ -1,0 +1,143 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+using Sfp.App.ViewModels.Generate;
+using Sfp.App.ViewModels.Refresh;
+using Sfp.App.ViewModels.Services;
+using Sfp.Core.Options;
+using Sfp.OneNote.Generate;
+
+namespace Sfp.App.ViewModels;
+
+/// <summary>
+/// The window: a Generate tab and a Refresh tab over the same services the CLI uses. Loads the last-used values at
+/// startup, saves them whenever a field changes and again on exit, and tells the Refresh tab about every output folder
+/// a Generate wrote to.
+/// </summary>
+public sealed partial class MainViewModel : ObservableObject, IDisposable
+{
+    public const string WindowTitle = "SFP to OneNote";
+
+    private readonly ISettingsStore _settings;
+    private readonly List<string> _knownFolders = new();
+    private string? _lastSavedJson;
+    private bool _initialized;
+
+    [ObservableProperty]
+    private int _selectedTabIndex;
+
+    /// <summary>A startup note (settings file reset, save failure), or null.</summary>
+    [ObservableProperty]
+    private string? _notice;
+
+    public MainViewModel(GenerateViewModel generate, RefreshViewModel refresh, ISettingsStore settings)
+    {
+        Generate = generate;
+        Refresh = refresh;
+        _settings = settings;
+    }
+
+    public GenerateViewModel Generate { get; }
+
+    public RefreshViewModel Refresh { get; }
+
+    public string Title => WindowTitle;
+
+    /// <summary>The output folders Generate has written to, as saved in settings.</summary>
+    public IReadOnlyList<string> KnownOutputFolders => _knownFolders;
+
+    /// <summary>Number of saves that reached the store (for tests).</summary>
+    public int SaveCount { get; private set; }
+
+    /// <summary>Loads settings into both tabs and starts saving on change. Call once after construction.</summary>
+    public void Initialize()
+    {
+        if (_initialized)
+        {
+            return;
+        }
+
+        _initialized = true;
+        AppSettings settings;
+        string? problem = null;
+        try
+        {
+            settings = _settings is SettingsStore store ? store.Load(out problem) : _settings.Load();
+        }
+        catch (Exception ex)
+        {
+            // A store that throws (locked file, bad folder) must not stop the window from opening.
+            settings = new AppSettings();
+            problem = "Settings could not be loaded; defaults are used. " + ex.Message;
+        }
+
+        Notice = problem;
+        _knownFolders.Clear();
+        _knownFolders.AddRange(settings.KnownOutputFolders.Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase));
+        Generate.LoadFrom(settings);
+        Refresh.SetKnownFolders(_knownFolders);
+        _lastSavedJson = SettingsStore.Serialize(Current());
+        Generate.InputChanged += OnGenerateInputChanged;
+        Generate.Run.Completed += OnGenerateCompleted;
+    }
+
+    /// <summary>Saves the current values (on exit). Returns false and sets <see cref="Notice"/> when the store refused.</summary>
+    public bool SaveSettings() => Save(force: true);
+
+    /// <summary>The settings the current fields describe.</summary>
+    public AppSettings Current() => Generate.ToSettings(_knownFolders.ToList());
+
+    public void Dispose()
+    {
+        Generate.InputChanged -= OnGenerateInputChanged;
+        Generate.Run.Completed -= OnGenerateCompleted;
+        Generate.Dispose();
+    }
+
+    private void OnGenerateInputChanged(object? sender, EventArgs e) => Save(force: false);
+
+    private void OnGenerateCompleted(object? sender, GenerateResult result)
+    {
+        if (!result.Success || string.IsNullOrEmpty(result.OutputPath))
+        {
+            return;
+        }
+
+        string? folder = PathText.ParentOf(result.OutputPath);
+        if (string.IsNullOrEmpty(folder) || _knownFolders.Contains(folder, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _knownFolders.Add(folder);
+        OnPropertyChanged(nameof(KnownOutputFolders));
+        Refresh.SetKnownFolders(_knownFolders);
+        Save(force: false);
+    }
+
+    private bool Save(bool force)
+    {
+        if (!_initialized)
+        {
+            return false;
+        }
+
+        AppSettings current = Current();
+        string json = SettingsStore.Serialize(current);
+        if (!force && json == _lastSavedJson)
+        {
+            return true;
+        }
+
+        try
+        {
+            _settings.Save(current);
+            _lastSavedJson = json;
+            SaveCount++;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Notice = "Settings could not be saved to " + _settings.Path + ": " + ex.Message;
+            return false;
+        }
+    }
+}

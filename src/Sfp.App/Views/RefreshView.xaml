@@ -1,0 +1,90 @@
+<UserControl x:Class="Sfp.App.Views.RefreshView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ScrollViewer VerticalScrollBarVisibility="Auto">
+    <StackPanel Margin="8">
+      <TextBlock Style="{StaticResource SectionHeading}" Text="Notebooks built by this tool" />
+      <ListView ItemsSource="{Binding Notebooks}" SelectedItem="{Binding SelectedNotebook}" MaxHeight="200"
+                AutomationProperties.Name="Notebook list">
+        <ListView.View>
+          <GridView>
+            <GridViewColumn Header="Notebook" Width="200" DisplayMemberBinding="{Binding Name}" />
+            <GridViewColumn Header="Quarter" Width="120" DisplayMemberBinding="{Binding QuarterLabel}" />
+            <GridViewColumn Header="Generated" Width="130" DisplayMemberBinding="{Binding GeneratedText}" />
+            <GridViewColumn Header="Last refreshed" Width="130" DisplayMemberBinding="{Binding LastRefreshText}" />
+            <GridViewColumn Header="Folder" Width="360" DisplayMemberBinding="{Binding Path}" />
+          </GridView>
+        </ListView.View>
+      </ListView>
+      <TextBlock Style="{StaticResource PendingText}" Text="{Binding NotebooksStatus}" />
+
+      <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+        <Button Content="Re_load list" Command="{Binding ReloadNotebooksCommand}" AutomationProperties.Name="Reload the notebook list" />
+        <Button Content="_Preview changes" Command="{Binding PreviewChangesCommand}" AutomationProperties.Name="Preview changes (dry run)" />
+        <Button Content="Refresh _now" Command="{Binding RefreshNowCommand}" AutomationProperties.Name="Refresh now" />
+      </StackPanel>
+
+      <StackPanel Orientation="Horizontal" Margin="0,4">
+        <CheckBox IsChecked="{Binding IncludeCalendar}" Content="Import calendar events" VerticalAlignment="Center"
+                  AutomationProperties.Name="Import calendar events" />
+        <TextBlock Text="for the next" Margin="12,0,6,0" VerticalAlignment="Center" />
+        <TextBox Width="48" Text="{Binding HorizonDays, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center"
+                 AutomationProperties.Name="Calendar horizon in days" />
+        <TextBlock Text="days" Margin="6,0,0,0" VerticalAlignment="Center" />
+      </StackPanel>
+      <CheckBox Margin="0,4" IsChecked="{Binding WriteInkedValues}" Content="Write values that came from ink without confirmation"
+                AutomationProperties.Name="Write inked values" />
+      <CheckBox Margin="0,4" IsChecked="{Binding DailyRefreshEnabled}" IsEnabled="{Binding HasSelection}"
+                Content="Refresh every day at 05:00 (registers a Windows scheduled task for the selected notebook)"
+                AutomationProperties.Name="Refresh every day at 05:00" />
+      <TextBlock Style="{StaticResource MessageText}" Text="{Binding ScheduleStatus}" />
+
+      <TextBlock Style="{StaticResource MessageText}" Text="{Binding ProgressText}" FontWeight="SemiBold" Margin="0,8,0,0"
+                 AutomationProperties.Name="Refresh progress" />
+      <TextBlock Style="{StaticResource ErrorText}" Text="{Binding ErrorText}" />
+
+      <!-- Values read from Setup -->
+      <TextBlock Style="{StaticResource SectionHeading}" Text="Values read from Setup" />
+      <ItemsControl ItemsSource="{Binding SetupLines}" AutomationProperties.Name="Values read from Setup" />
+      <TextBlock Style="{StaticResource WarningText}" Text="{Binding InkNotice}" />
+
+      <!-- Planned changes -->
+      <TextBlock Style="{StaticResource SectionHeading}" Text="{Binding ChangesHeading, TargetNullValue=Changes}" />
+      <ListView ItemsSource="{Binding Changes}" MaxHeight="320" AutomationProperties.Name="Planned changes">
+        <ListView.View>
+          <GridView>
+            <GridViewColumn Header="Page" Width="150" DisplayMemberBinding="{Binding Page}" />
+            <GridViewColumn Header="Slot" Width="150" DisplayMemberBinding="{Binding Slot}" />
+            <GridViewColumn Header="Change" Width="70" DisplayMemberBinding="{Binding KindText}" />
+            <GridViewColumn Header="Old" Width="180" DisplayMemberBinding="{Binding OldText}" />
+            <GridViewColumn Header="New" Width="180" DisplayMemberBinding="{Binding NewText}" />
+            <GridViewColumn Header="Status" Width="220" DisplayMemberBinding="{Binding StatusText}" />
+          </GridView>
+        </ListView.View>
+      </ListView>
+
+      <!-- Run summary -->
+      <StackPanel DataContext="{Binding Summary}">
+        <StackPanel.Style>
+          <Style TargetType="StackPanel">
+            <Style.Triggers>
+              <DataTrigger Binding="{Binding}" Value="{x:Null}">
+                <Setter Property="Visibility" Value="Collapsed" />
+              </DataTrigger>
+            </Style.Triggers>
+          </Style>
+        </StackPanel.Style>
+        <TextBlock Style="{StaticResource SectionHeading}" Text="Run summary" />
+        <TextBlock Text="{Binding Headline}" />
+        <TextBlock Text="{Binding PagesTouched, StringFormat='Pages touched: {0}'}" />
+        <TextBlock Text="{Binding ValuesWritten, StringFormat='Values written: {0}'}" />
+        <TextBlock Text="{Binding EventsWritten, StringFormat='Events written: {0}'}" />
+        <TextBlock Text="{Binding Skipped, StringFormat='Skipped (a user object was in the way or the value was inked and unconfirmed): {0}'}" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding ElapsedText, StringFormat='Elapsed: {0}'}" />
+        <TextBlock Style="{StaticResource WarningText}" Text="{Binding FailedSourcesText}" />
+        <TextBlock Style="{StaticResource WarningText}" Text="{Binding SidecarText}" />
+        <TextBlock Style="{StaticResource WarningText}" Text="{Binding WarningsText}" />
+      </StackPanel>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

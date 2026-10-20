@@ -9,6 +9,8 @@
     <ProjectReference Include="../../src/Sfp.Refresh/Sfp.Refresh.csproj" />
     <!-- The plan verb (M1.8) is tested here through PlanCommand.Run with TextWriters; no separate CLI test project exists. -->
     <ProjectReference Include="../../src/Sfp.Cli/Sfp.Cli.csproj" />
+    <!-- The app's view models (a plain net8.0 library nested under src/Sfp.App) are tested here under Options/. -->
+    <ProjectReference Include="../../src/Sfp.App/Sfp.App.ViewModels/Sfp.App.ViewModels.csproj" />
     <ProjectReference Include="../Sfp.TestSupport/Sfp.TestSupport.csproj" />
   </ItemGroup>
   <ItemGroup>
