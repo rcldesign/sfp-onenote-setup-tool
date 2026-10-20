@@ -20,11 +20,11 @@ namespace Sfp.Refresh.Orchestration;
 public sealed record RecoveryResult(Sidecar Sidecar, bool Rebuilt, IReadOnlyDictionary<string, PageXml> Pages, IReadOnlyList<string> Warnings);
 
 /// <summary>
-/// The PRD recovery path: when the sidecar is missing, or any page or section ID in it no longer resolves in the
-/// notebook's hierarchy, the whole map is rebuilt by walking GetHierarchy(notebook, pages) and reading every page's
-/// sfp.key meta. Tool-owned anchors are re-found by matching the outlines on each page to the known slot and link
-/// rectangles of its page type (position within a tolerance, never a loose overlap, so a user object is never adopted).
-/// One warning is reported for the summary.
+/// The PRD recovery path: when the sidecar is missing, or any page, section or section group ID in it no longer
+/// resolves in the notebook's hierarchy, the whole map is rebuilt by walking GetHierarchy(notebook, pages) and reading
+/// every page's sfp.key meta (section groups are recorded from the hierarchy by name). Tool-owned anchors are re-found
+/// by matching the outlines on each page to the known slot and link rectangles of its page type (position within a
+/// tolerance, never a loose overlap, so a user object is never adopted). One warning is reported for the summary.
 /// </summary>
 public sealed class SidecarRecovery
 {
@@ -73,7 +73,7 @@ public sealed class SidecarRecovery
         return new RecoveryResult(rebuilt, true, pages, new[] { RebuiltWarning });
     }
 
-    /// <summary>True when the notebook ID, every section ID and every page ID the sidecar records are present in the hierarchy.</summary>
+    /// <summary>True when the notebook ID, every section group ID, every section ID and every page ID the sidecar records are present in the hierarchy.</summary>
     public static bool IsConsistent(Sidecar sidecar, HierarchyNotebook tree)
     {
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -83,9 +83,11 @@ public sealed class SidecarRecovery
             return false;
         }
 
+        HashSet<string> groupIds = tree.SectionGroups.Select(g => g.Id).ToHashSet(StringComparer.Ordinal);
         HashSet<string> sectionIds = tree.Sections.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         HashSet<string> pageIds = tree.Pages.Select(p => p.Page.Id).ToHashSet(StringComparer.Ordinal);
-        return sidecar.Sections.Values.All(sectionIds.Contains)
+        return sidecar.SectionGroups.Values.All(groupIds.Contains)
+            && sidecar.Sections.Values.All(sectionIds.Contains)
             && sidecar.Pages.Values.All(p => pageIds.Contains(p.PageId) && sectionIds.Contains(p.SectionId));
     }
 
@@ -128,6 +130,12 @@ public sealed class SidecarRecovery
             sections.TryAdd(section.Name, section.Id);
         }
 
+        Dictionary<string, string> groups = new(StringComparer.Ordinal);
+        foreach (HierarchySectionGroup group in tree.SectionGroups)
+        {
+            groups.TryAdd(group.Name, group.Id);
+        }
+
         Dictionary<string, SidecarPage> records = new(StringComparer.Ordinal);
         foreach ((string key, (HierarchySection section, HierarchyPage page)) in located)
         {
@@ -148,6 +156,7 @@ public sealed class SidecarRecovery
             NotebookPath = string.IsNullOrWhiteSpace(tree.Path) ? notebook.Path : tree.Path,
             NotebookId = tree.Id,
             Sections = sections,
+            SectionGroups = groups,
             Pages = records,
             Generated = previous?.Generated,
             LastRefresh = previous?.LastRefresh,

@@ -8,7 +8,7 @@ public static class SidecarBuilder
     /// <param name="request">The run's request (manifest id and quarter come from it).</param>
     /// <param name="plan">The plan (section names, page keys).</param>
     /// <param name="notebook">The created notebook.</param>
-    /// <param name="sections">Section handle per plan section name.</param>
+    /// <param name="sections">Section handle per plan section name; a grouped section's handle carries its group, which is recorded under the plan's group name.</param>
     /// <param name="pages">Page handle per page key.</param>
     /// <param name="anchorIds">Anchor object IDs per page key (pages without anchors may be absent).</param>
     /// <param name="toolVersion">The tool version string.</param>
@@ -31,11 +31,16 @@ public static class SidecarBuilder
         ArgumentNullException.ThrowIfNull(anchorIds);
 
         Dictionary<string, string> sectionIds = new(StringComparer.Ordinal);
+        Dictionary<string, string> groupIds = new(StringComparer.Ordinal);
         foreach (SectionSpec section in plan.Sections)
         {
             if (sections.TryGetValue(section.Name, out SectionHandle? handle))
             {
                 sectionIds[section.Name] = handle.Id;
+                if (!string.IsNullOrWhiteSpace(section.GroupName) && handle.Group is not null)
+                {
+                    groupIds.TryAdd(section.GroupName, handle.Group.Id);
+                }
             }
         }
 
@@ -62,6 +67,7 @@ public static class SidecarBuilder
             NotebookPath = notebook.Path,
             NotebookId = notebook.Id,
             Sections = sectionIds,
+            SectionGroups = groupIds,
             Pages = pageRecords,
             Generated = generated,
             PreviousNotebook = request.Options.PreviousNotebook,

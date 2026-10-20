@@ -29,6 +29,11 @@
       "type": "object",
       "additionalProperties": { "type": "string", "minLength": 1 }
     },
+    "sectionGroups": {
+      "description": "Section group name (Weeks with --group-weeks) to OneNote section group ID; empty, or absent in older files, for a notebook without groups.",
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
     "pages": {
       "description": "Page key (cover, day:2027-01-04, week:02:overview ...) to its ids.",
       "type": "object",

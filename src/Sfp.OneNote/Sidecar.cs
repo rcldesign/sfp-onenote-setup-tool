@@ -28,6 +28,9 @@ public sealed record Sidecar
     /// <summary>Section name to OneNote section ID.</summary>
     public IReadOnlyDictionary<string, string> Sections { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
 
+    /// <summary>Section group name ("Weeks" with --group-weeks) to OneNote section group ID; empty for a notebook without groups.</summary>
+    public IReadOnlyDictionary<string, string> SectionGroups { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
     /// <summary>Page key value to page record.</summary>
     public IReadOnlyDictionary<string, SidecarPage> Pages { get; init; } = new Dictionary<string, SidecarPage>(StringComparer.Ordinal);
 

@@ -39,9 +39,10 @@ public sealed record GenerateOrchestratorOptions
 
 /// <summary>
 /// The production <see cref="IGenerateOrchestrator"/>. Phases: preflight, plan, then for render-only the PNG files and
-/// pages.json; otherwise create the notebook, every section, every page, the hierarchy per section and every hyperlink
-/// first (page IDs must exist before any content embeds them), then write each page as its render arrives from the
-/// parallel pipeline on this one thread, the Contents page, the sidecar, SyncHierarchy and NavigateTo the cover.
+/// pages.json; otherwise create the notebook, every section (each section group once, before its first section), every
+/// page, the hierarchy per section and every hyperlink first (page IDs must exist before any content embeds them), then
+/// write each page as its render arrives from the parallel pipeline on this one thread, the Contents page, the sidecar,
+/// SyncHierarchy and NavigateTo the cover.
 /// Cancellation is checked between pages; on cancel the partial notebook is closed and its folder deleted. Expected
 /// failures never throw: the result names the phase, the page and the HRESULT or message with the PRD exit code.
 /// </summary>
@@ -197,10 +198,19 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         NotebookHandle nb = writer.CreateNotebook(folder, plan.Name);
         state.Notebook = nb;
 
+        // A section group is created once, at the position of its first section, and holds every section that names it.
         Dictionary<string, SectionHandle> sections = new(StringComparer.Ordinal);
+        Dictionary<string, SectionGroupHandle> groups = new(StringComparer.Ordinal);
         foreach (SectionSpec section in plan.Sections)
         {
-            sections[section.Name] = writer.CreateSection(nb, section);
+            SectionGroupHandle? group = null;
+            if (!string.IsNullOrWhiteSpace(section.GroupName) && !groups.TryGetValue(section.GroupName, out group))
+            {
+                group = writer.CreateSectionGroup(nb, section.GroupName);
+                groups[section.GroupName] = group;
+            }
+
+            sections[section.Name] = writer.CreateSection(nb, section, group);
             ct.ThrowIfCancellationRequested();
         }
 

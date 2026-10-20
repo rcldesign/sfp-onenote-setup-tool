@@ -9,9 +9,10 @@ namespace Sfp.OneNote.Writer;
 
 /// <summary>
 /// The production <see cref="INotebookWriter"/> over the OneNote COM wrapper, following the PRD call sequence:
-/// OpenHierarchy for the notebook and each section (in plan order, so the tabs read left to right), CreateNewPage for
-/// every page, UpdateHierarchy per section for names, order, levels and color, GetHyperlinkToObject for links, then
-/// UpdatePageContent per page. Every COM call goes through <see cref="IOneNoteApp"/>, which owns the thread and the retry rule.
+/// OpenHierarchy for the notebook and each section (in plan order, so the tabs read left to right; a section group is a
+/// cftFolder OpenHierarchy and its sections are opened inside its folder), CreateNewPage for every page, UpdateHierarchy
+/// per section for names, order, levels and color, GetHyperlinkToObject for links, then UpdatePageContent per page.
+/// Every COM call goes through <see cref="IOneNoteApp"/>, which owns the thread and the retry rule.
 /// </summary>
 public sealed class ComNotebookWriter : INotebookWriter
 {
@@ -53,7 +54,13 @@ public sealed class ComNotebookWriter : INotebookWriter
         return handle;
     }
 
-    public SectionHandle CreateSection(NotebookHandle nb, SectionSpec s)
+    public SectionHandle CreateSection(NotebookHandle nb, SectionSpec s) => CreateSection(nb, s, null);
+
+    /// <summary>
+    /// OpenHierarchy cftSection on "{name}.one" in the notebook folder relative to the notebook, or in the group's folder
+    /// relative to the group when <paramref name="group"/> is given, so the section lands inside the group.
+    /// </summary>
+    public SectionHandle CreateSection(NotebookHandle nb, SectionSpec s, SectionGroupHandle? group)
     {
         ArgumentNullException.ThrowIfNull(nb);
         ArgumentNullException.ThrowIfNull(s);
@@ -63,9 +70,9 @@ public sealed class ComNotebookWriter : INotebookWriter
             _log.Warning("Section name {Original} holds characters OneNote refuses; using {Sanitized}", s.Name, name);
         }
 
-        string path = Path.Combine(nb.Path, name + ".one");
-        string id = _app.OpenHierarchy(path, nb.Id, CreateFileType.Section);
-        SectionHandle handle = new(id, name, nb) { ColorHex = s.ColorHex };
+        string path = Path.Combine(group?.Path ?? nb.Path, name + ".one");
+        string id = _app.OpenHierarchy(path, group?.Id ?? nb.Id, CreateFileType.Section);
+        SectionHandle handle = new(id, name, nb) { ColorHex = s.ColorHex, Group = group };
         if (!string.IsNullOrWhiteSpace(s.ColorHex))
         {
             // The section is empty at this point, so a one:Section element without pages drops nothing.
@@ -73,6 +80,23 @@ public sealed class ComNotebookWriter : INotebookWriter
         }
 
         return handle;
+    }
+
+    /// <summary>OpenHierarchy cftFolder on the group's folder inside the notebook folder, relative to the notebook.</summary>
+    public SectionGroupHandle CreateSectionGroup(NotebookHandle nb, string name)
+    {
+        ArgumentNullException.ThrowIfNull(nb);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        string sanitized = NotebookNames.SanitizeSectionName(name);
+        if (!string.Equals(sanitized, name, StringComparison.Ordinal))
+        {
+            _log.Warning("Section group name {Original} holds characters OneNote refuses; using {Sanitized}", name, sanitized);
+        }
+
+        string path = Path.Combine(nb.Path, sanitized);
+        string id = _app.OpenHierarchy(path, nb.Id, CreateFileType.Folder);
+        _log.Information("Section group {Name} created at {Path} ({Id})", sanitized, path, id);
+        return new SectionGroupHandle(id, sanitized, path);
     }
 
     public PageHandle CreatePage(SectionHandle s, PageSpec p)

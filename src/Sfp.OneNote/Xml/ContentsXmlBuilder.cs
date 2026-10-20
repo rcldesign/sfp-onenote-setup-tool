@@ -14,11 +14,17 @@ public sealed record ContentsPageEntry(string Title, string Href, int Level);
 /// <param name="Name">Visible text, the section name.</param>
 /// <param name="Href">onenote: URL to the section.</param>
 /// <param name="Pages">The section's pages in order.</param>
-public sealed record ContentsSectionEntry(string Name, string Href, IReadOnlyList<ContentsPageEntry> Pages);
+public sealed record ContentsSectionEntry(string Name, string Href, IReadOnlyList<ContentsPageEntry> Pages)
+{
+    /// <summary>The section group that holds the section ("Weeks" with --group-weeks), or null for a top-level section.</summary>
+    public string? GroupName { get; init; }
+}
 
 /// <summary>
 /// Builds the native Contents page: one outline at the manifest contentsOutline position holding a link per section,
-/// its page links nested under it, and week subpages nested one level deeper, per the PRD appendix.
+/// its page links nested under it, and week subpages nested one level deeper, per the PRD appendix. Sections inside a
+/// section group are listed under a plain-text heading with the group's name, placed where the group's first section
+/// would be, so the outline has the same shape as the notebook's tabs.
 /// </summary>
 public static class ContentsXmlBuilder
 {
@@ -27,6 +33,7 @@ public static class ContentsXmlBuilder
     {
         XNamespace one = options.OneNote.SchemaNamespace;
         XElement children = new(one + "OEChildren");
+        Dictionary<string, XElement> groups = new(StringComparer.Ordinal);
         foreach (ContentsSectionEntry section in sections)
         {
             XElement sectionOe = LinkOe(one, section.Name, section.Href);
@@ -58,7 +65,7 @@ public static class ContentsXmlBuilder
                 sectionOe.Add(pageChildren);
             }
 
-            children.Add(sectionOe);
+            GroupChildren(one, children, groups, section.GroupName).Add(sectionOe);
         }
 
         return new XElement(
@@ -81,6 +88,29 @@ public static class ContentsXmlBuilder
         XElement root = PageXmlBuilder.Frame(pageId, page, options);
         root.Add(OutlineElement(sections, options));
         return OneNoteXml.Serialize(root);
+    }
+
+    /// <summary>
+    /// Where a section line goes: the top-level list for a section without a group, else the list under its group's
+    /// heading, which is added (as plain text) the first time the group is met.
+    /// </summary>
+    private static XElement GroupChildren(XNamespace one, XElement topLevel, Dictionary<string, XElement> groups, string? groupName)
+    {
+        if (string.IsNullOrWhiteSpace(groupName))
+        {
+            return topLevel;
+        }
+
+        if (!groups.TryGetValue(groupName, out XElement? nested))
+        {
+            nested = new XElement(one + "OEChildren");
+            XElement heading = LinkOe(one, groupName, "");
+            heading.Add(nested);
+            topLevel.Add(heading);
+            groups[groupName] = nested;
+        }
+
+        return nested;
     }
 
     private static XElement LinkOe(XNamespace one, string text, string href)
