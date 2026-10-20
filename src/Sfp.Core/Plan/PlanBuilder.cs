@@ -364,7 +364,8 @@ public sealed class PlanBuilder : IPlanBuilder
                 {
                     throw new ManifestException(
                         $"The notebook template produces page key '{page.Key}' twice (in sections '{sectionOf[page.Key]}' and '{section.Name}'); "
-                        + "a page type that is not repeated per week, objective, month or Notes name can appear only once.");
+                        + "every page needs its own key, so a template must not repeat a page (a cover inside an eachWeek section, for example) "
+                        + "or produce a page that another template already produces.");
                 }
             }
         }
