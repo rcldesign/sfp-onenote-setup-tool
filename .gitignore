@@ -27,3 +27,6 @@ tools/spike/scratch/
 # The planner PDF is the owner's licensed copy and is never committed.
 *.pdf
 !tests/**/fixtures/*.pdf
+
+# Claude Code worktrees used by parallel agents
+.claude/worktrees/
