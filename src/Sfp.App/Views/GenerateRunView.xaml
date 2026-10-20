@@ -27,10 +27,11 @@
       <TextBlock Style="{StaticResource WarningText}" Text="{Binding WarningsText}" />
     </StackPanel>
 
-    <!-- Cancelled -->
+    <!-- Cancelled: a partial notebook that could not be deleted is named in the warnings below the line. -->
     <StackPanel Visibility="{Binding ShowCancelled, Converter={StaticResource BoolToVisibility}}">
       <TextBlock Style="{StaticResource SectionHeading}" Text="Cancelled" />
       <TextBlock Text="{Binding SummaryText}" TextWrapping="Wrap" />
+      <TextBlock Style="{StaticResource WarningText}" Text="{Binding WarningsText}" />
     </StackPanel>
 
     <!-- Failure -->

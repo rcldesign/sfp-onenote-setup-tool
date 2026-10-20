@@ -249,8 +249,20 @@ public sealed class FakeGenerateOrchestrator : IGenerateOrchestrator
 
     public Exception? Throw { get; set; }
 
-    /// <summary>When true the run waits for cancellation and then returns a cancelled result.</summary>
+    /// <summary>When true the run waits for cancellation and then returns <see cref="CancelledResult"/>.</summary>
     public bool WaitForCancel { get; set; }
+
+    /// <summary>What a cancelled run returns.</summary>
+    public GenerateResult CancelledResult { get; set; } = new() { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, PagesRendered = 10, PagesWritten = 3 };
+
+    /// <summary>Reported after the cancel was seen (the page in flight finishing, then the Cancelled phase).</summary>
+    public List<GenerateProgress> ProgressAfterCancel { get; } = new();
+
+    /// <summary>When set, a cancelled run waits here before returning, as the real one does while it deletes the partial notebook.</summary>
+    public ManualResetEventSlim? AfterCancelGate { get; set; }
+
+    /// <summary>True once the run saw the cancellation.</summary>
+    public bool SawCancel { get; private set; }
 
     /// <summary>Called inside Run, on the worker thread, before anything else.</summary>
     public Action? OnRun { get; set; }
@@ -275,7 +287,14 @@ public sealed class FakeGenerateOrchestrator : IGenerateOrchestrator
         if (WaitForCancel)
         {
             cancellationToken.WaitHandle.WaitOne();
-            return new GenerateResult { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, PagesRendered = 10, PagesWritten = 3 };
+            SawCancel = true;
+            foreach (GenerateProgress p in ProgressAfterCancel)
+            {
+                progress?.Report(p);
+            }
+
+            AfterCancelGate?.Wait();
+            return CancelledResult;
         }
 
         return Result;

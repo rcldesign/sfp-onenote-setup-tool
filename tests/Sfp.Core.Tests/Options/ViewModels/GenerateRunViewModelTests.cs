@@ -1,4 +1,5 @@
 using Sfp.App.ViewModels.Generate;
+using Sfp.Core.Options;
 using Sfp.OneNote.Generate;
 using Sfp.TestSupport;
 
@@ -201,6 +202,113 @@ public class GenerateRunViewModelTests
         run.ShowFailure.Should().BeFalse();
         run.SummaryText.Should().Be("Cancelled after 10 pages rendered and 3 written; the partial notebook was deleted.");
         run.CancelCommand.CanExecute(null).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Once_writing_has_started_render_reports_no_longer_move_the_phase_line()
+    {
+        _h.Generator.ProgressToReport.AddRange(new[]
+        {
+            new GenerateProgress(GeneratePhase.CreatingNotebook, 144, 144, "Notes"),
+            new GenerateProgress(GeneratePhase.WritingPages, 0, 143, null),
+            new GenerateProgress(GeneratePhase.Rendering, 4, 143, "Mon Jan 4"),
+            new GenerateProgress(GeneratePhase.WritingPages, 1, 143, "Cover"),
+            new GenerateProgress(GeneratePhase.Rendering, 5, 143, "Tue Jan 5"),
+            new GenerateProgress(GeneratePhase.WritingPages, 2, 143, "Setup"),
+            new GenerateProgress(GeneratePhase.BuildingContents, 0, 0, null),
+        });
+        List<string> phases = new();
+        using GenerateRunViewModel run = _h.NewRun();
+        run.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(run.PhaseText))
+            {
+                phases.Add(run.PhaseText);
+            }
+        };
+
+        await run.StartAsync(Request());
+
+        phases.Should().Equal(
+            new[] { "Starting", "Creating notebook (144 of 144)", "Writing pages (0 of 143)", "Writing pages (1 of 143)", "Writing pages (2 of 143)", "Building contents", "Done" },
+            "the renderers run ahead of the writer on other threads; the line follows the writer");
+    }
+
+    [Fact]
+    public async Task The_cancelling_line_stays_until_the_run_has_stopped()
+    {
+        _h.Generator.WaitForCancel = true;
+        _h.Generator.ProgressAfterCancel.Add(new GenerateProgress(GeneratePhase.WritingPages, 7, 143, "Thu Jan 7"));
+        _h.Generator.ProgressAfterCancel.Add(new GenerateProgress(GeneratePhase.Cancelled, 0, 0, "Cancelled"));
+        List<string> phases = new();
+        using GenerateRunViewModel run = _h.NewRun();
+        run.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(run.PhaseText))
+            {
+                phases.Add(run.PhaseText);
+            }
+        };
+
+        Task running = run.StartAsync(Request());
+        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        run.CancelCommand.Execute(null);
+        await running;
+
+        phases.Should().Equal(new[] { "Starting", GenerateRunViewModel.CancellingText, "Cancelled" }, "the page in flight finishing does not replace the Cancelling line");
+    }
+
+    [Fact]
+    public async Task The_cancelled_view_names_the_pages_reported_and_says_deleted_only_when_the_deletion_worked()
+    {
+        // The orchestrator's cancelled result carries no page counts; the view takes them from the progress reports.
+        string warning = GenerateMessages.PartialNotebookNotDeleted(@"D:\Notebooks\SFP Q1 2027", "The process cannot access the file 'Week 01.one' because it is being used by another process.");
+        _h.Generator.WaitForCancel = true;
+        _h.Generator.ProgressToReport.Add(new GenerateProgress(GeneratePhase.Rendering, 12, 143, "Thu Jan 7"));
+        _h.Generator.ProgressToReport.Add(new GenerateProgress(GeneratePhase.WritingPages, 5, 143, "Fri Jan 1"));
+        _h.Generator.CancelledResult = new GenerateResult
+        {
+            Success = false,
+            Cancelled = true,
+            ExitCode = 0,
+            Phase = GeneratePhase.Cancelled,
+            NotebookName = "SFP Q1 2027",
+            Warnings = new[] { warning },
+        };
+        using GenerateRunViewModel run = _h.NewRun();
+
+        Task running = run.StartAsync(Request());
+        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        run.CancelCommand.Execute(null);
+        await running;
+
+        run.ShowCancelled.Should().BeTrue();
+        run.SummaryText.Should().Be("Cancelled after 12 pages rendered and 5 written; the partial notebook could not be deleted (see the note below).");
+        run.WarningsText.Should().Be(warning, "the cancelled panel shows the deletion failure");
+
+        _h.Generator.CancelledResult = _h.Generator.CancelledResult with { Warnings = Array.Empty<string>() };
+        running = run.StartAsync(Request());
+        SpinWait.SpinUntil(() => _h.Generator.Runs == 2, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        run.CancelCommand.Execute(null);
+        await running;
+
+        run.SummaryText.Should().Be("Cancelled after 12 pages rendered and 5 written; the partial notebook was deleted.");
+        run.WarningsText.Should().BeNull();
+    }
+
+    [Fact]
+    public void Cancelled_text_is_built_from_the_result()
+    {
+        GenerateResult cancelled = new() { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, NotebookName = "SFP Q1 2027" };
+        string notDeleted = GenerateMessages.PartialNotebookNotDeleted(@"D:\Notebooks\SFP Q1 2027", "Access to the path is denied.");
+
+        GenerateRunViewModel.CancelledTextFor(cancelled, 3, 1).Should().Be("Cancelled after 3 pages rendered and 1 written; the partial notebook was deleted.");
+        GenerateRunViewModel.CancelledTextFor(cancelled with { Warnings = new[] { "Font 'Bookman Old Style' is not installed.", notDeleted } }, 3, 1)
+            .Should().Be("Cancelled after 3 pages rendered and 1 written; the partial notebook could not be deleted (see the note below).");
+        GenerateRunViewModel.CancelledTextFor(cancelled with { NotebookName = null }, 0, 0)
+            .Should().Be("Cancelled before the notebook was created; nothing was written.");
+        GenerateRunViewModel.CancelledTextFor(cancelled, 0, 0)
+            .Should().Be("Cancelled after 0 pages rendered and 0 written; the partial notebook was deleted.", "the notebook existed, so it was there to delete");
     }
 
     [Fact]
