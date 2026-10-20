@@ -265,6 +265,22 @@ public class PageXmlBuilderTests
         PageXmlBuilder.PageDateTime(new DateOnly(2027, 3, 31), options).Should().Be("2027-03-31T07:00:00+02:00");
     }
 
+    [Theory]
+    [InlineData("R&D", "R&amp;D")]
+    [InlineData("<Ideas>", "&lt;Ideas&gt;")]
+    [InlineData("Q&A ]]> <notes>", "Q&amp;A ]]&gt; &lt;notes&gt;")]
+    [InlineData("Mon Jan 4", "Mon Jan 4")]
+    public void The_title_is_html_escaped_inside_its_cdata_and_reads_back_as_typed(string title, string html)
+    {
+        string xml = PageXmlBuilder.Build(MonJan4.PageId, MonJan4.Page(title), MonJan4.Art(Array.Empty<ResolvedAnchor>()), Array.Empty<ResolvedAnchor>(), MonJan4.Options(M));
+
+        SchemaValidator.AssertValid(xml);
+        string raw = XElement.Parse(xml).Element(One + "Title")!.Element(One + "OE")!.Element(One + "T")!.Value;
+        raw.Should().Be(html, "one:T holds HTML, so the title is escaped like anchor text");
+        PageXmlParser.PlainText(raw).Should().Be(title);
+        PageXmlParser.Parse(xml).Title.Should().Be(title);
+    }
+
     [Fact]
     public void Title_and_anchor_text_with_ampersand_and_cdata_terminator_survive_a_round_trip_and_validate()
     {
@@ -277,7 +293,7 @@ public class PageXmlBuilderTests
 
         SchemaValidator.AssertValid(xml);
         XElement page = XElement.Parse(xml);
-        page.Element(One + "Title")!.Element(One + "OE")!.Element(One + "T")!.Value.Should().Be(title);
+        PageXmlParser.PlainText(page.Element(One + "Title")!.Element(One + "OE")!.Element(One + "T")!.Value).Should().Be(title);
         string html = page.Elements(One + "Outline").ElementAt(1).Element(One + "OEChildren")!.Element(One + "OE")!.Element(One + "T")!.Value;
         html.Should().Contain(">a &amp; b ]]&gt; c</span>", "anchor text is HTML-escaped inside the CDATA");
         html.Should().Contain("&amp;section-id=", "the href's ampersands are HTML-escaped");

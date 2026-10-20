@@ -45,7 +45,9 @@ public static class PageXmlBuilder
 
     /// <summary>
     /// The page without content: one:Page with ID, lang and dateTime, the sfp.key meta, PageSettings and the Title.
-    /// The Contents page builder adds its native outline to this.
+    /// The title's one:T holds HTML like every one:T, so the title is HTML-escaped inside the CDATA (an ampersand or an
+    /// angle bracket becomes an entity) and OneNote shows it as typed. The Contents page builder adds its native outline
+    /// to this.
     /// </summary>
     public static XElement Frame(string pageId, PageSpec page, PageXmlOptions options)
     {
@@ -65,7 +67,7 @@ public static class PageXmlBuilder
         root.Add(PageSettings(one, options));
         if (!options.HideTitle)
         {
-            root.Add(new XElement(one + "Title", new XElement(one + "OE", new XElement(one + "T", new XCData(page.Title)))));
+            root.Add(new XElement(one + "Title", new XElement(one + "OE", new XElement(one + "T", new XCData(WebUtility.HtmlEncode(page.Title))))));
         }
 
         return root;
