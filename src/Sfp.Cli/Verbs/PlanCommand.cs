@@ -32,8 +32,8 @@ public sealed record PlanRequest(
 /// sfp2onenote plan --start 2027-01 [--name NAME] [--notes A B C] [--include-out-of-quarter-days] [--group-weeks]
 /// [--no-links] [--json] [--manifest user.json] [--templates DIR]: prints the notebook plan as an indented tree
 /// (section, then pages indented by level with title, key, PDF page and date, then a link summary) or as JSON with
-/// the <see cref="PlanJson"/> schema. Touches nothing: no OneNote, no PDF, no log file. The integrator adds the
-/// command to Program.cs with <see cref="Build"/>.
+/// the <see cref="PlanJson"/> schema. Touches nothing: no OneNote, no PDF, no log file. Program.cs adds the command
+/// with <see cref="Build"/>.
 /// </summary>
 public static class PlanCommand
 {

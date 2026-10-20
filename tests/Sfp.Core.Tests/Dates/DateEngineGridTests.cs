@@ -143,22 +143,31 @@ public class DateEngineGridTests
         grid.Cells.Count(c => c.InMonth).Should().Be(31);
     }
 
+    /// <summary>Every month the reference quarters cover, each once (the February 2027 and December 2026 starts overlap Q1 2027).</summary>
     public static TheoryData<int, int> MonthsOfReferenceQuarters
     {
         get
         {
             var data = new TheoryData<int, int>();
             var engine = new DateEngine();
-            foreach ((int year, int month) in new[] { (2027, 1), (2024, 4), (2026, 10), (2024, 1), (2027, 2), (2026, 12) })
+            IEnumerable<(int Year, int Month)> months = new[] { (2027, 1), (2024, 4), (2026, 10), (2024, 1), (2027, 2), (2026, 12) }
+                .SelectMany(start => engine.Build(new QuarterSpec(start.Item1, start.Item2)).Months)
+                .Distinct();
+            foreach ((int y, int m) in months)
             {
-                foreach ((int y, int m) in engine.Build(new QuarterSpec(year, month)).Months)
-                {
-                    data.Add(y, m);
-                }
+                data.Add(y, m);
             }
 
             return data;
         }
+    }
+
+    [Fact]
+    public void The_reference_month_data_has_no_duplicate_rows()
+    {
+        List<(int, int)> rows = MonthsOfReferenceQuarters.Select(row => ((int)row[0], (int)row[1])).ToList();
+
+        rows.Should().OnlyHaveUniqueItems().And.HaveCount(13, "six reference quarters cover 13 distinct months");
     }
 
     [Theory]

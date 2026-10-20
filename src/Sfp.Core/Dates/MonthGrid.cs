@@ -12,7 +12,11 @@ public sealed record MonthGrid(int Year, int Month, IReadOnlyList<IReadOnlyList<
     /// <summary>All cells, row-major.</summary>
     public IEnumerable<DayCell> Cells => Rows.SelectMany(r => r);
 
-    /// <summary>True when the month needed a sixth row and its overflow days were stacked or dropped.</summary>
+    /// <summary>
+    /// True when the month needed a sixth row and its overflow days were stacked into row 5
+    /// (<see cref="SixthRowMode.Stack"/>). Always false for a <see cref="SixthRowMode.Drop"/> grid, where the overflow
+    /// days are left off and no cell records them.
+    /// </summary>
     public bool HasOverflow => Cells.Any(c => c.StackedDay is not null);
 }
 
