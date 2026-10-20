@@ -1,10 +1,12 @@
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
+using Sfp.Core.Options;
 using Sfp.Core.Plan;
 using Sfp.OneNote;
 using Sfp.OneNote.Com;
 using Sfp.Refresh.Orchestration;
 using Sfp.Refresh.Tests.Support;
+using Sfp.Refresh.Writer;
 
 namespace Sfp.Refresh.Tests.Orchestration;
 
@@ -123,6 +125,29 @@ public class SidecarRecoveryTests
         rebuilt.SectionGroups.Should().Equal(new Dictionary<string, string> { ["Weeks"] = "{weeks}" });
         rebuilt.Sections.Should().BeEquivalentTo(nb.Sidecar.Sections);
         Recovery(nb).Rebuild(nb.Handle, flat, null, "1.2.3").Sidecar.SectionGroups.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_stale_sidecar_keeps_its_window_and_the_rebuild_refinds_calendar_rows_with_it()
+    {
+        TimeBlockWindow generated = new(8, 18);
+        FakeNotebook nb = FakeNotebook.Generate(window: generated);
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+        AnchorWrite write = new(
+            new PlannedChange(tueJan5, "timeBlockEvent:9", null, "9:00 Staff meeting", ChangeKind.Create, false, null),
+            nb.Catalog.Slot(nb.Plan.Page(tueJan5), "timeBlockEvent:9"),
+            null);
+        new AnchorWriter(nb.App, nb.Options, new CapturingLog().Logger).Write(nb.PageIds[tueJan5], nb.Read(tueJan5), new[] { write })
+            .Created.Should().ContainKey("timeBlockEvent:9");
+        string newNotebookId = nb.App.RenumberIds(nb.NotebookId);
+
+        RecoveryResult result = Recovery(nb).Recover(new NotebookHandle(newNotebookId, nb.NotebookPath, nb.Plan.Name), nb.Sidecar, "1.2.3");
+
+        result.Rebuilt.Should().BeTrue();
+        result.Sidecar.TimeBlocks.Should().Be(generated);
+        result.Sidecar.Pages[tueJan5.Value].Anchors.Should().ContainKey("timeBlockEvent:9", "the line is re-found on the 9 row of the 8 to 18 column the pages show");
+        Recovery(nb).Recover(new NotebookHandle(newNotebookId, nb.NotebookPath, nb.Plan.Name), null, "1.2.3").Sidecar.TimeBlocks
+            .Should().BeNull("without a previous sidecar the window the pages were generated with is unknown");
     }
 
     [Fact]

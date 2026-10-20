@@ -12,13 +12,28 @@ using Sfp.Refresh.Writer;
 
 namespace Sfp.Refresh.Orchestration;
 
+/// <summary>Where the Time Blocks window of a Refresh run came from.</summary>
+public enum TimeBlockWindowSource
+{
+    /// <summary>The sidecar: the window the daily pages were generated with.</summary>
+    Sidecar,
+
+    /// <summary>The Setup page, because the sidecar records no window (it was written before the window was recorded).</summary>
+    SetupPage,
+
+    /// <summary>The default window, because neither the sidecar nor the Setup page gives a valid one.</summary>
+    Default,
+}
+
 /// <summary>
 /// The production <see cref="IRefreshOrchestrator"/>: opens the notebook, recovers the sidecar, reads Setup (with the
 /// annual fallback), plans propagation and, when asked, the calendar changes (sources from Setup plus the bundled
-/// holidays, placement through the engine, previous texts read from the tool-owned outlines, freeze and diff with the
-/// sidecar's FrozenThrough), then either lists every change (dry run, nothing written) or writes them page by page
-/// through the anchor writer, updates the sidecar (anchors, LastRefresh, FrozenThrough), syncs and fills the summary.
-/// Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every calendar source failed.
+/// holidays, placement through the engine in the Time Blocks window the pages were generated with (the sidecar's, else
+/// the Setup page's, see <see cref="CalendarWindow"/>), previous texts read from the tool-owned outlines, freeze and
+/// diff with the sidecar's FrozenThrough), then either lists every change (dry run, nothing written) or writes them
+/// page by page through the anchor writer, updates the sidecar (anchors, LastRefresh, FrozenThrough), syncs and fills
+/// the summary. Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every calendar
+/// source failed.
 /// </summary>
 public sealed class RefreshOrchestrator : IRefreshOrchestrator
 {
@@ -112,9 +127,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         SetupValues values = services.SetupReader.Read(setupXml, manifest);
         values = SetupReader.ApplyFallback(values, AnnualPageFallback.FromSidecar(manifest, pages.Read, sidecar));
-        TimeBlockWindow window = values.TimeBlockWindow is (int start, int end) && new TimeBlockWindow(start, end).IsValid
-            ? new TimeBlockWindow(start, end)
-            : TimeBlockWindow.Default;
+        TimeBlockWindow window = ChooseWindow(sidecar, values);
         SlotCatalog catalog = new(manifest, services.Dates, quarter, window);
 
         progress?.Report("Planning propagation");
@@ -192,6 +205,52 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         services.App.SyncHierarchy(opened.Notebook.Id);
         services.Log.Information("Refresh done: {Pages} pages touched, {Values} values, {Events} event slots, {Skipped} skipped", summary.PagesTouched, summary.ValuesWritten, summary.EventsWritten, summary.Skipped);
         return new RefreshResult { Success = !allSourcesFailed, ExitCode = exitCode, Summary = summary, Elapsed = clock.Elapsed, LogPath = services.LogPath };
+    }
+
+    /// <summary>
+    /// The window calendar events are placed with. It must be the one the daily pages were generated with, because their
+    /// Time Blocks rows are baked art: the sidecar's when it records a valid one, else the window typed on the Setup page
+    /// (sidecars written before the window was recorded), else the default.
+    /// </summary>
+    public static (TimeBlockWindow Window, TimeBlockWindowSource Source) CalendarWindow(Sidecar sidecar, SetupValues values)
+    {
+        ArgumentNullException.ThrowIfNull(sidecar);
+        ArgumentNullException.ThrowIfNull(values);
+        if (sidecar.TimeBlocks is { IsValid: true } recorded)
+        {
+            return (recorded, TimeBlockWindowSource.Sidecar);
+        }
+
+        if (values.TimeBlockWindow is (int start, int end) && new TimeBlockWindow(start, end).IsValid)
+        {
+            return (new TimeBlockWindow(start, end), TimeBlockWindowSource.SetupPage);
+        }
+
+        return (TimeBlockWindow.Default, TimeBlockWindowSource.Default);
+    }
+
+    /// <summary><see cref="CalendarWindow"/>, logging which window was used and why.</summary>
+    private TimeBlockWindow ChooseWindow(Sidecar sidecar, SetupValues values)
+    {
+        (TimeBlockWindow window, TimeBlockWindowSource source) = CalendarWindow(sidecar, values);
+        if (sidecar.TimeBlocks is { IsValid: false } invalid)
+        {
+            services.Log.Warning("The sidecar's time-block window {Start} to {End} is not valid and was ignored", invalid.StartHour, invalid.EndHour);
+        }
+
+        string from = source switch
+        {
+            TimeBlockWindowSource.Sidecar => "the sidecar (the window the pages were generated with)",
+            TimeBlockWindowSource.SetupPage => "the Setup page (the sidecar records no window)",
+            _ => "the default (neither the sidecar nor the Setup page gives one)",
+        };
+        services.Log.Information("Time-block window {Start} to {End} from {Source:l}", window.StartHour, window.EndHour, from);
+        if (source == TimeBlockWindowSource.Sidecar && values.TimeBlockWindow is (int start, int end) && (start, end) != (window.StartHour, window.EndHour))
+        {
+            services.Log.Information("The Setup page asks for {Start} to {End}; the pages keep their window until the next Generate", start, end);
+        }
+
+        return window;
     }
 
     /// <summary>Writes the unblocked changes page by page; inked values are skipped unless confirmed; the first OneNote failure stops the run with the page named.</summary>

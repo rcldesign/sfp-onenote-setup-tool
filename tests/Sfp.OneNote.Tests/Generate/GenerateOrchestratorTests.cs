@@ -203,7 +203,12 @@ public class GenerateOrchestratorTests
         sidecar.Pages["day:2027-01-04"].Anchors.Should().NotContainKey("objectiveLegend", "no empty propagated objects are recorded");
         sidecar.Pages["contents"].Anchors.Should().BeEmpty();
         sidecar.Generated.Should().Be(Now);
+        sidecar.TimeBlocks.Should().Be(TimeBlockWindow.Default);
         JsonSchemaLite.AssertValid(File.ReadAllText(SidecarTests.SchemaPath), File.ReadAllText(result.SidecarPath!));
+
+        Harness windowed = new();
+        GenerateResult custom = windowed.Run(windowed.Request(windowed.Options() with { TimeBlocks = new TimeBlockWindow(8, 18) }));
+        new SidecarStore().Load(custom.SidecarPath!)!.TimeBlocks.Should().Be(new TimeBlockWindow(8, 18), "the run's window is what the daily pages show");
     }
 
     [Fact]

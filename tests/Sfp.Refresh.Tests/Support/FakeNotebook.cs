@@ -60,16 +60,20 @@ public sealed class FakeNotebook
 
     public NotebookHandle Handle => new(NotebookId, NotebookPath, Plan.Name);
 
-    /// <summary>Generates the Q1 2027 notebook (or another quarter) into a fresh fake app.</summary>
-    public static FakeNotebook Generate(QuarterSpec? start = null, string? folder = null, FakeOneNoteApp? app = null, Manifest? manifest = null)
+    /// <summary>
+    /// Generates the Q1 2027 notebook (or another quarter) into a fresh fake app. With <paramref name="window"/> the daily
+    /// pages are taken to have that Time Blocks window and the sidecar records it, as a current Generate does; without it
+    /// the pages have the default window and the sidecar records none, as a file written before the window was recorded.
+    /// </summary>
+    public static FakeNotebook Generate(QuarterSpec? start = null, string? folder = null, FakeOneNoteApp? app = null, Manifest? manifest = null, TimeBlockWindow? window = null)
     {
         Manifest m = manifest ?? RefreshManifest.Shipped;
         QuarterSpec spec = start ?? new QuarterSpec(2027, 1);
         DateEngine dates = new();
         Quarter quarter = dates.Build(spec);
-        GenerateOptions generate = new() { Start = spec };
+        GenerateOptions generate = new() { Start = spec, TimeBlocks = window ?? TimeBlockWindow.Default };
         NotebookPlan plan = new PlanBuilder(dates).Build(m, quarter, generate);
-        SlotCatalog catalog = new(m, dates, quarter, TimeBlockWindow.Default);
+        SlotCatalog catalog = new(m, dates, quarter, generate.TimeBlocks);
         PageXmlOptions options = PageXmlOptions.From(m, generate, m.Font.Family, TimeZoneInfo.Utc);
         FakeOneNoteApp target = app ?? new FakeOneNoteApp();
         string notebooksFolder = folder ?? Path.Combine("C:", "Notebooks");
@@ -131,6 +135,7 @@ public sealed class FakeNotebook
             Sections = sectionIds,
             Pages = records,
             Generated = GeneratedAt,
+            TimeBlocks = window,
         };
         return new FakeNotebook(target, m, plan, catalog, options, notebookId, notebooksFolder, sidecar, pageIds);
     }

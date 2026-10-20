@@ -57,8 +57,36 @@ public class SidecarTests
         sidecar.Pages["cover"].Anchors.Should().BeEmpty();
         sidecar.Generated.Should().Be(Now);
         sidecar.PreviousNotebook.Should().Be("/out/SFP Q4 2026");
+        sidecar.TimeBlocks.Should().Be(TimeBlockWindow.Default, "the window the daily pages were generated with");
         sidecar.LastRefresh.Should().BeNull();
         sidecar.FrozenThrough.Should().BeNull();
+    }
+
+    [Fact]
+    public void The_time_block_window_of_the_run_is_recorded_validates_and_loads_back()
+    {
+        NotebookPlan plan = TestPlans.Small();
+        FakeNotebookWriter writer = new();
+        NotebookHandle nb = writer.CreateNotebook("/out", plan.Name);
+        Dictionary<string, SectionHandle> sections = plan.Sections.ToDictionary(s => s.Name, s => writer.CreateSection(nb, s), StringComparer.Ordinal);
+        Dictionary<PageKey, PageHandle> pages = plan.Pages.ToDictionary(p => p.Key, p => writer.CreatePage(sections[plan.SectionOf(p.Key).Name], p));
+        GenerateRequest request = new(new GenerateOptions { Start = new QuarterSpec(2027, 1), TimeBlocks = new TimeBlockWindow(8, 18) }, M, TestPaths.TemplatesDir, false, null);
+
+        Sidecar sidecar = SidecarBuilder.Build(request, plan, nb, sections, pages, new Dictionary<PageKey, IReadOnlyDictionary<string, string>>(), "1.0.0", Now);
+
+        sidecar.TimeBlocks.Should().Be(new TimeBlockWindow(8, 18));
+        SidecarStore store = new();
+        string path = store.PathFor(Path.Combine(TestPaths.NewTempDir("sidecar-window"), plan.Name));
+        store.Save(path, sidecar);
+        string json = File.ReadAllText(path);
+        JsonSchemaLite.AssertValid(File.ReadAllText(SchemaPath), json);
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement window = doc.RootElement.GetProperty("timeBlocks");
+        window.GetProperty("startHour").GetInt32().Should().Be(8);
+        window.GetProperty("endHour").GetInt32().Should().Be(18);
+        store.Load(path)!.TimeBlocks.Should().Be(new TimeBlockWindow(8, 18));
+        JsonSchemaLite.Validate(File.ReadAllText(SchemaPath), json.Replace("\"endHour\": 18", "\"endHour\": 25", StringComparison.Ordinal))
+            .Should().Contain(p => p.Contains("endHour", StringComparison.Ordinal), "the schema bounds the hours");
     }
 
     [Fact]
@@ -129,7 +157,7 @@ public class SidecarTests
     }
 
     [Fact]
-    public void A_sidecar_written_before_section_groups_loads_with_an_empty_group_map()
+    public void A_sidecar_written_before_section_groups_and_the_window_were_recorded_loads_with_none()
     {
         (Sidecar sidecar, _) = Build();
         SidecarStore store = new();
@@ -137,11 +165,13 @@ public class SidecarTests
         store.Save(path, sidecar);
         JsonObject node = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
         node.Remove("sectionGroups").Should().BeTrue();
+        node.Remove("timeBlocks").Should().BeTrue();
         File.WriteAllText(path, node.ToJsonString());
 
         Sidecar loaded = store.Load(path)!;
 
         loaded.SectionGroups.Should().BeEmpty();
+        loaded.TimeBlocks.Should().BeNull("Refresh then falls back to the Setup page's window");
         loaded.Sections.Should().Equal(sidecar.Sections);
         JsonSchemaLite.AssertValid(File.ReadAllText(SchemaPath), File.ReadAllText(path));
     }

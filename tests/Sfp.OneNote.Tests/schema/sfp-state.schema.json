@@ -43,9 +43,22 @@
     "generated": { "type": "string", "format": "date-time" },
     "lastRefresh": { "type": "string", "format": "date-time" },
     "frozenThrough": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
-    "previousNotebook": { "type": "string" }
+    "previousNotebook": { "type": "string" },
+    "timeBlocks": { "$ref": "#/definitions/timeBlockWindow" }
   },
   "definitions": {
+    "timeBlockWindow": {
+      "description": "The Time Blocks window the daily pages were generated with: first row hour and the hour after the last row, 24-hour clock. Absent in files written before it was recorded.",
+      "type": "object",
+      "required": [ "startHour", "endHour" ],
+      "additionalProperties": false,
+      "properties": {
+        "startHour": { "type": "integer", "minimum": 0, "maximum": 23 },
+        "endHour": { "type": "integer", "minimum": 1, "maximum": 24 },
+        "rowCount": { "type": "integer", "minimum": 1, "maximum": 24 },
+        "isValid": { "type": "boolean" }
+      }
+    },
     "quarterSpec": {
       "type": "object",
       "required": [ "year", "month" ],

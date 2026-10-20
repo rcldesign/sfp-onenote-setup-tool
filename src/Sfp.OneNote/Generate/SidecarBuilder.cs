@@ -5,7 +5,7 @@ namespace Sfp.OneNote.Generate;
 /// <summary>Builds the sidecar record after a Generate run from the handles and anchor IDs the run collected.</summary>
 public static class SidecarBuilder
 {
-    /// <param name="request">The run's request (manifest id and quarter come from it).</param>
+    /// <param name="request">The run's request (manifest id, quarter, previous notebook and Time Blocks window come from it).</param>
     /// <param name="plan">The plan (section names, page keys).</param>
     /// <param name="notebook">The created notebook.</param>
     /// <param name="sections">Section handle per plan section name; a grouped section's handle carries its group, which is recorded under the plan's group name.</param>
@@ -71,6 +71,7 @@ public static class SidecarBuilder
             Pages = pageRecords,
             Generated = generated,
             PreviousNotebook = request.Options.PreviousNotebook,
+            TimeBlocks = request.Options.TimeBlocks,
         };
     }
 }

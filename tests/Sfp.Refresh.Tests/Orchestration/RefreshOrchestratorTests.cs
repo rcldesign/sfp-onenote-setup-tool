@@ -1,5 +1,7 @@
+using Serilog.Events;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
+using Sfp.Core.Options;
 using Sfp.Core.Plan;
 using Sfp.OneNote;
 using Sfp.OneNote.Com;
@@ -34,10 +36,10 @@ public class RefreshOrchestratorTests
 
     private sealed class Harness
     {
-        public Harness(bool saveSidecar = true, ICalendarSourceFactory? calendars = null, bool holidays = false)
+        public Harness(bool saveSidecar = true, ICalendarSourceFactory? calendars = null, bool holidays = false, TimeBlockWindow? window = null)
         {
             Folder = TestPaths.NewTempDir("refresh");
-            Notebook = FakeNotebook.Generate(folder: Folder);
+            Notebook = FakeNotebook.Generate(folder: Folder, window: window);
             Store = new SidecarStore();
             SidecarPath = Store.PathFor(Notebook.NotebookPath);
             if (saveSidecar)
@@ -314,6 +316,88 @@ public class RefreshOrchestratorTests
         PageKey thuJan7 = PageKey.Day(new DateOnly(2027, 1, 7));
         h.Notebook.Read(thuJan7).Outlines.Should().Contain(o => o.PlainText == "10:00 Review");
         FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(1);
+    }
+
+    [Fact]
+    public void Calendar_rows_follow_the_window_the_sidecar_records_and_an_event_before_it_goes_in_the_first_row()
+    {
+        StubCalendarFactory calendars = new();
+        TimeBlockWindow generated = new(8, 18);
+        Harness h = new(calendars: calendars, window: generated);
+        h.Type(S.CalendarSources[0], "Work | https://example.com/cal.ics");
+        h.Type(S.TimeBlockStart, "6");
+        h.Type(S.TimeBlockEnd, "22");
+        DateTime nine = new(2027, 1, 5, 9, 0, 0);
+        DateTime seven = new(2027, 1, 5, 7, 0, 0);
+        calendars.Events = new[]
+        {
+            new CalendarEvent("m1@2027-01-05T09:00", "Staff meeting", nine, nine.AddHours(1), false, false, false, "Work", null),
+            new CalendarEvent("g1@2027-01-05T07:00", "Gym", seven, seven.AddHours(1), false, false, false, "Work", null),
+        };
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+
+        RefreshResult result = h.Run(Request(calendar: true));
+
+        result.Success.Should().BeTrue(result.Error);
+        Sidecar saved = h.SavedSidecar();
+        saved.TimeBlocks.Should().Be(generated, "Refresh keeps the window the pages were generated with");
+        IReadOnlyDictionary<string, string> anchors = saved.Pages[tueJan5.Value].Anchors;
+        anchors.Should().ContainKeys("timeBlockEvent:9", "timeBlockEvent:8").And.NotContainKey("timeBlockEvent:7", "7 is outside the 8 to 18 window the pages show");
+        PageXml page = h.Notebook.Read(tueJan5);
+        OutlineInfo nineRow = page.Outlines.Single(o => o.ObjectId == anchors["timeBlockEvent:9"]);
+        nineRow.PlainText.Should().Be("9:00 Staff meeting");
+        page.Outlines.Single(o => o.ObjectId == anchors["timeBlockEvent:8"]).PlainText.Should().Be("7:00 Gym", "an event before the window is listed in its first row with its time");
+        SlotCatalog pages = new(M, new DateEngine(), h.Notebook.Plan.Quarter, generated);
+        double rowY = pages.Slot(h.Notebook.Plan.Page(tueJan5), "timeBlockEvent:9")!.Rect.Y + page.SheetOutline!.Y + M.OneNote.AnchorPaddingPt.Y;
+        nineRow.Y.Should().BeApproximately(rowY, 0.01, "the line sits on the 9 row of the 8 to 18 column, not of the Setup page's 6 to 22");
+        h.Log.Messages(LogEventLevel.Information).Should().Contain(m => m.Contains("Time-block window 8 to 18 from the sidecar", StringComparison.Ordinal));
+        h.Log.Messages(LogEventLevel.Information).Should().Contain(m => m.Contains("The Setup page asks for 6 to 22", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_sidecar_without_a_window_places_by_the_setup_page_window_as_before_and_logs_it()
+    {
+        StubCalendarFactory calendars = new();
+        Harness h = new(calendars: calendars);
+        h.Notebook.Sidecar.TimeBlocks.Should().BeNull("a sidecar written before the window was recorded");
+        h.Type(S.CalendarSources[0], "Work | https://example.com/cal.ics");
+        h.Type(S.TimeBlockStart, "8");
+        h.Type(S.TimeBlockEnd, "18");
+        DateTime seven = new(2027, 1, 5, 7, 0, 0);
+        calendars.Events = new[] { new CalendarEvent("g1@2027-01-05T07:00", "Gym", seven, seven.AddHours(1), false, false, false, "Work", null) };
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+
+        RefreshResult result = h.Run(Request(calendar: true));
+
+        result.Success.Should().BeTrue(result.Error);
+        Sidecar saved = h.SavedSidecar();
+        saved.Pages[tueJan5.Value].Anchors.Should().ContainKey("timeBlockEvent:8").And.NotContainKey("timeBlockEvent:7");
+        saved.TimeBlocks.Should().BeNull("Refresh does not invent the window the pages were generated with");
+        h.Log.Messages(LogEventLevel.Information).Should().Contain(m => m.Contains("Time-block window 8 to 18 from the Setup page", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_calendar_window_is_the_sidecars_else_the_setup_pages_else_the_default()
+    {
+        Sidecar recorded = new()
+        {
+            ToolVersion = "1.0.0",
+            ManifestId = M.TemplateId,
+            Quarter = new QuarterSpec(2027, 1),
+            NotebookName = "SFP Q1 2027",
+            NotebookPath = "/notebooks/SFP Q1 2027",
+            NotebookId = "{nb}",
+            TimeBlocks = new TimeBlockWindow(8, 18),
+        };
+        Sidecar old = recorded with { TimeBlocks = null };
+        SetupValues typed = SetupValues.Empty with { TimeBlockWindow = (7, 21) };
+
+        RefreshOrchestrator.CalendarWindow(recorded, typed).Should().Be((new TimeBlockWindow(8, 18), TimeBlockWindowSource.Sidecar));
+        RefreshOrchestrator.CalendarWindow(old, typed).Should().Be((new TimeBlockWindow(7, 21), TimeBlockWindowSource.SetupPage));
+        RefreshOrchestrator.CalendarWindow(recorded with { TimeBlocks = new TimeBlockWindow(20, 4) }, typed)
+            .Should().Be((new TimeBlockWindow(7, 21), TimeBlockWindowSource.SetupPage), "a recorded window that is not valid is ignored");
+        RefreshOrchestrator.CalendarWindow(old, SetupValues.Empty).Should().Be((TimeBlockWindow.Default, TimeBlockWindowSource.Default));
+        RefreshOrchestrator.CalendarWindow(old, SetupValues.Empty with { TimeBlockWindow = (22, 6) }).Should().Be((TimeBlockWindow.Default, TimeBlockWindowSource.Default));
     }
 
     [Fact]
