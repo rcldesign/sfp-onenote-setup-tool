@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Rasterizer, overlay engine, generated pages, fonts. Depends on Sfp.Core only. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sfp.Core/Sfp.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="PDFtoImage" />
+    <PackageReference Include="SkiaSharp" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- WPF window: Generate tab, Refresh tab. No logic in the UI layer; everything goes through the same services the CLI uses. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>sfp2onenote-app</AssemblyName>
+    <RootNamespace>Sfp.App</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sfp.Core/Sfp.Core.csproj" />
+    <ProjectReference Include="../Sfp.Render/Sfp.Render.csproj" />
+    <ProjectReference Include="../Sfp.OneNote/Sfp.OneNote.csproj" />
+    <ProjectReference Include="../Sfp.Refresh/Sfp.Refresh.csproj" />
+    <ProjectReference Include="../Sfp.Cli/Sfp.Cli.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Sinks.File" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(TemplatesDir)**/*" Link="templates/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

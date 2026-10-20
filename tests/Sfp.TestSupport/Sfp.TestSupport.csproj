@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Helpers shared by every test project: repository paths, the SFP_PDF_PATH skip rule, the synthetic template PDF. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsTestProject>false</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Sfp.Core/Sfp.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="PdfPig" />
+    <!-- Bitmap crops and PNG encoding for the OCR helper. -->
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="Xunit.SkippableFact" />
+  </ItemGroup>
+</Project>

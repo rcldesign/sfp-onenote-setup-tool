@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Sfp.Core/Sfp.Core.csproj" />
+    <ProjectReference Include="../../src/Sfp.Render/Sfp.Render.csproj" />
+    <ProjectReference Include="../Sfp.TestSupport/Sfp.TestSupport.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Verify.Xunit" />
+    <PackageReference Include="Xunit.SkippableFact" />
+    <PackageReference Include="PdfPig" />
+    <PackageReference Include="SkiaSharp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="golden/**/*.sha256" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

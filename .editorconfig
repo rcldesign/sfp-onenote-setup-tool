@@ -1,0 +1,43 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{json,xml,xaml,yml,yaml,props,targets,csproj,sln}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cs]
+dotnet_sort_system_directives_first = true
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_prefer_braces = true:suggestion
+dotnet_style_qualification_for_field = false:suggestion
+csharp_style_var_for_built_in_types = false:silent
+csharp_style_var_when_type_is_apparent = true:silent
+csharp_style_var_elsewhere = true:silent
+
+# Analyzer tuning. Rules that fight the design of a small desktop utility are lowered to suggestions
+# with the reason recorded here; everything else stays at the SDK default and fails the build.
+# CA1303: resource-table localization is not used; every user string is English by design.
+dotnet_diagnostic.CA1303.severity = none
+# CA1848: LoggerMessage delegates are overkill for a tool that logs a few hundred lines per run.
+dotnet_diagnostic.CA1848.severity = none
+# CA1062: nullable reference types already cover argument null checks.
+dotnet_diagnostic.CA1062.severity = none
+# CA1031: top-level handlers in the CLI and app intentionally catch everything to produce an exit code.
+dotnet_diagnostic.CA1031.severity = suggestion
+# CA2007: ConfigureAwait is irrelevant for an app with one UI thread and a CLI.
+dotnet_diagnostic.CA2007.severity = none
+# CA1812: internal classes instantiated by DI or reflection.
+dotnet_diagnostic.CA1812.severity = none
+# CA1515: public types in an executable are fine; tests reference them.
+dotnet_diagnostic.CA1515.severity = none
+# IDE0005 (unused usings) is enforced in build.
+dotnet_diagnostic.IDE0005.severity = warning
