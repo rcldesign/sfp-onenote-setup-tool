@@ -49,11 +49,13 @@ public sealed class PlanBuilder : IPlanBuilder
     };
 
     private readonly IDateEngine _dates;
+    private readonly LinkGraphBuilder _links;
 
     public PlanBuilder(IDateEngine dates)
     {
         ArgumentNullException.ThrowIfNull(dates);
         _dates = dates;
+        _links = new LinkGraphBuilder(dates);
     }
 
     /// <inheritdoc />
@@ -80,7 +82,7 @@ public sealed class PlanBuilder : IPlanBuilder
             }
         }
 
-        return new NotebookPlan(NotebookName(m, q, o), q, sections, Array.Empty<LinkSpec>());
+        return new NotebookPlan(NotebookName(m, q, o), q, sections, _links.Build(m, q, sections, o));
     }
 
     /// <summary>The notebook name: the option override when given, else the manifest name pattern with the quarter tokens ("SFP Q1 2027").</summary>
