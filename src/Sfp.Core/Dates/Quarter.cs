@@ -22,4 +22,18 @@ public sealed record Quarter(DateOnly Start, DateOnly End, int WeekCount, string
 
     /// <summary>True when the date lies inside the quarter.</summary>
     public bool Contains(DateOnly date) => date >= Start && date <= End;
+
+    /// <summary>1-based day index within the quarter (S is day 1, E is day L). Throws <see cref="ArgumentOutOfRangeException"/> for a date outside the quarter.</summary>
+    public int DayOfQuarter(DateOnly date) =>
+        Contains(date)
+            ? date.DayNumber - Start.DayNumber + 1
+            : throw new ArgumentOutOfRangeException(nameof(date), date, OutsideMessage(this));
+
+    /// <summary>The message for a date that is not inside the quarter, with ISO dates.</summary>
+    internal static string OutsideMessage(Quarter q) =>
+        "Date must be inside the quarter "
+        + q.Start.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
+        + " to "
+        + q.End.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
+        + ".";
 }
