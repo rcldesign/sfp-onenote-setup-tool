@@ -1,0 +1,196 @@
+using Sfp.Core.Manifests;
+using Sfp.Core.Plan;
+using Sfp.Render.Pages;
+using Sfp.TestSupport;
+using SkiaSharp;
+
+namespace Sfp.Render.Tests;
+
+/// <summary>M2.8: Setup, scorecard, reviews and Notes pages drawn from manifest.generated on a blank sheet or the reflection art.</summary>
+[Collection(RenderCollection.Name)]
+public sealed class GeneratedPagesTests
+{
+    private readonly RenderFixture f;
+
+    public GeneratedPagesTests(RenderFixture fixture)
+    {
+        f = fixture;
+    }
+
+    private Manifest M => f.Manifest;
+
+    private RectPt HeadingRegion(double width)
+    {
+        HeadingSpec h = M.Generated.Heading;
+        return new RectPt(h.X - 2, h.BaselineY - h.SizePt, width, h.SizePt * 1.3);
+    }
+
+    /// <summary>A box inset by 2 pt so its outline stays out of an OCR crop.</summary>
+    private static RectPt Inside(RectPt box) => new(box.X + 2, box.Y + 2, box.W - 4, box.H - 4);
+
+    [SkippableFact]
+    public void Setup_page_shows_its_heading_labels_and_window_hints()
+    {
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        using SKBitmap sheet = RenderFixture.Decode(f.Render(PageKey.Setup));
+        SetupPageSpec s = M.Generated.Setup;
+
+        RenderFixture.Read(sheet, HeadingRegion(140), paddingPt: 8).Should().BeEquivalentTo("Setup", "the engine sometimes reads the capital S as lower case");
+        LabelSpec objectives = s.Labels.Single(l => l.Text == "Objectives");
+        RenderFixture.Read(sheet, new RectPt(objectives.X - 2, objectives.BaselineY - 14, 120, 19)).Should().Be("Objectives");
+        RenderFixture.Digits(RenderFixture.Read(sheet, Inside(s.TimeBlockStart), paddingPt: 0, layout: OcrLayout.SingleWord)).Should().Be("06");
+        RenderFixture.Digits(RenderFixture.Read(sheet, Inside(s.TimeBlockEnd), paddingPt: 0, layout: OcrLayout.SingleWord)).Should().Be("22");
+    }
+
+    [Fact]
+    public void Setup_page_rules_every_slot_numbers_them_and_has_no_anchors()
+    {
+        RenderedPage page = f.Render(PageKey.Setup);
+        using SKBitmap sheet = RenderFixture.Decode(page);
+        SetupPageSpec s = M.Generated.Setup;
+
+        page.Anchors.Should().BeEmpty("the user fills the Setup page; Refresh reads it");
+        page.WidthPx.Should().Be(3398);
+        foreach (RectPt slot in s.Objectives.Concat(s.StandingGoals).Concat(s.MetricNames).Concat(s.Habits).Concat(s.CalendarSources))
+        {
+            f.HasInk(sheet, new RectPt(slot.CenterX - 1, slot.Bottom - 0.6, 2, 1.2)).Should().BeTrue($"a rule under the slot at {slot}");
+            f.HasInk(sheet, new RectPt(slot.X - 12, slot.Y + 2, 11, slot.H - 4)).Should().BeTrue($"a number left of the slot at {slot}");
+            f.HasInk(sheet, new RectPt(slot.X + 2, slot.Y + 2, slot.W - 4, slot.H - 5)).Should().BeFalse($"the slot at {slot} is empty");
+        }
+
+        SKColor hint = Pixels.Darkest(sheet, new RectPt(s.TimeBlockStart.X + 2, s.TimeBlockStart.Y + 2, s.TimeBlockStart.W - 4, s.TimeBlockStart.H - 4), RenderFixture.Dpi);
+        ((int)hint.Red).Should().BeGreaterThan(f.Ink.Red + 60, "hint digits are at 40% ink");
+        ((int)hint.Red).Should().BeLessThan(f.Background.Red - 40);
+        f.HasInk(sheet, new RectPt(s.TimeBlockStart.X - 0.6, s.TimeBlockStart.CenterY, 1.2, 2)).Should().BeTrue("the window box is outlined");
+    }
+
+    [SkippableFact]
+    public void Scorecard_has_the_heading_the_quarter_column_and_the_week_headers_reserved()
+    {
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        RenderedPage page = f.Render(PageKey.Scorecard);
+        using SKBitmap sheet = RenderFixture.Decode(page);
+        ScorecardPageSpec s = M.Generated.Scorecard;
+
+        RenderFixture.Read(sheet, HeadingRegion(330), paddingPt: 8).Should().Be("Quarter scorecard");
+        RenderFixture.Read(sheet, new RectPt(s.FinalColumnX - 10, s.HeaderBaselineY - 10, s.FinalColumnW + 20, 14)).Should().Be("Quarter");
+
+        IReadOnlyList<AnchorPlacement> weeks = page.Anchors.Where(a => a.Kind == AnchorKind.Link).ToList();
+        weeks.Select(a => a.AnchorId).Should().Equal(Enumerable.Range(1, 14).Select(w => "scorecardWeek:" + w.ToString("00", System.Globalization.CultureInfo.InvariantCulture)));
+        weeks.Select(a => a.Text).Should().Equal(Enumerable.Range(1, 14).Select(w => w.ToString("00", System.Globalization.CultureInfo.InvariantCulture)));
+        weeks[0].X.Should().BeApproximately((float)s.WeekHeader(0).X, 0.01f);
+        weeks[13].X.Should().BeApproximately((float)s.WeekHeader(13).X, 0.01f);
+        weeks.Should().OnlyContain(a => a.Align == M.Links.ScorecardWeek.Align && a.SizePt == (float)M.Links.ScorecardWeek.SizePt);
+        f.HasInk(sheet, new RectPt(s.WeekHeader(3).X + 2, s.WeekHeader(3).Y + 1, s.WeekHeader(3).W - 4, s.WeekHeader(3).H - 2)).Should().BeFalse("week headers are links, not baked");
+
+        IReadOnlyList<AnchorPlacement> rows = page.Anchors.Where(a => a.Kind == AnchorKind.Propagated).ToList();
+        rows.Select(a => a.AnchorId).Should().Equal(Enumerable.Range(1, 8).Select(r => "scorecardRow:" + r));
+        rows[2].Y.Should().BeApproximately((float)s.RowLabel(2).Y, 0.01f);
+
+        for (int row = 0; row <= s.RowCount; row++)
+        {
+            double y = s.FirstRowTop + (s.RowPitch * row);
+            f.HasInk(sheet, new RectPt(s.ColumnX0 + 20, y - 0.6, 2, 1.2)).Should().BeTrue($"row rule {row}");
+        }
+
+        for (int column = 0; column <= 14; column++)
+        {
+            double x = s.ColumnX0 + (s.ColumnPitch * column);
+            f.HasInk(sheet, new RectPt(x - 0.6, s.FirstRowTop + 20, 1.2, 2)).Should().BeTrue($"column rule {column}");
+        }
+    }
+
+    [Fact]
+    public void Q2_2024_scorecard_has_13_week_columns()
+    {
+        Core.Options.GenerateOptions q2 = f.Q1Options with { Start = new Core.Dates.QuarterSpec(2024, 4) };
+        NotebookPlan plan = f.Plan(q2);
+        RenderedPage page = f.Renderer.Render(plan.Page(PageKey.Scorecard), plan, f.Options(q2));
+        page.Anchors.Count(a => a.Kind == AnchorKind.Link).Should().Be(13);
+    }
+
+    [SkippableFact]
+    public void Monthly_review_reuses_the_reflection_art_with_a_new_heading()
+    {
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        RenderedPage page = f.Render(PageKey.MonthlyReview(2027, 1));
+        using SKBitmap sheet = RenderFixture.Decode(page);
+
+        f.Q1Plan.Page(PageKey.MonthlyReview(2027, 1)).PdfPage.Should().Be(M.PageTypes.Weekly.PdfPageFor(13, "reflection"));
+        RenderFixture.Read(sheet, HeadingRegion(300), paddingPt: 8).Should().Be("January Review");
+        RectPt slashes = M.Slots.Date.SlashErase;
+        Pixels.Mean(sheet, new RectPt(slashes.X + 1, slashes.Y + 1, slashes.W - 2, slashes.H - 2), RenderFixture.Dpi).Should().Be(f.Background, "the empty date slot is erased");
+        page.Anchors.Should().BeEmpty("a monthly review reserves nothing");
+    }
+
+    [SkippableFact]
+    public void Quarterly_review_is_retitled_and_reserves_the_scorecard_and_next_quarter_links()
+    {
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        RenderedPage page = f.Render(PageKey.QuarterlyReview);
+        using SKBitmap sheet = RenderFixture.Decode(page);
+
+        RenderFixture.Read(sheet, HeadingRegion(330), paddingPt: 8).Should().Be("Q1 2027 Review");
+        page.Anchors.Select(a => a.AnchorId).Should().Equal("nextQuarter", "quarterReviewScorecard");
+        AnchorPlacement scorecard = page.Anchors.Single(a => a.AnchorId == "quarterReviewScorecard");
+        scorecard.Text.Should().Be("Scorecard ›");
+        scorecard.X.Should().Be((float)M.Links.QuarterReviewScorecard.X);
+        AnchorPlacement next = page.Anchors.Single(a => a.AnchorId == "nextQuarter");
+        next.Kind.Should().Be(AnchorKind.Link);
+        next.Text.Should().BeEmpty("a later Generate with --previous fills it");
+        next.X.Should().Be((float)M.Links.NextQuarter.X);
+        RectPt erased = M.Links.QuarterReviewScorecard.Rect;
+        Pixels.Mean(sheet, new RectPt(erased.X + 1, erased.Y + 1, erased.W - 2, erased.H - 2), RenderFixture.Dpi).Should().Be(f.Background, "the printed label under the scorecard link is erased");
+    }
+
+    [Fact]
+    public void Quarterly_review_with_links_off_reserves_nothing()
+    {
+        f.Render(PageKey.QuarterlyReview, o => o with { Links = false }).Anchors.Should().BeEmpty();
+    }
+
+    [SkippableFact]
+    public void Notes_page_is_a_ruled_sheet_titled_with_its_name()
+    {
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        RenderedPage page = f.Render(PageKey.Notes("Backlog"));
+        using SKBitmap sheet = RenderFixture.Decode(page);
+        NotesPageSpec n = M.Generated.Notes;
+
+        RenderFixture.Read(sheet, HeadingRegion(180), paddingPt: 8).Should().Be("Backlog");
+        int expected = GeneratedPages.NotesRuleCount(n);
+        expected.Should().BeGreaterThan(20);
+        int found = 0;
+        for (double y = n.RulesTop; y <= n.RulesBottom + 0.001; y += n.RulePitch)
+        {
+            if (f.HasInk(sheet, new RectPt(n.RuleX + 200, y - 0.6, 2, 1.2)))
+            {
+                found++;
+            }
+
+            f.HasInk(sheet, new RectPt(n.RuleX + 200, y + 3, 2, n.RulePitch - 6)).Should().BeFalse("nothing between rules");
+        }
+
+        found.Should().Be(expected);
+        f.HasInk(sheet, new RectPt(n.RuleX + 3, n.RulesTop - 0.6, 2, 1.2)).Should().BeTrue("rules start at ruleX");
+        f.HasInk(sheet, new RectPt(n.RuleX - 6, n.RulesTop - 0.6, 4, 1.2)).Should().BeFalse();
+
+        AnchorPlacement contents = page.Anchors.Should().ContainSingle().Subject;
+        contents.AnchorId.Should().Be("notesContents");
+        contents.Text.Should().Be("Contents ›");
+        contents.X.Should().Be((float)M.Links.NotesContents.X);
+    }
+
+    [Fact]
+    public void Generated_pages_are_blank_sheets_of_the_page_size()
+    {
+        foreach (PageKey key in new[] { PageKey.Setup, PageKey.Scorecard, PageKey.Notes("Ideas") })
+        {
+            RenderedPage page = f.Render(key, dpi: 72);
+            page.WidthPx.Should().Be(1112);
+            page.HeightPx.Should().Be(770);
+            using SKBitmap sheet = RenderFixture.Decode(page);
+            Pixels.Dominant(sheet).Should().Be(f.Background);
+        }
+    }
+}
