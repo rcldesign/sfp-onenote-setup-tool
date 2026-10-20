@@ -90,9 +90,14 @@ public static class Ocr
         return TryRead(data.ToArray(), out text, layout);
     }
 
-    /// <summary>A copy of the region of a rendered sheet given in points, grown by a padding in points, clipped to the bitmap.</summary>
+    /// <summary>
+    /// A copy of the region of a rendered sheet given in points, grown by a padding in points, clipped to the bitmap. The
+    /// pixels are read straight from the region (drawing the sheet through a canvas would snapshot the whole sheet, 32 MB
+    /// at 220 DPI, for every crop).
+    /// </summary>
     public static SKBitmap Crop(SKBitmap source, RectPt rectPt, int dpi, double paddingPt = 6)
     {
+        ArgumentNullException.ThrowIfNull(source);
         double scale = dpi / 72.0;
         int left = Math.Clamp((int)Math.Floor((rectPt.X - paddingPt) * scale), 0, source.Width - 1);
         int top = Math.Clamp((int)Math.Floor((rectPt.Y - paddingPt) * scale), 0, source.Height - 1);
@@ -100,10 +105,21 @@ public static class Ocr
         int bottom = Math.Clamp((int)Math.Ceiling((rectPt.Bottom + paddingPt) * scale), top + 1, source.Height);
 
         SKBitmap crop = new(new SKImageInfo(right - left, bottom - top, source.ColorType, source.AlphaType));
-        using SKCanvas canvas = new(crop);
-        canvas.DrawBitmap(source, new SKRect(left, top, right, bottom), new SKRect(0, 0, crop.Width, crop.Height), new SKSamplingOptions(SKFilterMode.Nearest));
-        canvas.Flush();
-        return crop;
+        try
+        {
+            using SKPixmap pixels = source.PeekPixels() ?? throw new InvalidOperationException("The sheet exposes no pixels to crop.");
+            if (!pixels.ReadPixels(crop.Info, crop.GetPixels(), crop.RowBytes, left, top))
+            {
+                throw new InvalidOperationException($"Could not read the {crop.Width}x{crop.Height} px crop at ({left}, {top}).");
+            }
+
+            return crop;
+        }
+        catch
+        {
+            crop.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Collapses runs of whitespace (including line breaks) to one space and trims.</summary>
