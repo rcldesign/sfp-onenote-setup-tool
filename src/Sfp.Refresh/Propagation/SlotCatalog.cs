@@ -87,7 +87,7 @@ public sealed class SlotCatalog
     /// <param name="manifest">Slot and link geometry.</param>
     /// <param name="dates">Month grids and weeks for the calendar pages.</param>
     /// <param name="quarter">The notebook's quarter.</param>
-    /// <param name="window">The time-block window the daily pages were generated with (the Setup value, else the default).</param>
+    /// <param name="window">The time-block window the daily pages were generated with: the sidecar's, else the Setup page's, else the default (see RefreshOrchestrator.CalendarWindow).</param>
     public SlotCatalog(Manifest manifest, IDateEngine dates, Quarter quarter, TimeBlockWindow window)
     {
         ArgumentNullException.ThrowIfNull(manifest);
