@@ -11,4 +11,8 @@
   <ItemGroup>
     <PackageReference Include="Serilog" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The tests drive the internal COM session with a fake target so the scheduler and retry rule run without OneNote. -->
+    <InternalsVisibleTo Include="Sfp.OneNote.Tests" />
+  </ItemGroup>
 </Project>
