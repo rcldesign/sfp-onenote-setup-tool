@@ -4,9 +4,10 @@ using System.Text.Json.Serialization;
 namespace Sfp.Refresh.Calendar;
 
 /// <summary>
-/// Counts consecutive runs in which every calendar source failed, persisted as sfp-refresh-failures.json next to the
-/// sidecar so the count survives between scheduled runs. <see cref="ShouldToast"/> turns on at <see cref="ToastThreshold"/>;
-/// a run that gets any events resets it. Timestamps are passed in; nothing here reads the clock.
+/// Counts consecutive failed Refresh runs, persisted as sfp-refresh-failures.json next to the sidecar so the count
+/// survives between scheduled runs: a run in which every Setup calendar source failed, or one that OneNote failed (exit
+/// 3 or 5). <see cref="ShouldToast"/> turns on at <see cref="ToastThreshold"/>; a run that succeeds resets it (the
+/// orchestrator decides once per run, from how the run ended). Timestamps are passed in; nothing here reads the clock.
 /// </summary>
 public sealed class FailureCounter
 {
@@ -73,7 +74,7 @@ public sealed class FailureCounter
     /// <summary>Loads the counter that lives beside a sidecar file.</summary>
     public static FailureCounter LoadBeside(string sidecarPath) => Load(PathBeside(sidecarPath));
 
-    /// <summary>Records a run in which every source failed.</summary>
+    /// <summary>Records a failed run: every calendar source failed, or OneNote failed.</summary>
     public void RecordTotalFailure(DateTimeOffset when, string? message = null)
     {
         state = state with
@@ -84,7 +85,7 @@ public sealed class FailureCounter
         };
     }
 
-    /// <summary>Records a run that got events from at least one source, clearing the streak.</summary>
+    /// <summary>Records a run that succeeded (for the calendar: got events from at least one source), clearing the streak.</summary>
     public void Reset(DateTimeOffset when)
     {
         state = state with { ConsecutiveTotalFailures = 0, LastSuccess = when, LastMessage = null };

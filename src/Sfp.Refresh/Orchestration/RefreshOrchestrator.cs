@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
@@ -32,8 +33,8 @@ public enum TimeBlockWindowSource
 /// the Setup page's, see <see cref="CalendarWindow"/>), previous texts read from the tool-owned outlines, freeze and
 /// diff with the sidecar's FrozenThrough), then either lists every change (dry run, nothing written) or writes them
 /// page by page through the anchor writer, updates the sidecar (anchors, LastRefresh, FrozenThrough), syncs and fills
-/// the summary. Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every calendar
-/// source failed.
+/// the summary. Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every Setup
+/// calendar source failed. Every real run then updates the failure streak beside the sidecar (see <see cref="TrackStreak"/>).
 /// </summary>
 public sealed class RefreshOrchestrator : IRefreshOrchestrator
 {
@@ -45,6 +46,9 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
     /// <summary>Reason recorded on a change skipped because its value came from ink and the run was not told to write inked values.</summary>
     public const string InkedSkipReason = "The value came from ink and was not confirmed (pass --write-inked or confirm in the app).";
+
+    /// <summary>Title of the toast raised when OneNote made the third real run in a row fail (exit 3 or 5).</summary>
+    public const string RefreshFailureToastTitle = "sfp2onenote: refresh failing";
 
     private readonly RefreshServices services;
 
@@ -59,9 +63,17 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     {
         ArgumentNullException.ThrowIfNull(request);
         Stopwatch clock = Stopwatch.StartNew();
+        RunState state = new();
+        RefreshResult result = RunGuarded(request, progress, cancellationToken, clock, state);
+        TrackStreak(request, state, result);
+        return result;
+    }
+
+    private RefreshResult RunGuarded(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken, Stopwatch clock, RunState state)
+    {
         try
         {
-            return RunCore(request, progress, cancellationToken, clock);
+            return RunCore(request, progress, cancellationToken, clock, state);
         }
         catch (OneNoteUnavailableException ex)
         {
@@ -71,6 +83,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         catch (OperationCanceledException)
         {
             services.Log.Information("Refresh cancelled");
+            state.Cancelled = true;
             return new RefreshResult { Success = false, ExitCode = WriteFailureExitCode, Error = "Cancelled.", Elapsed = clock.Elapsed, LogPath = services.LogPath };
         }
         catch (OneNoteException ex)
@@ -86,18 +99,22 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
     }
 
-    private RefreshResult RunCore(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken, Stopwatch clock)
+    private RefreshResult RunCore(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken, Stopwatch clock, RunState state)
     {
         List<string> warnings = new();
         Manifest manifest = services.Manifest;
 
         progress?.Report("Opening notebook " + request.NotebookName);
         NotebookOpener opener = new(services.App, services.Sidecars, services.Log, services.OpenTimeout, services.Sleep);
-        OpenedNotebook? opened = opener.Open(request.NotebookName, request.NotebooksFolder, services.SearchFolders);
+        (Sidecar? Sidecar, string? Path) found = opener.FindSidecar(request.NotebookName, request.NotebooksFolder, services.SearchFolders);
+        state.SidecarPath = found.Path;
+        OpenedNotebook? opened = opener.Open(request.NotebookName, request.NotebooksFolder, services.SearchFolders, found);
         if (opened is null)
         {
             return Fail(NotFoundExitCode, $"Notebook '{request.NotebookName}' was not found: no sidecar names it, OneNote does not list it and no folder holds it. Generate it first, or pass --folder with the folder that holds it.", clock);
         }
+
+        state.SidecarPath = opened.SidecarPath;
 
         progress?.Report("Checking the sidecar");
         SidecarRecovery recovery = new(services.App, manifest, services.Dates, services.Plans, services.Log);
@@ -139,7 +156,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         if (request.Calendar)
         {
             progress?.Report("Importing calendar events");
-            calendar = PlanCalendar(request, values, sidecar, plan, catalog, pages, opened.SidecarPath, window, warnings);
+            calendar = PlanCalendar(request, values, sidecar, plan, catalog, pages, state, window, warnings);
             if (calendar is not null)
             {
                 changes.AddRange(calendar.Changes);
@@ -381,7 +398,11 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         return new WriteOutcome(outcome, pagesWithAnchors, touched, valuesWritten, eventsWritten, warnings, error);
     }
 
-    /// <summary>Fetches the Setup sources (plus the bundled holidays), places the events and diffs them against what the tool wrote last.</summary>
+    /// <summary>
+    /// Fetches the Setup sources (plus the bundled holidays), places the events and diffs them against what the tool wrote
+    /// last. Whether every source failed (exit 6, the failure streak) is decided by the Setup sources alone: the bundled
+    /// holiday list is local and added by the tool, so it would otherwise keep a dead calendar feed from ever counting.
+    /// </summary>
     private CalendarOutcome? PlanCalendar(
         RefreshRequest request,
         SetupValues values,
@@ -389,7 +410,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         NotebookPlan plan,
         SlotCatalog catalog,
         PageCache pages,
-        string sidecarPath,
+        RunState state,
         TimeBlockWindow window,
         List<string> warnings)
     {
@@ -399,10 +420,11 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             return null;
         }
 
-        List<CalendarSource> sources = values.Sources.ToList();
-        if (services.IncludeBundledHolidays && !sources.Any(s => s.Kind == CalendarSourceKind.Holidays))
+        List<CalendarSource> setupSources = values.Sources.ToList();
+        List<CalendarSource> bundled = new();
+        if (services.IncludeBundledHolidays && !setupSources.Any(s => s.Kind == CalendarSourceKind.Holidays))
         {
-            sources.Add(new CalendarSource("Holidays", CalendarSourceKind.Holidays, HolidayCalendarSource.DefaultListId, null, null));
+            bundled.Add(new CalendarSource("Holidays", CalendarSourceKind.Holidays, HolidayCalendarSource.DefaultListId, null, null));
         }
 
         DateOnly today = request.Today;
@@ -416,15 +438,16 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             return new CalendarOutcome(Array.Empty<PlannedChange>(), frozen, Array.Empty<string>(), false);
         }
 
-        CalendarFetchResult fetched = CalendarImportRunner.Fetch(sources, services.CalendarSources, from, to, services.Log);
-        if (!request.DryRun)
-        {
-            FailureCounter counter = FailureCounter.LoadBeside(sidecarPath);
-            CalendarImportRunner.Track(fetched, counter, services.Notifier ?? new LogOnlyNotifier(services), services.Clock(), services.Log);
-        }
+        CalendarFetchResult setup = CalendarImportRunner.Fetch(setupSources, services.CalendarSources, from, to, services.Log);
+        CalendarFetchResult tool = CalendarImportRunner.Fetch(bundled, services.CalendarSources, from, to, services.Log);
+        CalendarFetchResult fetched = new(
+            setup.Events.Concat(tool.Events).OrderBy(e => e.Start).ThenBy(e => e.Title, StringComparer.Ordinal).ToList(),
+            setup.Failures.Concat(tool.Failures).ToList(),
+            setup.SourceCount + tool.SourceCount);
+        state.SetupFetch = setup;
 
         IReadOnlyList<string> failedSources = fetched.Failures.Select(f => f.Label + ": " + f.Message).ToList();
-        if (fetched.AllSourcesFailed)
+        if (setup.AllSourcesFailed)
         {
             warnings.Add("Every calendar source failed; the events already on the pages were left as they are.");
             return new CalendarOutcome(Array.Empty<PlannedChange>(), sidecar.FrozenThrough ?? frozen, failedSources, true);
@@ -524,6 +547,62 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         return change;
     }
 
+    /// <summary>
+    /// The PRD's "three consecutive failures raise a Windows toast", updated once per real run from how it ended: a run
+    /// that succeeded clears the streak; a run whose every Setup calendar source failed (exit 6) or that OneNote failed
+    /// (exit 3 or 5) adds one, and from the third in a row on each such run raises the toast. Dry runs, cancelled runs, a
+    /// notebook that was not found (exit 2) and runs whose sidecar path never became known leave the streak alone. The
+    /// counter file lives beside the sidecar; failing to update it is logged, never fatal.
+    /// </summary>
+    private void TrackStreak(RefreshRequest request, RunState state, RefreshResult result)
+    {
+        if (request.DryRun || state.Cancelled || state.SidecarPath is null)
+        {
+            return;
+        }
+
+        try
+        {
+            FailureCounter counter = FailureCounter.LoadBeside(state.SidecarPath);
+            ISourceFailureNotifier notifier = services.Notifier ?? new LogOnlyNotifier(services);
+            DateTimeOffset now = services.Clock();
+            switch (result.ExitCode)
+            {
+                case 0:
+                    if (counter.ConsecutiveTotalFailures > 0)
+                    {
+                        services.Log.Information("Refresh succeeded after {Count} failed runs", counter.ConsecutiveTotalFailures);
+                    }
+
+                    counter.Reset(now);
+                    counter.Save();
+                    break;
+                case SourcesUnreachableExitCode when state.SetupFetch is not null:
+                    CalendarImportRunner.Track(state.SetupFetch, counter, notifier, now, services.Log);
+                    break;
+                case OneNoteUnavailableExitCode or WriteFailureExitCode:
+                    counter.RecordTotalFailure(now, result.Error);
+                    counter.Save();
+                    services.Log.Warning("Refresh of {Name} failed ({Streak} runs in a row): {Error}", request.NotebookName, counter.ConsecutiveTotalFailures, result.Error);
+                    if (counter.ShouldToast)
+                    {
+                        notifier.Notify(RefreshFailureToastTitle, string.Format(
+                            CultureInfo.InvariantCulture,
+                            "Refresh of {0} failed {1} runs in a row. Last error: {2}",
+                            request.NotebookName,
+                            counter.ConsecutiveTotalFailures,
+                            result.Error ?? "unknown"));
+                    }
+
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            services.Log.Warning(ex, "The failure counter beside {Path} could not be updated", state.SidecarPath);
+        }
+    }
+
     private RefreshResult Fail(int exitCode, string error, Stopwatch clock) =>
         new() { Success = false, ExitCode = exitCode, Error = error, Elapsed = clock.Elapsed, LogPath = services.LogPath };
 
@@ -532,6 +611,18 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     private static DateOnly Min(DateOnly a, DateOnly b) => a < b ? a : b;
 
     private sealed record CalendarOutcome(IReadOnlyList<PlannedChange> Changes, DateOnly FrozenThrough, IReadOnlyList<string> FailedSources, bool AllSourcesFailed);
+
+    /// <summary>What a run learned along the way that the failure streak needs once it has ended, however it ended.</summary>
+    private sealed class RunState
+    {
+        /// <summary>Where the sidecar is (and the failure counter beside it), once known.</summary>
+        public string? SidecarPath { get; set; }
+
+        /// <summary>The fetch of the Setup calendar sources alone, when the run imported the calendar.</summary>
+        public CalendarFetchResult? SetupFetch { get; set; }
+
+        public bool Cancelled { get; set; }
+    }
 
     private sealed record WriteOutcome(
         List<PlannedChange> Changes,

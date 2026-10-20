@@ -440,6 +440,63 @@ public class RefreshOrchestratorTests
     }
 
     [Fact]
+    public void With_the_bundled_holidays_on_a_dead_setup_source_still_exits_6_and_builds_the_streak()
+    {
+        StubCalendarFactory calendars = new() { Failure = new HttpRequestException("timeout") };
+        Harness h = new(calendars: calendars, holidays: true);
+        h.Type(S.CalendarSources[0], "Work | https://example.com/cal.ics");
+
+        RefreshResult first = h.Run(Request(calendar: true));
+
+        calendars.Created.Select(s => s.Kind).Should().Contain(CalendarSourceKind.Holidays, "the bundled list was read and did not fail");
+        first.Success.Should().BeFalse();
+        first.ExitCode.Should().Be(6, "every source on the Setup page failed; the tool's own holiday list does not count");
+        first.Summary!.FailedSources.Should().ContainSingle().Which.Should().StartWith("Work: timeout");
+        first.Summary.Changes.Should().BeEmpty("a feed outage never removes what was written");
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(1);
+        h.Notifier.Notifications.Should().BeEmpty();
+
+        h.Run(Request(calendar: true, today: Jan4.AddDays(1))).ExitCode.Should().Be(6);
+        h.Run(Request(calendar: true, today: Jan4.AddDays(2))).ExitCode.Should().Be(6);
+
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(3);
+        (string title, string message) = h.Notifier.Notifications.Should().ContainSingle().Which;
+        title.Should().Be(CalendarImportRunner.ToastTitle);
+        message.Should().Be("All 1 calendar source(s) failed 3 runs in a row. Last error: Work: timeout");
+    }
+
+    [Fact]
+    public void OneNote_failures_of_real_runs_count_toward_the_toast_and_a_success_resets_the_streak()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        h.App.UpdatePageContentFailure = _ => new OneNoteException("UpdatePageContent", OneNoteHResults.PageReadOnly, "The page is read-only.", null);
+
+        for (int run = 1; run <= 3; run++)
+        {
+            RefreshResult failed = h.Run(Request());
+            failed.ExitCode.Should().Be(5);
+            FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(run);
+            h.Notifier.Notifications.Should().HaveCount(run < 3 ? 0 : 1, "the toast comes with the third failure in a row");
+        }
+
+        (string title, string message) = h.Notifier.Notifications.Single();
+        title.Should().Be(RefreshOrchestrator.RefreshFailureToastTitle);
+        message.Should().StartWith("Refresh of SFP Q1 2027 failed 3 runs in a row. Last error: Writing page").And.Contain("read-only");
+
+        h.Run(Request(dryRun: true));
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(3, "a dry run writes nothing and leaves the streak alone");
+
+        h.App.UpdatePageContentFailure = null;
+        h.Run(Request()).ExitCode.Should().Be(0);
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(0, "a run that succeeds clears the streak");
+
+        h.App.Unavailable = new OneNoteUnavailableException();
+        h.Run(Request()).ExitCode.Should().Be(3);
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(1, "OneNote unavailable counts too once the sidecar path is known from the folders");
+    }
+
+    [Fact]
     public void Calendar_without_a_source_factory_warns_and_the_bundled_holidays_are_added_when_asked()
     {
         Harness none = new();
