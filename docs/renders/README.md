@@ -20,8 +20,10 @@ dotnet run --project src/Sfp.Cli -- render-only --pdf "docs/SFP No Dates.pdf" --
 ```
 
 The verb validates the PDF against the manifest (exit code 2 with every mismatch listed when it does not fit), builds
-the plan, and writes one PNG per page with an image plus `pages.json`. It takes a few seconds on a four-core machine.
-Options:
+the plan, and writes one PNG per page with an image plus `pages.json`. It takes a few seconds on a four-core machine,
+rendering at most four pages at once with at most 256 MB of rasterized pages cached, so a Q1 2027 run peaks under
+1 GB at 220 and at 300 DPI. A page that fails to render stops the run with exit code 4 and `Render failed:` and the
+reason on stderr; no `pages.json` is written. Options:
 
 | Option | Meaning | Default |
 | --- | --- | --- |
@@ -64,9 +66,10 @@ native text object there), so an empty spot on a PNG is usually a link slot. Che
 
 - `day-2027-01-04.png` (Mon Jan 4, week 2): the date slashes at the top right are erased (the date is a link); the
   strip reads 14 down to 1 with 13 circled and the same air between every pair of neighbors, so "14 13 12 11 10"
-  read apart (two-digit numbers take a wider pitch than one-digit ones, as on the printed 13-number strip);
+  read apart (two-digit numbers take a wider pitch than one-digit ones, as on the printed 13-number strip); the
+  white 13 sits in the middle of its 13.4 pt disc, clear of the rim (the disc is centered on the number's ink);
   "Day 4 of 90 · Week 2 of 14" sits under the date at 60% ink; the Time Blocks column is rebuilt for the window with
-  9 pt labels (6, 7 ... 12, 1 ... 9) on the hour rules.
+  9 pt labels on every hour rule, the closing one included (6, 7 ... 12, 1 ... 10 for 06:00 to 22:00).
 - `week-02-overview.png`: the date is baked (01 / 04 / 27, the Monday); the seven day-name header cells are erased
   (they become links); the column rules between them survive.
 - `week-14-reflection.png`: the Sunday date 04 / 04 / 27 is baked; the printed "Progress %" is erased (it becomes
@@ -77,7 +80,13 @@ native text object there), so an empty spot on a PNG is usually a link slot. Che
 - `cover.png`: "Q1 2027" and "Jan 1, 2027 to Mar 31, 2027" centered under the logo.
 - `setup.png`: the heading, six labels, numbered ruled slots, the window boxes with hint digits at 40% ink, and the
   hint lines.
-- `scorecard.png`: eight ruled rows, 14 (or 13) week columns whose headers are link slots, a final Quarter column.
+- `scorecard.png`: eight ruled rows, 14 (or 13) week columns whose headers are link slots, and the Quarter column
+  right after the last week column (one rule between them, no blank column for a 13-week quarter).
+- With `--no-links` the text that would be a link is baked where the page needs it to read: the daily date, the
+  calendar day numbers, the scorecard's week numbers 01 to 14 in the header cells, "Objective n" in each Annual
+  Objectives block's label cell (so `annual-1.png` names objectives 1 to 4 and `annual-2.png` 5 to 8), and
+  "Objective n" beside each Objective Details heading; the overview keeps its printed day names. Pure navigation
+  (previous and next, the calendar's "Week NN" labels, the review, scorecard and contents links) is left out.
 - `review-2027-01.png` and `review-quarter.png`: the week-13 reflection art retitled "January Review" and
   "Q1 2027 Review", the empty date slot erased; the quarterly review also has "Progress %" erased for its scorecard
   link.
