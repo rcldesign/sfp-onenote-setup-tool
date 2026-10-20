@@ -153,6 +153,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         state.Enter(GeneratePhase.Validating);
         Quarter quarter = _dates.Build(o.Start);
         NotebookPlan plan = _plans.Build(request.Manifest, quarter, o);
+        state.PlanPages = plan.Pages.Count();
         List<PageSpec> renderable = plan.Pages.Where(p => p.Type != PageType.Contents).ToList();
         _log.Information("Plan {Name}: {Sections} sections, {Pages} pages ({Renderable} rendered), {Links} links", plan.Name, plan.Sections.Count, plan.Pages.Count(), renderable.Count, plan.Links.Count);
         state.Cancellation.ThrowIfCancellationRequested();
@@ -488,6 +489,17 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         string message;
         switch (ex)
         {
+            case Exception when DiskSpace.IsDiskFull(ex):
+                // PRD error table, "Disk full": the space the run needs; exit 4 while rendering, 5 while writing.
+                if (ex is RenderFailedException failedRender)
+                {
+                    phase = GeneratePhase.Rendering;
+                    page = failedRender.Page ?? page;
+                }
+
+                exitCode = phase == GeneratePhase.Rendering ? RenderError : WriteError;
+                message = DiskFullMessage(state);
+                break;
             case RenderFailedException render:
                 phase = GeneratePhase.Rendering;
                 page = render.Page ?? page;
@@ -551,6 +563,21 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             Warnings = state.Warnings,
             SidecarPath = state.SidecarPath,
         };
+    }
+
+    /// <summary>
+    /// The disk-full sentence for the run's output folder (the render folder for render-only, else the notebook's parent
+    /// folder), sized for the plan's pages at the run's DPI.
+    /// </summary>
+    private static string DiskFullMessage(RunState state)
+    {
+        GenerateOptions o = state.Request.Options;
+        string folder = state.Request.RenderOnly
+            ? state.Request.RenderOutputDir ?? ""
+            : string.IsNullOrWhiteSpace(o.OutputFolder) ? OutputFolders.Default() : o.OutputFolder;
+        return state.PlanPages is int pages
+            ? DiskSpace.Message(folder, pages, o.Dpi)
+            : string.Format(CultureInfo.InvariantCulture, "Not enough disk space in {0}.", folder);
     }
 
     /// <summary>Saves the rejected XML as {page key}.xml beside the log (or in the temp folder when there is no log) and returns the path.</summary>
@@ -682,6 +709,9 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
 
         /// <summary>The preflight found no open notebook (half of the PRD's not-signed-in test).</summary>
         public bool NoOpenNotebooks { get; set; }
+
+        /// <summary>Pages in the plan once it is built (for the disk-full estimate), else null.</summary>
+        public int? PlanPages { get; set; }
 
         public List<string> Warnings { get; } = new();
 

@@ -833,6 +833,84 @@ public class GenerateOrchestratorTests
     }
 
     [Fact]
+    public void A_full_disk_while_writing_exits_5_with_the_space_the_run_needs()
+    {
+        Harness h = new() { Parallelism = 1, Capacity = 1 };
+        h.Writer.WritePageFailure = key => key == TestPlans.Tuesday ? new IOException("There is not enough space on the disk.", DiskSpace.ErrorDiskFull) : null;
+
+        GenerateResult result = h.Run();
+
+        result.ExitCode.Should().Be(5);
+        result.Phase.Should().Be(GeneratePhase.WritingPages);
+        result.FailedPage.Should().Be("Tue Jan 5");
+        result.Error.Should().Be("Writing pages, page Tue Jan 5: Not enough disk space in " + h.OutputFolder + ": about 2 MB is needed for 7 pages at 220 DPI.");
+    }
+
+    [Fact]
+    public void A_full_disk_reported_by_onenote_while_writing_exits_5_with_the_space_needed()
+    {
+        Harness h = new() { Parallelism = 1, Capacity = 1 };
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        app.UpdatePageContentFailure = xml => xml.Contains("content=\"setup\"", StringComparison.Ordinal)
+            ? OneNoteHResults.Map("UpdatePageContent", new COMException("There is not enough space on the disk.", DiskSpace.ErrorDiskFull), xml)
+            : null;
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run();
+
+        result.ExitCode.Should().Be(5);
+        result.FailedPage.Should().Be("Setup");
+        result.Error.Should().EndWith(DiskSpace.Message(h.OutputFolder, 7, 220));
+    }
+
+    [Fact]
+    public void A_full_disk_while_rendering_exits_4_with_the_space_needed_and_writes_nothing()
+    {
+        Harness h = new();
+        h.Renderer.Failure = page => page.Key == PageKey.Cover ? new IOException("No space left on device", DiskSpace.Enospc) : null;
+
+        GenerateResult result = h.Run(h.Request(h.Options() with { Dpi = 300 }));
+
+        result.ExitCode.Should().Be(4);
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.FailedPage.Should().Be("Cover");
+        result.Error.Should().Be("Rendering pages, page Cover: " + DiskSpace.Message(h.OutputFolder, 7, 300));
+        h.Writer.Written.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_full_disk_during_render_only_exits_4_naming_the_render_folder()
+    {
+        Harness h = new();
+        string dir = Path.Combine(h.Root, "png");
+        h.Renderer.Failure = page => page.Key == TestPlans.Monday ? new IOException("There is not enough space on the disk.", DiskSpace.ErrorHandleDiskFull) : null;
+
+        GenerateResult result = h.Run(h.Request(h.Options() with { Dpi = 144 }, dir));
+
+        result.ExitCode.Should().Be(4);
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.Error.Should().EndWith("Not enough disk space in " + dir + ": about 1 MB is needed for 7 pages at 144 DPI.");
+    }
+
+    [SkippableFact]
+    public void A_real_enospc_while_render_only_writes_a_png_exits_4_with_the_space_needed()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux() && File.Exists("/dev/full"), "needs Linux and /dev/full, where every write fails with ENOSPC");
+        Harness h = new() { Parallelism = 1 };
+        string dir = Path.Combine(h.Root, "png");
+        Directory.CreateDirectory(dir);
+        File.CreateSymbolicLink(Path.Combine(dir, RenderOnlyRunner.FileNameFor(PageKey.Cover)), "/dev/full");
+
+        GenerateResult result = h.Run(h.Request(h.Options(), dir));
+
+        result.ExitCode.Should().Be(4, result.Error);
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.Error.Should().EndWith(DiskSpace.Message(dir, 7, 220), "the OS reports ENOSPC as IOException.HResult 28");
+        File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse();
+    }
+
+    [Fact]
     public void Phase_labels_and_folder_size_helpers()
     {
         GenerateOrchestrator.PhaseLabel(GeneratePhase.WritingPages).Should().Be("Writing pages");
