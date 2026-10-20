@@ -1,7 +1,6 @@
 namespace Sfp.Render.Tests;
 
-/// <summary>Placeholder until M2.1 adds the rasterizer tests.</summary>
-public class PlaceholderTests
+public class RenderOptionsTests
 {
     [Fact]
     public void Render_options_scale_is_dpi_over_72()
