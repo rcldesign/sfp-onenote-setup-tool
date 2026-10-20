@@ -139,7 +139,14 @@ public sealed class FakeNotebook
     public PageXml Read(PageKey key) => PageXmlParser.Parse(App.GetPageContent(PageIds[key], PageInfo.Basic));
 
     /// <summary>Adds a user outline (typed text) at a sheet rectangle of a page, the way a note typed in OneNote arrives.</summary>
-    public void TypeUserText(PageKey key, RectPt sheetRect, string text)
+    public void TypeUserText(PageKey key, RectPt sheetRect, string text) =>
+        AddUserOutline(key, sheetRect, one => new System.Xml.Linq.XElement(one + "T", new System.Xml.Linq.XCData(text)));
+
+    /// <summary>Adds a user outline holding recognized ink words at a sheet rectangle of a page.</summary>
+    public void InkUserText(PageKey key, RectPt sheetRect, params string[] words) =>
+        AddUserOutline(key, sheetRect, one => words.Select(w => new System.Xml.Linq.XElement(one + "InkWord", new System.Xml.Linq.XAttribute("recognizedText", w))).ToArray());
+
+    private void AddUserOutline(PageKey key, RectPt sheetRect, Func<System.Xml.Linq.XNamespace, object> paragraphContent)
     {
         PageXml page = Read(key);
         System.Xml.Linq.XElement root = page.Document.Root!;
@@ -150,7 +157,7 @@ public sealed class FakeNotebook
             one + "Outline",
             OneNoteXml.Position(one, sheetRect.X + ox + 2, sheetRect.Y + oy + 2, 2),
             OneNoteXml.Size(one, sheetRect.W - 4, 13, false),
-            new System.Xml.Linq.XElement(one + "OEChildren", new System.Xml.Linq.XElement(one + "OE", new System.Xml.Linq.XElement(one + "T", new System.Xml.Linq.XCData(text))))));
+            new System.Xml.Linq.XElement(one + "OEChildren", new System.Xml.Linq.XElement(one + "OE", paragraphContent(one)))));
         App.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
     }
 }
