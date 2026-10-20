@@ -1,0 +1,316 @@
+{
+  "$comment": "Everything the tool knows about the SFP quarterly planner PDF. Coordinates are PDF points, top-left origin, page 1112 x 770. Rectangles are {x, y, w, h}. The renderer owns the DPI conversion. Slot geometry was calibrated against the real PDF with sfp-measure (see docs/decisions.md, Calibration); the onenote block still carries the M0 assumptions.",
+  "templateId": "sfp-quarterly-2023",
+  "pageSizePt": [1112, 770],
+  "pageCount": 132,
+  "font": {
+    "family": "Bookman Old Style",
+    "fallback": "TeX Gyre Bonum",
+    "fallbackFiles": {
+      "regular": "fonts/texgyrebonum-regular.otf",
+      "bold": "fonts/texgyrebonum-bold.otf",
+      "italic": "fonts/texgyrebonum-italic.otf",
+      "boldItalic": "fonts/texgyrebonum-bolditalic.otf"
+    }
+  },
+  "colors": {
+    "background": "#DED4C8",
+    "ink": "#1E1E20",
+    "dayBox": "#F2E7DD",
+    "sectionTints": ["#F0E6D8", "#E4D6C4", "#D8C8B2"],
+    "greyedInkOpacity": 0.4,
+    "prefillInkOpacity": 0.6,
+    "eventInkOpacity": 0.7,
+    "counterInkOpacity": 0.6
+  },
+  "pageTypes": {
+    "cover": { "pdfPages": [1], "probe": "Structured Focus Planner" },
+    "contents": { "pdfPages": [2], "probe": "Contents" },
+    "annual": { "pdfPages": [3, 4], "probe": "Annual Objectives" },
+    "objective": { "pdfPages": [5, 6, 7, 8, 9, 10, 11, 12], "probe": "Objective Details" },
+    "calendar": { "pdfPages": [13, 14, 15], "probe": "Monthly Calendar" },
+    "weekly": {
+      "firstPdfPage": 16,
+      "stride": 9,
+      "count": 13,
+      "pages": ["overview", "mon", "tue", "wed", "thu", "fri", "sat", "sun", "reflection"],
+      "probes": {
+        "overview": "Weekly Overview",
+        "mon": "Monday",
+        "tue": "Tuesday",
+        "wed": "Wednesday",
+        "thu": "Thursday",
+        "fri": "Friday",
+        "sat": "Saturday",
+        "sun": "Sunday",
+        "reflection": "Weekly Reflection"
+      }
+    }
+  },
+  "slots": {
+    "date": {
+      "appliesTo": ["overview", "mon", "tue", "wed", "thu", "fri", "sat", "sun", "reflection"],
+      "linkOn": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      "sizePt": 15,
+      "baselineY": 34.5,
+      "fields": [
+        { "name": "month", "align": "right", "x": 895 },
+        { "name": "day", "align": "center", "x": 935 },
+        { "name": "year", "align": "left", "x": 976 }
+      ],
+      "slashes": [
+        { "x1": 900.2, "y1": 41.0, "x2": 918.8, "y2": 16.9 },
+        { "x1": 952.1, "y1": 41.0, "x2": 970.7, "y2": 16.9 }
+      ],
+      "slashErase": { "x": 896, "y": 12, "w": 80, "h": 34 }
+    },
+    "weeksRemaining": {
+      "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      "erase": { "x": 530, "y": 28, "w": 198, "h": 16 },
+      "sizePt": 10,
+      "baselineY": 39.4,
+      "numberX": [537.3, 556.1, 574.9, 593.7, 615.7, 628.3, 640.9, 653.5, 666.1, 678.7, 691.3, 703.9, 716.5],
+      "numberSpan": { "from": 537, "to": 723 },
+      "circleDiameterPt": 12,
+      "circleCenterY": 36,
+      "labelRect": { "x": 386.1, "y": 30.0, "w": 141.6, "h": 11.7 }
+    },
+    "monthName": { "appliesTo": ["calendar"], "x": 785, "baselineY": 47, "sizePt": 15, "rule": { "x1": 779.5, "x2": 1082.7, "y": 50.9 } },
+    "dayGrid": {
+      "appliesTo": ["calendar"],
+      "sizePt": 10,
+      "columnX": [28.8, 149.9, 271.1, 392.2, 513.3, 634.5, 755.6],
+      "rowY": [113.2, 233.2, 353.1, 473.0, 592.9],
+      "boxPt": 30.3,
+      "columnPitch": 121.1,
+      "rowPitch": 120,
+      "dayHeaderY": 92,
+      "trackerStrip": { "boxPt": 15, "count": 16, "heightFromCellBottom": 15 },
+      "notesColumn": { "x": 900.6, "right": 1082.7, "lines": 26 }
+    },
+    "coverLabel": { "appliesTo": ["cover"], "x": 556, "baselines": [470, 492], "sizePt": 15, "align": "center" },
+    "dayCounter": { "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "rightX": 1000, "baselineY": 54, "sizePt": 8, "format": "Day {dayOfQuarter} of {quarterLength} · Week {week} of {weekCount}" },
+    "objectiveLegend": {
+      "appliesTo": ["overview", "mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      "rect": { "x": 230, "y": 49, "w": 640, "h": 13 },
+      "sizePt": 8,
+      "maxWidthPt": 640,
+      "separator": "  "
+    },
+    "standingGoals": {
+      "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      "sizePt": 10,
+      "rows": [
+        { "x": 111, "y": 92, "w": 234, "h": 16 },
+        { "x": 111, "y": 164, "w": 234, "h": 16 },
+        { "x": 111, "y": 236, "w": 234, "h": 16 }
+      ]
+    },
+    "metricNames": {
+      "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      "sizePt": 10,
+      "cells": [
+        { "x": 33, "y": 694, "w": 248, "h": 16 },
+        { "x": 392, "y": 694, "w": 245, "h": 16 },
+        { "x": 749, "y": 694, "w": 244, "h": 16 }
+      ]
+    },
+    "habitLegend": { "appliesTo": ["calendar"], "rect": { "x": 28.8, "y": 718, "w": 850, "h": 40 }, "sizePt": 8, "columns": 8, "lineHeight": 11 },
+    "timeBlocks": {
+      "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+      "erase": { "x": 870, "y": 88, "w": 214, "h": 560 },
+      "columnX": 897.9,
+      "columnRight": 1082.7,
+      "top": 95.5,
+      "bottom": 638,
+      "labelRightX": 894,
+      "labelSizePt": 9,
+      "printedLabelSizePt": 7,
+      "printedRows": 25,
+      "printedPitch": 22.6,
+      "ruleWidthPt": 0.5,
+      "eventTextX": 900,
+      "eventSizePt": 8,
+      "eventLineHeight": 10
+    },
+    "allDayBand": { "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "rect": { "x": 560, "y": 49, "w": 300, "h": 13 }, "sizePt": 8 },
+    "overviewDayColumns": {
+      "appliesTo": ["overview"],
+      "x0": 29.5,
+      "pitch": 150.43,
+      "columnW": 150.43,
+      "top": 339,
+      "bottom": 724.9,
+      "sizePt": 9,
+      "lineHeight": 11,
+      "maxLines": 18
+    },
+    "calendarEventLines": { "appliesTo": ["calendar"], "offsetBelowBox": 2, "xOffset": 2, "w": 117, "sizePt": 8, "lineHeight": 10, "maxLines": 2 }
+  },
+  "links": {
+    "annualObjective": { "x": 33, "blockTops": [61.0, 234.2, 407.5, 580.5], "yOffset": 29, "w": 62, "h": 14, "sizePt": 10, "align": "left", "erase": false },
+    "objectiveBack": { "x": 300, "y": 24, "w": 120, "h": 20, "sizePt": 15, "align": "left", "erase": false },
+    "calendarDay": { "yOffset": 8, "w": 30.3, "h": 14, "sizePt": 10, "align": "center" },
+    "calendarWeek": { "xOffset": 36, "yOffset": 8, "w": 60, "h": 14, "sizePt": 10, "align": "left" },
+    "dailyDate": { "rightX": 1010, "y": 22, "w": 110, "h": 20, "sizePt": 15, "align": "right" },
+    "overviewDayHeader": { "x0": 29.5, "pitch": 150.43, "y": 316, "w": 150.43, "h": 20, "sizePt": 15, "align": "center", "erase": { "x": 29.5, "y": 310.5, "w": 1053, "h": 27 }, "eraseInsetX": 1.0 },
+    "prev": { "x": 23, "y": 48, "w": 95, "h": 14, "sizePt": 10, "align": "left", "textFormat": "‹ {title}" },
+    "next": { "x": 122, "y": 48, "w": 95, "h": 14, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
+    "prevCalendar": { "x": 785, "y": 56, "w": 100, "h": 14, "sizePt": 10, "align": "left", "textFormat": "‹ {title}" },
+    "nextCalendar": { "x": 890, "y": 56, "w": 100, "h": 14, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
+    "reflectionNext": { "x": 770, "y": 524, "w": 200, "h": 16, "sizePt": 10, "align": "left", "textFormat": "Next week ›" },
+    "progressScorecard": { "x": 1000, "y": 71, "w": 82, "h": 14, "sizePt": 10, "align": "right", "erase": true, "textFormat": "Progress %" },
+    "scorecardWeek": { "sizePt": 10, "align": "center" },
+    "calendarReview": { "x": 1000, "y": 56, "w": 82, "h": 14, "sizePt": 10, "align": "right", "textFormat": "Review ›" },
+    "reflectionQuarterReview": { "x": 770, "y": 524, "w": 230, "h": 16, "sizePt": 10, "align": "left", "textFormat": "{title} ›" },
+    "quarterReviewScorecard": { "x": 1000, "y": 71, "w": 82, "h": 14, "sizePt": 10, "align": "right", "erase": true, "textFormat": "Scorecard ›" },
+    "nextQuarter": { "x": 770, "y": 524, "w": 200, "h": 16, "sizePt": 10, "align": "left", "textFormat": "Next quarter ›" },
+    "notesContents": { "x": 1000, "y": 24, "w": 82, "h": 14, "sizePt": 10, "align": "right", "textFormat": "Contents ›" }
+  },
+  "generated": {
+    "heading": { "x": 23, "baselineY": 39.4, "sizePt": 32 },
+    "notes": { "rulesTop": 87.5, "rulesBottom": 740, "rulePitch": 24, "ruleX": 29.5, "ruleRight": 1082.7, "ruleWidthPt": 0.5 },
+    "reviews": { "headingErase": { "x": 20, "y": 8, "w": 420, "h": 42 } },
+    "scorecard": {
+      "labelSizePt": 10,
+      "rowLabelX": 29,
+      "rowLabelW": 220,
+      "headerBaselineY": 100,
+      "firstRowTop": 110,
+      "rowPitch": 40,
+      "rowCount": 8,
+      "columnX0": 255,
+      "columnPitch": 54,
+      "finalColumnX": 1013,
+      "finalColumnW": 60,
+      "ruleWidthPt": 0.42
+    },
+    "setup": {
+      "labelSizePt": 15,
+      "slotSizePt": 10,
+      "hintSizePt": 8,
+      "ruleWidthPt": 0.42,
+      "labels": [
+        { "text": "Objectives", "x": 29, "baselineY": 80 },
+        { "text": "Habits", "x": 29, "baselineY": 325 },
+        { "text": "Standing Daily Goals", "x": 580, "baselineY": 80 },
+        { "text": "Daily Metric Names", "x": 580, "baselineY": 195 },
+        { "text": "Calendar Sources", "x": 580, "baselineY": 325 },
+        { "text": "Time Blocks Window", "x": 580, "baselineY": 475 }
+      ],
+      "objectives": [
+        { "x": 60, "y": 90, "w": 480, "h": 22 },
+        { "x": 60, "y": 116, "w": 480, "h": 22 },
+        { "x": 60, "y": 142, "w": 480, "h": 22 },
+        { "x": 60, "y": 168, "w": 480, "h": 22 },
+        { "x": 60, "y": 194, "w": 480, "h": 22 },
+        { "x": 60, "y": 220, "w": 480, "h": 22 },
+        { "x": 60, "y": 246, "w": 480, "h": 22 },
+        { "x": 60, "y": 272, "w": 480, "h": 22 }
+      ],
+      "standingGoals": [
+        { "x": 610, "y": 90, "w": 470, "h": 22 },
+        { "x": 610, "y": 116, "w": 470, "h": 22 },
+        { "x": 610, "y": 142, "w": 470, "h": 22 }
+      ],
+      "metricNames": [
+        { "x": 610, "y": 205, "w": 470, "h": 22 },
+        { "x": 610, "y": 231, "w": 470, "h": 22 },
+        { "x": 610, "y": 257, "w": 470, "h": 22 }
+      ],
+      "habits": [
+        { "x": 60, "y": 335, "w": 220, "h": 22 },
+        { "x": 60, "y": 359, "w": 220, "h": 22 },
+        { "x": 60, "y": 383, "w": 220, "h": 22 },
+        { "x": 60, "y": 407, "w": 220, "h": 22 },
+        { "x": 60, "y": 431, "w": 220, "h": 22 },
+        { "x": 60, "y": 455, "w": 220, "h": 22 },
+        { "x": 60, "y": 479, "w": 220, "h": 22 },
+        { "x": 60, "y": 503, "w": 220, "h": 22 },
+        { "x": 310, "y": 335, "w": 220, "h": 22 },
+        { "x": 310, "y": 359, "w": 220, "h": 22 },
+        { "x": 310, "y": 383, "w": 220, "h": 22 },
+        { "x": 310, "y": 407, "w": 220, "h": 22 },
+        { "x": 310, "y": 431, "w": 220, "h": 22 },
+        { "x": 310, "y": 455, "w": 220, "h": 22 },
+        { "x": 310, "y": 479, "w": 220, "h": 22 },
+        { "x": 310, "y": 503, "w": 220, "h": 22 }
+      ],
+      "calendarSources": [
+        { "x": 610, "y": 335, "w": 470, "h": 22 },
+        { "x": 610, "y": 361, "w": 470, "h": 22 },
+        { "x": 610, "y": 387, "w": 470, "h": 22 },
+        { "x": 610, "y": 413, "w": 470, "h": 22 }
+      ],
+      "timeBlockStart": { "x": 640, "y": 485, "w": 60, "h": 22 },
+      "timeBlockEnd": { "x": 760, "y": 485, "w": 60, "h": 22 },
+      "hints": [
+        { "text": "Type or ink one objective per line. Refresh copies them to Annual Objectives, the legend on every page and the scorecard.", "x": 29, "baselineY": 560 },
+        { "text": "Calendar sources: a label, then an .ics URL or file path, for example  Work | https://outlook.office.com/owa/calendar/.../calendar.ics", "x": 29, "baselineY": 574 },
+        { "text": "Time Blocks window takes effect at the next Generate (the column is baked into the page art).", "x": 29, "baselineY": 588 }
+      ]
+    }
+  },
+  "onenote": {
+    "titleOffsetPt": 36,
+    "hideTitle": false,
+    "pageColor": "#DED4C8",
+    "anchorPaddingPt": { "x": 0, "y": 0 },
+    "anchorUnderline": false,
+    "pageDateTimeHour": 6,
+    "contentsOutline": { "x": 36, "y": 86 },
+    "schemaNamespace": "http://schemas.microsoft.com/office/onenote/2013/onenote"
+  },
+  "notebook": {
+    "namePattern": "SFP {Qn} {YYYY}",
+    "sections": [
+      {
+        "name": "Quarter",
+        "pages": [
+          { "type": "cover", "title": "Cover", "level": 1 },
+          { "type": "contents", "title": "Contents", "level": 1 },
+          { "type": "setup", "title": "Setup", "level": 1 }
+        ]
+      },
+      {
+        "name": "Objectives",
+        "pages": [
+          { "type": "annual", "index": 0, "title": "Annual Objectives", "level": 1 },
+          { "type": "annual", "index": 1, "title": "Annual Objectives, continued", "level": 2 },
+          { "type": "blank", "title": "Objective Details", "level": 1 },
+          { "type": "objective", "each": true, "title": "Objective {n}", "level": 2 }
+        ]
+      },
+      {
+        "name": "Calendar",
+        "pages": [
+          { "type": "calendar", "eachMonth": true, "title": "{Month} {YYYY}", "level": 1 }
+        ]
+      },
+      {
+        "name": "Week {NN} ({start} to {end})",
+        "eachWeek": true,
+        "colorByMonth": true,
+        "pages": [
+          { "type": "overview", "title": "Weekly Overview", "level": 1 },
+          { "type": "day", "each": true, "title": "{Ddd} {Mon} {D}", "level": 2 },
+          { "type": "reflection", "title": "Weekly Reflection", "level": 1 }
+        ]
+      },
+      {
+        "name": "Reviews",
+        "pages": [
+          { "type": "scorecard", "title": "Quarter scorecard", "level": 1 },
+          { "type": "monthlyReview", "eachMonth": true, "title": "{Month} Review", "level": 1 },
+          { "type": "quarterlyReview", "title": "{Qn} {YYYY} Review", "level": 1 }
+        ]
+      },
+      {
+        "name": "Notes",
+        "pages": [
+          { "type": "notes", "eachNote": true, "title": "{Note}", "level": 1 }
+        ]
+      }
+    ]
+  }
+}

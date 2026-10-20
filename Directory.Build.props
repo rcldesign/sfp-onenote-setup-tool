@@ -1,0 +1,58 @@
+<Project>
+  <!-- Shared build settings for every project in the solution.
+       Rules from the development plan: nullable on, warnings as errors, analyzers on, net8.0 everywhere. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>Default</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <RootNamespace>$(MSBuildProjectName)</RootNamespace>
+    <AssemblyName>$(MSBuildProjectName)</AssemblyName>
+    <Version>1.0.0</Version>
+    <Authors>Topher Williams</Authors>
+    <Company>TEW Group, LLC</Company>
+    <Product>sfp2onenote</Product>
+    <Copyright>Copyright 2026 TEW Group, LLC</Copyright>
+    <RepositoryUrl>https://github.com/rcldesign/sfp-onenote-setup-tool</RepositoryUrl>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+    <!-- Building the Windows-only projects (WPF app) on Linux or macOS is allowed for compile checks. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Let test projects and tools skip the repository-wide expectations that only apply to shipped code. -->
+    <IsTestProject Condition="$(MSBuildProjectName.EndsWith('.Tests'))">true</IsTestProject>
+    <IsTestProject Condition="'$(IsTestProject)' == ''">false</IsTestProject>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Paths every project can use to find shared repository content. -->
+    <RepoRoot>$(MSBuildThisFileDirectory)</RepoRoot>
+    <TemplatesDir>$(RepoRoot)templates/</TemplatesDir>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="FluentAssertions" />
+    <Using Include="Xunit" />
+    <Using Include="FluentAssertions" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+    <IsPackable>false</IsPackable>
+    <!-- xUnit analyzers flag a handful of patterns that are fine in this repository; keep warnings as errors otherwise. -->
+    <NoWarn>$(NoWarn);CA1707;CA2007;CA1861;CA1515</NoWarn>
+  </PropertyGroup>
+</Project>

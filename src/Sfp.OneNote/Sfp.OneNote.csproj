@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- OneNote COM wrapper, page XML builder, hierarchy, hyperlinks, sidecar. Depends on Core and Render.
+       COM calls are late-bound (dynamic) so the project compiles on any OS; they only run on Windows. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sfp.Core/Sfp.Core.csproj" />
+    <ProjectReference Include="../Sfp.Render/Sfp.Render.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Serilog" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The tests drive the internal COM session with a fake target so the scheduler and retry rule run without OneNote. -->
+    <InternalsVisibleTo Include="Sfp.OneNote.Tests" />
+  </ItemGroup>
+</Project>

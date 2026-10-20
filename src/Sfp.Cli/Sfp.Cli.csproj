@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- sfp2onenote.exe verbs: plan, generate, refresh, render-only, measure. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>sfp2onenote</AssemblyName>
+    <RootNamespace>Sfp.Cli</RootNamespace>
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sfp.Core/Sfp.Core.csproj" />
+    <ProjectReference Include="../Sfp.Render/Sfp.Render.csproj" />
+    <ProjectReference Include="../Sfp.OneNote/Sfp.OneNote.csproj" />
+    <ProjectReference Include="../Sfp.Refresh/Sfp.Refresh.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Sinks.File" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The templates folder ships beside the executable. -->
+    <None Include="$(TemplatesDir)**/*" Link="templates/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
