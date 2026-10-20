@@ -15,20 +15,20 @@ public sealed record RenderProgress(int Done, int Total, PageKey Key, string Tit
 public sealed record RenderOnlyResult(int PagesRendered, int PngFiles, string IndexPath, TimeSpan Elapsed);
 
 /// <summary>
-/// Renders every page of a plan to {outDir}/{key with ':' as '-'}.png plus pages.json, in parallel (one worker per
-/// processor by default; PDFium is serialized by the rasterizer, overlays and PNG encoding run side by side). Each
-/// page's PNG is written and released before the next page on that worker, so memory stays at a few pages. Progress
-/// is reported per finished page; cancellation stops after the pages in flight and writes no pages.json.
+/// Renders every page of a plan to {outDir}/{key with ':' as '-'}.png plus pages.json, in parallel
+/// (<see cref="RenderParallelism.Default"/> workers by default: the processor count, at most four; PDFium is serialized
+/// by the rasterizer, overlays and PNG encoding run side by side). Each page's PNG is written and released before the
+/// next page on that worker, so memory stays at a few pages. Progress is reported per finished page; cancellation
+/// stops after the pages in flight and writes no pages.json.
 /// </summary>
 public sealed class RenderOnlyRunner
 {
     public const string IndexFileName = "pages.json";
 
     private readonly IPageRenderer renderer;
-    private readonly int parallelism;
 
     /// <param name="renderer">The page renderer; it must be safe to call from several threads.</param>
-    /// <param name="maxDegreeOfParallelism">Workers; null means the processor count.</param>
+    /// <param name="maxDegreeOfParallelism">Workers; null means <see cref="RenderParallelism.Default"/>.</param>
     public RenderOnlyRunner(IPageRenderer renderer, int? maxDegreeOfParallelism = null)
     {
         ArgumentNullException.ThrowIfNull(renderer);
@@ -38,8 +38,11 @@ public sealed class RenderOnlyRunner
         }
 
         this.renderer = renderer;
-        parallelism = maxDegreeOfParallelism ?? Environment.ProcessorCount;
+        MaxDegreeOfParallelism = maxDegreeOfParallelism ?? RenderParallelism.Default;
     }
+
+    /// <summary>The most pages this runner renders at once.</summary>
+    public int MaxDegreeOfParallelism { get; }
 
     /// <summary>The PNG file name of a page: its key with every ':' replaced by '-', plus ".png".</summary>
     public static string FileNameFor(PageKey key)
@@ -61,7 +64,7 @@ public sealed class RenderOnlyRunner
         RenderIndexPage?[] entries = new RenderIndexPage?[pages.Count];
         int done = 0;
         int files = 0;
-        ParallelOptions parallel = new() { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken };
+        ParallelOptions parallel = new() { MaxDegreeOfParallelism = MaxDegreeOfParallelism, CancellationToken = cancellationToken };
         try
         {
             Parallel.For(0, pages.Count, parallel, i =>

@@ -123,6 +123,67 @@ public sealed class RenderOnlyRunnerTests
         act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 2)]
+    [InlineData(4, 4)]
+    [InlineData(8, 4)]
+    [InlineData(64, 4)]
+    [InlineData(0, 1)]
+    public void Default_parallelism_is_the_processor_count_capped_at_four(int processors, int expected)
+    {
+        RenderParallelism.For(processors).Should().Be(expected);
+        RenderParallelism.Default.Should().Be(RenderParallelism.For(Environment.ProcessorCount));
+        RenderParallelism.MaxDefault.Should().Be(4);
+    }
+
+    [Fact]
+    public void The_runner_defaults_to_the_shared_parallelism_and_never_exceeds_it()
+    {
+        CountingRenderer counting = new();
+        RenderOnlyRunner runner = new(counting);
+        runner.MaxDegreeOfParallelism.Should().Be(RenderParallelism.Default);
+        new RenderOnlyRunner(counting, 2).MaxDegreeOfParallelism.Should().Be(2);
+
+        string dir = TestPaths.NewTempDir("runner-degree");
+        try
+        {
+            runner.Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir);
+            counting.Calls.Should().Be(144);
+            counting.MaxConcurrent.Should().BeInRange(1, RenderParallelism.Default);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>A renderer that returns imageless pages after a short pause and records how many calls overlapped.</summary>
+    private sealed class CountingRenderer : IPageRenderer
+    {
+        private int current;
+        private int max;
+        private int calls;
+
+        public int MaxConcurrent => Volatile.Read(ref max);
+
+        public int Calls => Volatile.Read(ref calls);
+
+        public RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions o)
+        {
+            int now = Interlocked.Increment(ref current);
+            int seen;
+            while (now > (seen = Volatile.Read(ref max)) && Interlocked.CompareExchange(ref max, now, seen) != seen)
+            {
+            }
+
+            Thread.Sleep(2);
+            Interlocked.Decrement(ref current);
+            Interlocked.Increment(ref calls);
+            return new RenderedPage(page.Key, Array.Empty<byte>(), 0, 0, Array.Empty<AnchorPlacement>());
+        }
+    }
+
     /// <summary>Progress that records on the calling thread (Progress&lt;T&gt; would post to a context the test cannot wait on).</summary>
     private sealed class SynchronousProgress : IProgress<RenderProgress>
     {
