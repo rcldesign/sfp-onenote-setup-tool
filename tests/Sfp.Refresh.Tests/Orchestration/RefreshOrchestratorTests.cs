@@ -239,6 +239,25 @@ public class RefreshOrchestratorTests
     }
 
     [Fact]
+    public void A_user_note_at_a_slots_origin_survives_a_sidecar_rebuild_and_blocks_that_slot()
+    {
+        Harness h = new(saveSidecar: false);
+        h.Type(S.Objectives[0], "Ship the connector");
+        string note = h.Notebook.AddOutlineAt(MonJan4, M.Slots.ObjectiveLegend.Rect, "my note", fixedWidth: true);
+
+        RefreshResult result = h.Run(Request(folder: h.Folder));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Summary!.SidecarRebuilt.Should().BeTrue();
+        PlannedChange legend = result.Summary.Changes.Single(c => c.Page == MonJan4 && c.SlotId == "objectiveLegend");
+        legend.Blocked.Should().BeTrue("the note sits where the legend goes and is not the tool's");
+        legend.Reason.Should().Contain("my note");
+        h.Notebook.Read(MonJan4).Outlines.Single(o => o.ObjectId == note).PlainText.Should().Be("my note");
+        h.SavedSidecar().Pages[MonJan4.Value].Anchors.Values.Should().NotContain(note);
+        result.Summary.Changes.Count(c => c.SlotId == "objectiveLegend" && !c.Blocked).Should().Be(103);
+    }
+
+    [Fact]
     public void Exit_codes_cover_not_found_unavailable_and_write_failures()
     {
         Harness h = new();

@@ -6,6 +6,7 @@ using Sfp.Core.Options;
 using Sfp.Core.Plan;
 using Sfp.OneNote;
 using Sfp.OneNote.Com;
+using Sfp.OneNote.Writer;
 using Sfp.OneNote.Xml;
 using Sfp.Refresh.Propagation;
 using Sfp.Refresh.Setup;
@@ -23,8 +24,9 @@ public sealed record RecoveryResult(Sidecar Sidecar, bool Rebuilt, IReadOnlyDict
 /// The PRD recovery path: when the sidecar is missing, or any page, section or section group ID in it no longer
 /// resolves in the notebook's hierarchy, the whole map is rebuilt by walking GetHierarchy(notebook, pages) and reading
 /// every page's sfp.key meta (section groups are recorded from the hierarchy by name). Tool-owned anchors are re-found
-/// by matching the outlines on each page to the known slot and link rectangles of its page type (position within a
-/// tolerance, never a loose overlap, so a user object is never adopted). One warning is reported for the summary.
+/// by matching the outlines on each page to the known slot and link rectangles of its page type: the position within a
+/// tolerance (never a loose overlap) and the tool's signature on the outline (<see cref="AnchorSignature"/>), so a user
+/// object is never adopted. One warning is reported for the summary.
 /// </summary>
 public sealed class SidecarRecovery
 {
@@ -171,9 +173,12 @@ public sealed class SidecarRecovery
     }
 
     /// <summary>
-    /// Matches the page's known anchors (its link specs, then its propagation slots, then its calendar slots) to the
-    /// outlines on the page: an outline is adopted when its position is within <see cref="MatchTolerancePt"/> of where
-    /// the tool writes that anchor (sheet origin, scale and the manifest padding applied); each outline is used once.
+    /// Matches the page's known anchors (its link specs, the Next quarter link on the quarterly review, then its
+    /// propagation slots, then its calendar slots) to the outlines on the page. An outline is adopted only when its
+    /// position is within <see cref="MatchTolerancePt"/> of where the tool writes that anchor (sheet origin, scale and the
+    /// manifest padding applied) and it carries the tool's signature (<see cref="AnchorSignature"/>: the fixed width of the
+    /// slot, the manifest typeface in the tool's color, an onenote: link for a link anchor). Anything else, such as a note
+    /// the user typed at a slot's origin, stays unowned and therefore blocks the slot. Each outline is used once.
     /// </summary>
     public static IReadOnlyDictionary<string, string> MatchAnchors(PageSpec page, PageXml xml, SlotCatalog catalog, NotebookPlan plan, OneNoteSpec oneNote)
     {
@@ -190,10 +195,14 @@ public sealed class SidecarRecovery
         double ox = (sheet?.X ?? 0) + oneNote.AnchorPaddingPt.X;
         double oy = (sheet?.Y ?? 0) + oneNote.AnchorPaddingPt.Y;
 
-        IEnumerable<(string Id, SlotGeometry? Geometry)> known = plan.LinksFrom(page.Key).Select(l => (l.AnchorId, catalog.Link(page, l.AnchorId)))
-            .Concat(catalog.PropagatedSlotsOn(page).Select(id => (id, catalog.Slot(page, id))))
-            .Concat(catalog.CalendarSlotsOn(page).Select(id => (id, catalog.Slot(page, id))));
-        foreach ((string id, SlotGeometry? geometry) in known)
+        List<LinkSpec> links = plan.LinksFrom(page.Key).ToList();
+        IEnumerable<(string Id, SlotGeometry? Geometry, bool IsLink)> known = links.Select(l => (l.AnchorId, catalog.Link(page, l.AnchorId), true))
+            .Concat(page.Key == PageKey.QuarterlyReview && !links.Any(l => l.AnchorId == NextQuarterLinkWriter.AnchorId)
+                ? new[] { (NextQuarterLinkWriter.AnchorId, catalog.Link(page, NextQuarterLinkWriter.AnchorId), true) }
+                : Array.Empty<(string, SlotGeometry?, bool)>())
+            .Concat(catalog.PropagatedSlotsOn(page).Select(id => (id, catalog.Slot(page, id), false)))
+            .Concat(catalog.CalendarSlotsOn(page).Select(id => (id, catalog.Slot(page, id), false)));
+        foreach ((string id, SlotGeometry? geometry, bool isLink) in known)
         {
             if (geometry is null || candidates.Count == 0)
             {
@@ -207,7 +216,7 @@ public sealed class SidecarRecovery
             foreach (OutlineInfo outline in candidates)
             {
                 double distance = Math.Max(Math.Abs(outline.X - x), Math.Abs(outline.Y - y));
-                if (distance <= MatchTolerancePt && distance < bestDistance)
+                if (distance <= MatchTolerancePt && distance < bestDistance && AnchorSignature.Matches(outline, geometry, isLink, scale, catalog.Manifest))
                 {
                     best = outline;
                     bestDistance = distance;
