@@ -7,6 +7,8 @@
     <ProjectReference Include="../../src/Sfp.Render/Sfp.Render.csproj" />
     <ProjectReference Include="../../src/Sfp.OneNote/Sfp.OneNote.csproj" />
     <ProjectReference Include="../../src/Sfp.Refresh/Sfp.Refresh.csproj" />
+    <!-- The app's view models (a plain net8.0 library nested under src/Sfp.App) are tested here under Options/. -->
+    <ProjectReference Include="../../src/Sfp.App/Sfp.App.ViewModels/Sfp.App.ViewModels.csproj" />
     <ProjectReference Include="../Sfp.TestSupport/Sfp.TestSupport.csproj" />
   </ItemGroup>
   <ItemGroup>

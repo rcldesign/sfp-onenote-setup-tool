@@ -1,0 +1,394 @@
+using Sfp.App.ViewModels;
+using Sfp.App.ViewModels.Generate;
+using Sfp.App.ViewModels.Refresh;
+using Sfp.App.ViewModels.Services;
+using Sfp.Core.Dates;
+using Sfp.Core.Manifests;
+using Sfp.Core.Options;
+using Sfp.Core.Plan;
+using Sfp.OneNote.Generate;
+using Sfp.Refresh;
+using Sfp.Render;
+using Sfp.TestSupport;
+
+namespace Sfp.Core.Tests.Options.ViewModels;
+
+/// <summary>Runs posted actions inline, so a test sees every UI update as soon as the background work finishes.</summary>
+public sealed class ImmediateUiThread : IUiThread
+{
+    public int Posted { get; private set; }
+
+    public void Post(Action action)
+    {
+        Posted++;
+        action();
+    }
+}
+
+public sealed class FakeDialogService : IDialogService
+{
+    public string? NextFile { get; set; }
+
+    public string? NextFolder { get; set; }
+
+    public string? NextSaveFile { get; set; }
+
+    public List<string> Titles { get; } = new();
+
+    public string? LastInitialPath { get; private set; }
+
+    public string? PickFile(string title, string filter, string? initialPath)
+    {
+        Titles.Add(title);
+        LastInitialPath = initialPath;
+        return NextFile;
+    }
+
+    public string? PickFolder(string title, string? initialFolder)
+    {
+        Titles.Add(title);
+        LastInitialPath = initialFolder;
+        return NextFolder;
+    }
+
+    public string? PickSaveFile(string title, string filter, string suggestedFileName)
+    {
+        Titles.Add(title);
+        LastInitialPath = suggestedFileName;
+        return NextSaveFile;
+    }
+}
+
+public sealed class FakeShellService : IShellService
+{
+    public List<string> Clipboard { get; } = new();
+
+    public List<string> Opened { get; } = new();
+
+    public List<(string Source, string Destination)> Copies { get; } = new();
+
+    public Exception? Throw { get; set; }
+
+    public void CopyToClipboard(string text)
+    {
+        ThrowIfScripted();
+        Clipboard.Add(text);
+    }
+
+    public void OpenInOneNote(string notebookPath)
+    {
+        ThrowIfScripted();
+        Opened.Add(notebookPath);
+    }
+
+    public void CopyFile(string sourcePath, string destinationPath)
+    {
+        ThrowIfScripted();
+        Copies.Add((sourcePath, destinationPath));
+    }
+
+    private void ThrowIfScripted()
+    {
+        if (Throw is not null)
+        {
+            throw Throw;
+        }
+    }
+}
+
+public sealed class FakeSettingsStore : ISettingsStore
+{
+    public AppSettings Stored { get; set; } = new();
+
+    public int Saves { get; private set; }
+
+    public Exception? ThrowOnSave { get; set; }
+
+    public Exception? ThrowOnLoad { get; set; }
+
+    public string Path => "/fake/settings.json";
+
+    public AppSettings Load() => ThrowOnLoad is null ? Stored : throw ThrowOnLoad;
+
+    public void Save(AppSettings settings)
+    {
+        if (ThrowOnSave is not null)
+        {
+            throw ThrowOnSave;
+        }
+
+        Saves++;
+        Stored = settings;
+    }
+}
+
+public sealed class ScriptedManifestValidator : IManifestValidator
+{
+    public ValidationResult Result { get; set; } = ValidationResult.Ok;
+
+    public int Calls { get; private set; }
+
+    public string? LastPath { get; private set; }
+
+    public ValidationResult Validate(Manifest m, string pdfPath)
+    {
+        Calls++;
+        LastPath = pdfPath;
+        return Result;
+    }
+}
+
+/// <summary>A tiny plan: a cover, one calendar page, one out-of-quarter day page and one in-quarter day page.</summary>
+public sealed class FakePlanBuilder : IPlanBuilder
+{
+    public int Calls { get; private set; }
+
+    public Exception? Throw { get; set; }
+
+    public GenerateOptions? LastOptions { get; private set; }
+
+    public NotebookPlan Build(Manifest m, Quarter q, GenerateOptions o)
+    {
+        Calls++;
+        LastOptions = o;
+        if (Throw is not null)
+        {
+            throw Throw;
+        }
+
+        Dictionary<string, string> tokens = new(StringComparer.Ordinal);
+        DateOnly before = q.Start.AddDays(-1);
+        PageSpec cover = new(PageKey.Cover, PageType.Cover, "Cover", 1, 1, q.Start, tokens);
+        PageSpec calendar = new(PageKey.Calendar(q.Start.Year, q.Start.Month), PageType.Calendar, PlannerText.MonthYear(q.Start.Year, q.Start.Month), 1, 13, q.Start, tokens);
+        PageSpec outside = new(PageKey.Day(before), PageType.Day, PlannerText.DayTitle(before), 2, 17, before, tokens);
+        PageSpec first = new(PageKey.Day(q.Start), PageType.Day, PlannerText.DayTitle(q.Start), 2, 17, q.Start, tokens);
+        return new NotebookPlan(
+            o.NotebookName ?? "SFP",
+            q,
+            new[]
+            {
+                new SectionSpec("Quarter", null, new[] { cover }),
+                new SectionSpec("Calendar", null, new[] { calendar }),
+                new SectionSpec("Week 01", null, new[] { outside, first }),
+            },
+            Array.Empty<LinkSpec>());
+    }
+}
+
+public sealed class FakePageRenderer : IPageRenderer
+{
+    public static readonly byte[] PngStub = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+
+    public List<string> Rendered { get; } = new();
+
+    public Exception? Throw { get; set; }
+
+    /// <summary>When set, every render waits here first (released by the test).</summary>
+    public ManualResetEventSlim? Gate { get; set; }
+
+    public RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions o)
+    {
+        Gate?.Wait();
+        if (Throw is not null)
+        {
+            throw Throw;
+        }
+
+        lock (Rendered)
+        {
+            Rendered.Add(page.Title);
+        }
+
+        return new RenderedPage(page.Key, PngStub, 1112 * o.Dpi / 72, 770 * o.Dpi / 72, Array.Empty<AnchorPlacement>());
+    }
+}
+
+public sealed class FakeGenerateOrchestrator : IGenerateOrchestrator
+{
+    public GenerateResult Result { get; set; } = new() { Success = true, ExitCode = 0, Phase = GeneratePhase.Done, PagesWritten = 144, PagesRendered = 144, OutputPath = @"C:\Users\me\Documents\OneNote Notebooks\SFP Q1 2027", NotebookName = "SFP Q1 2027", Elapsed = TimeSpan.FromSeconds(102) };
+
+    public List<GenerateProgress> ProgressToReport { get; } = new();
+
+    public GenerateRequest? LastRequest { get; private set; }
+
+    public Exception? Throw { get; set; }
+
+    /// <summary>When true the run waits for cancellation and then returns a cancelled result.</summary>
+    public bool WaitForCancel { get; set; }
+
+    /// <summary>Called inside Run, on the worker thread, before anything else.</summary>
+    public Action? OnRun { get; set; }
+
+    public int Runs { get; private set; }
+
+    public GenerateResult Run(GenerateRequest request, IProgress<GenerateProgress>? progress, CancellationToken cancellationToken)
+    {
+        Runs++;
+        LastRequest = request;
+        OnRun?.Invoke();
+        if (Throw is not null)
+        {
+            throw Throw;
+        }
+
+        foreach (GenerateProgress p in ProgressToReport)
+        {
+            progress?.Report(p);
+        }
+
+        if (WaitForCancel)
+        {
+            cancellationToken.WaitHandle.WaitOne();
+            return new GenerateResult { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, PagesRendered = 10, PagesWritten = 3 };
+        }
+
+        return Result;
+    }
+}
+
+public sealed class FakeRefreshOrchestrator : IRefreshOrchestrator
+{
+    public RefreshResult Result { get; set; } = new() { Success = true, ExitCode = 0, Elapsed = TimeSpan.FromSeconds(12) };
+
+    public RefreshRequest? LastRequest { get; private set; }
+
+    public List<string> ProgressToReport { get; } = new();
+
+    public Exception? Throw { get; set; }
+
+    public int Runs { get; private set; }
+
+    public RefreshResult Run(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken)
+    {
+        Runs++;
+        LastRequest = request;
+        if (Throw is not null)
+        {
+            throw Throw;
+        }
+
+        foreach (string p in ProgressToReport)
+        {
+            progress?.Report(p);
+        }
+
+        return Result;
+    }
+}
+
+public sealed class FakeNotebookRegistry : INotebookRegistry
+{
+    public List<KnownNotebook> Notebooks { get; } = new();
+
+    public List<IReadOnlyList<string>> Queries { get; } = new();
+
+    public Exception? Throw { get; set; }
+
+    public IReadOnlyList<KnownNotebook> List(IEnumerable<string> folders)
+    {
+        Queries.Add(folders.ToList());
+        if (Throw is not null)
+        {
+            throw Throw;
+        }
+
+        return Notebooks.ToList();
+    }
+}
+
+public sealed class FakeScheduledTaskService : IScheduledTaskService
+{
+    public HashSet<string> Registered { get; } = new(StringComparer.Ordinal);
+
+    public List<(string Name, string Exe, int Horizon)> Registrations { get; } = new();
+
+    public List<string> Removals { get; } = new();
+
+    public Exception? Throw { get; set; }
+
+    public bool IsRegistered(string notebookName) => Registered.Contains(notebookName);
+
+    public void Register(string notebookName, string executablePath, int horizonDays)
+    {
+        if (Throw is not null)
+        {
+            throw Throw;
+        }
+
+        Registered.Add(notebookName);
+        Registrations.Add((notebookName, executablePath, horizonDays));
+    }
+
+    public void Remove(string notebookName)
+    {
+        if (Throw is not null)
+        {
+            throw Throw;
+        }
+
+        Registered.Remove(notebookName);
+        Removals.Add(notebookName);
+    }
+}
+
+/// <summary>Builds view models wired to fakes, with every fake reachable for assertions.</summary>
+public sealed class Harness
+{
+    public const string Pdf = @"C:\planner\SFP_No_Dates.pdf";
+    public const string DefaultFolder = @"C:\Users\me\Documents\OneNote Notebooks";
+    public const string Exe = @"C:\Program Files\sfp2onenote\sfp2onenote.exe";
+
+    public Harness()
+    {
+        Paths.Files.Add(Pdf);
+        Paths.Directories.Add(DefaultFolder);
+        Env = new AppEnvironment(new DateOnly(2026, 10, 20), TestPaths.TemplatesDir, DefaultFolder, new[] { @"C:\Users\me\OneDrive" }, Exe);
+        Validator = new GenerateFormValidator(PdfValidator, Paths, Env.OneDriveRoots);
+    }
+
+    public Manifest Manifest { get; } = TestManifest.Shipped;
+
+    public DateEngine Dates { get; } = new();
+
+    public AppEnvironment Env { get; }
+
+    public FakePathProbe Paths { get; } = new();
+
+    public ScriptedManifestValidator PdfValidator { get; } = new();
+
+    public GenerateFormValidator Validator { get; }
+
+    public ImmediateUiThread Ui { get; } = new();
+
+    public FakeDialogService Dialogs { get; } = new();
+
+    public FakeShellService Shell { get; } = new();
+
+    public SilentRunLogFactory Logs { get; } = new();
+
+    public FakePlanBuilder Plans { get; } = new();
+
+    public FakePageRenderer Renderer { get; } = new();
+
+    public FakeGenerateOrchestrator Generator { get; } = new();
+
+    public FakeRefreshOrchestrator Refresher { get; } = new();
+
+    public FakeNotebookRegistry Registry { get; } = new();
+
+    public FakeScheduledTaskService Tasks { get; } = new();
+
+    public FakeSettingsStore Settings { get; } = new();
+
+    public PreviewStripViewModel NewPreviews(TimeSpan? debounce = null) =>
+        new(Plans, Renderer, Manifest, Dates, Ui, debounce ?? TimeSpan.Zero);
+
+    public GenerateRunViewModel NewRun() => new(Logs, _ => Generator, Ui, Shell, Dialogs);
+
+    public GenerateViewModel NewGenerate(TimeSpan? debounce = null) =>
+        new(Manifest, Dates, Validator, NewPreviews(debounce), NewRun(), Dialogs, Ui, Env);
+
+    public RefreshViewModel NewRefresh() => new(Registry, Tasks, Logs, _ => Refresher, Ui, Env);
+
+    public MainViewModel NewMain() => new(NewGenerate(), NewRefresh(), Settings);
+}
