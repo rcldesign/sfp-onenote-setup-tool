@@ -152,7 +152,7 @@ public static class RefreshCommand
         IRefreshOrchestrator orchestrator;
         try
         {
-            orchestrator = (orchestratorFactory ?? ProductionOrchestrator)(request, manifest, templatesDir, log.Logger, log.Path);
+            orchestrator = (orchestratorFactory ?? CreateProductionOrchestrator)(request, manifest, templatesDir, log.Logger, log.Path);
         }
         catch (OneNoteUnavailableException ex)
         {
@@ -291,9 +291,17 @@ public static class RefreshCommand
         return folders;
     }
 
-    /// <summary>The production composition: the COM session, the sidecar store, the font-measured widths, the calendar sources and the orchestrator.</summary>
-    private static IRefreshOrchestrator ProductionOrchestrator(RefreshRequest request, Manifest manifest, string templatesDir, ILogger log, string logPath)
+    /// <summary>
+    /// The production composition: the COM session, the sidecar store, the font-measured widths, the calendar sources,
+    /// the toast notifier and the orchestrator. Public so the Refresh tab composes the same services; the returned
+    /// orchestrator is disposable and owns the COM session and the fonts. Throws <see cref="OneNoteUnavailableException"/> off Windows.
+    /// </summary>
+    public static IRefreshOrchestrator CreateProductionOrchestrator(RefreshRequest request, Manifest manifest, string templatesDir, ILogger log, string logPath)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentException.ThrowIfNullOrWhiteSpace(templatesDir);
+        ArgumentNullException.ThrowIfNull(log);
         if (!OperatingSystem.IsWindows())
         {
             throw new OneNoteUnavailableException(OneNoteUnavailableException.UserMessage + " Refresh runs on Windows only.");
