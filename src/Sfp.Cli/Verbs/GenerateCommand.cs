@@ -221,9 +221,13 @@ public static class GenerateCommand
         {
             start = QuarterSpec.Parse(args.Start);
         }
-        catch (FormatException ex)
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
         {
-            stderr.WriteLine(ex.Message);
+            // A blank --start ("" or spaces) reaches the parser as an ArgumentException; it is the same mistake as a
+            // malformed month, so it gets the same kind of line and exit 2 instead of escaping as an exception.
+            stderr.WriteLine(ex is FormatException
+                ? ex.Message
+                : "Start month must be YYYY-MM, for example 2027-01; got '" + args.Start + "'.");
             return false;
         }
 

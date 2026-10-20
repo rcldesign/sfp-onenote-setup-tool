@@ -103,6 +103,52 @@ public class GenerateCommandTests
         stderr.ToString().Should().Contain(expectedText);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_start_is_refused_with_exit_2_instead_of_throwing(string start)
+    {
+        StringWriter stderr = new();
+        int code = -1;
+
+        Action run = () => code = GenerateCommand.Run(Args(start), new StringWriter(), stderr, (_, _, _) => throw new InvalidOperationException("must not run"));
+
+        run.Should().NotThrow();
+        code.Should().Be(ExitCodes.ValidationError);
+        stderr.ToString().Should().Contain("Start month must be YYYY-MM");
+    }
+
+    [Fact]
+    public void Parse_errors_exit_2_with_the_message_and_a_usage_hint()
+    {
+        static (int Code, string Out, string Err) Cli(params string[] args)
+        {
+            StringWriter output = new();
+            StringWriter error = new();
+            int code = Program.Run(args, output, error);
+            return (code, output.ToString(), error.ToString());
+        }
+
+        (int code, string stdout, string stderr) = Cli("generate", "--pdf", "a.pdf");
+        code.Should().Be(ExitCodes.ValidationError, "a missing required option is a validation error, not System.CommandLine's exit 1");
+        stderr.Should().Contain("Option '--start' is required.").And.Contain("Run 'sfp2onenote generate --help' for usage.");
+        stdout.Should().BeEmpty();
+
+        Cli("generate", "--pdf", "a.pdf", "--start", "2027-01", "--dpi", "x").Code.Should().Be(ExitCodes.ValidationError, "--dpi takes a number");
+        (int unknownCode, _, string unknownErr) = Cli("frobnicate");
+        unknownCode.Should().Be(ExitCodes.ValidationError);
+        unknownErr.Should().Contain("frobnicate").And.Contain("Run 'sfp2onenote --help' for usage.");
+        Cli().Code.Should().Be(ExitCodes.ValidationError, "a verb is required");
+
+        // A blank --start parses (it is a string) and reaches the verb, which refuses it with exit 2.
+        Cli("generate", "--pdf", Pdf, "--start", "", "--templates", TestPaths.TemplatesDir).Code.Should().Be(ExitCodes.ValidationError);
+
+        (int helpCode, string help, string helpErr) = Cli("generate", "--help");
+        helpCode.Should().Be(0, "help is not an error");
+        help.Should().Contain("--pdf");
+        helpErr.Should().BeEmpty();
+    }
+
     [Fact]
     public void A_missing_pdf_is_refused_with_exit_2()
     {
