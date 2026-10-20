@@ -114,6 +114,9 @@ internal sealed class RenderContext : IDisposable
     /// <summary>Advance width of the text in points at a point size.</summary>
     public double TextWidth(string text, double sizePt) => Sheet.TextWidth(text, Font(sizePt));
 
+    /// <summary>The box the text's glyphs ink, in points relative to its origin, at a point size (see <see cref="SheetCanvas.InkBounds"/>).</summary>
+    public RectPt InkBounds(string text, double sizePt) => Sheet.InkBounds(text, Font(sizePt));
+
     /// <summary>Cap height in points at a point size.</summary>
     public double CapHeight(double sizePt) => Sheet.Measure(Font(sizePt)).CapHeight;
 

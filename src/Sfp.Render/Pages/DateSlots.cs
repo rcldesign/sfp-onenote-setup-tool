@@ -51,8 +51,8 @@ internal static class DateSlots
 
     /// <summary>
     /// Erases the printed strip and draws N numbers counting down from N (laid out by <see cref="StripPositions"/>),
-    /// then the filled circle, centered on its number's text, with that number in white on N - k + 1 (Corrected) or
-    /// k (AsPrinted).
+    /// then the filled circle, centered on its number's ink (so the white digits sit in the middle of the disc), with
+    /// that number in white on N - k + 1 (Corrected) or k (AsPrinted).
     /// </summary>
     public static void DrawWeeksRemaining(RenderContext c)
     {
@@ -80,7 +80,9 @@ internal static class DateSlots
             return;
         }
 
-        double centerX = x[index] + (c.TextWidth(numbers[index], slot.SizePt) / 2);
+        // The disc is centered on the number's ink, not its advance box: the side bearings differ ("14" inks 0.7 pt right
+        // of its advance center in the fallback face), and centering on the advance pushed the white digits toward the rim.
+        double centerX = x[index] + c.InkBounds(numbers[index], slot.SizePt).CenterX;
         c.Circle(centerX, slot.CircleCenterY, slot.CircleDiameterPt);
         c.Text(numbers[index], x[index], slot.BaselineY, TextAlign.Left, slot.SizePt, SKColors.White);
     }
