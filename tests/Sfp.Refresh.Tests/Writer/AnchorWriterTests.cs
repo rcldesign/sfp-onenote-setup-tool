@@ -96,14 +96,64 @@ public class AnchorWriterTests
         withLegend.Outlines.Single(o => o.ObjectId == id).PlainText.Should().Be("1 Run  2 Read\n9 Swim");
         withLegend.Outlines.Single(o => o.ObjectId == id).TextRuns[0].Html.Should().Contain("2 Read<br>9 Swim");
 
+        int updates = nb.App.UpdateCount(pageId);
+
         AnchorWriteResult result = writer.Write(pageId, withLegend, new[]
         {
             new AnchorWrite(new PlannedChange(january, "habitLegend", "1 Run  2 Read\n9 Swim", "", ChangeKind.Remove, false, null), null, id),
         });
 
         result.Removed.Should().Equal("habitLegend");
+        nb.App.Calls.Should().ContainSingle(c => c.Call == "DeletePageContent").Which.Detail.Should().Be(pageId + " " + id);
+        nb.App.UpdateCount(pageId).Should().Be(updates, "UpdatePageContent never deletes an object the XML leaves out, so a removal does not send the page");
         nb.Read(january).Outlines.Should().NotContain(o => o.ObjectId == id);
         nb.Read(january).Outlines.Should().HaveCount(withLegend.Outlines.Count - 1);
+    }
+
+    [Fact]
+    public void Removes_go_through_DeletePageContent_before_the_one_update_that_carries_the_creates()
+    {
+        FakeNotebook nb = FakeNotebook.Generate();
+        string pageId = nb.PageIds[MonJan4];
+        AnchorWriter writer = Writer(nb);
+        AnchorWriteResult first = writer.Write(pageId, nb.Read(MonJan4), new[] { Create(nb, MonJan4, "standingGoal:1", "Walk"), Create(nb, MonJan4, "standingGoal:2", "Read") });
+        string walk = first.Created["standingGoal:1"];
+        string read = first.Created["standingGoal:2"];
+        int updates = nb.App.UpdateCount(pageId);
+
+        AnchorWriteResult result = writer.Write(pageId, nb.Read(MonJan4), new[]
+        {
+            new AnchorWrite(new PlannedChange(MonJan4, "standingGoal:1", "Walk", "", ChangeKind.Remove, false, null), null, walk),
+            Create(nb, MonJan4, "metricName:1", "Steps"),
+            new AnchorWrite(new PlannedChange(MonJan4, "standingGoal:2", "Read", "Read more", ChangeKind.Update, false, null), nb.Catalog.Slot(nb.Plan.Page(MonJan4), "standingGoal:2"), read),
+        });
+
+        result.Removed.Should().Equal("standingGoal:1");
+        result.Updated.Should().Equal("standingGoal:2");
+        result.Created.Should().ContainKey("metricName:1");
+        nb.App.UpdateCount(pageId).Should().Be(updates + 1, "the create and the update travel in one UpdatePageContent");
+        int delete = nb.App.Calls.ToList().FindLastIndex(c => c.Call == "DeletePageContent");
+        int update = nb.App.Calls.ToList().FindLastIndex(c => c.Call == "UpdatePageContent");
+        delete.Should().BeLessThan(update, "the update is built from the page as it is after the deletion, so it cannot bring the outline back");
+        PageXml after = nb.Read(MonJan4);
+        after.Outlines.Should().NotContain(o => o.ObjectId == walk);
+        after.Outlines.Single(o => o.ObjectId == read).PlainText.Should().Be("Read more");
+        after.Outlines.Single(o => o.ObjectId == result.Created["metricName:1"]).PlainText.Should().Be("Steps");
+    }
+
+    [Fact]
+    public void A_removal_whose_outline_is_already_gone_is_reported_removed_without_a_call()
+    {
+        FakeNotebook nb = FakeNotebook.Generate();
+        string pageId = nb.PageIds[MonJan4];
+
+        AnchorWriteResult result = Writer(nb).Write(pageId, nb.Read(MonJan4), new[]
+        {
+            new AnchorWrite(new PlannedChange(MonJan4, "standingGoal:1", "Walk", "", ChangeKind.Remove, false, null), null, "{p-0000}{99}{B0}"),
+        });
+
+        result.Removed.Should().Equal("standingGoal:1");
+        nb.App.CallCount("DeletePageContent").Should().Be(0);
     }
 
     [Fact]

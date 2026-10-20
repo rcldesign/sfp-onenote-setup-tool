@@ -9,11 +9,16 @@ namespace Sfp.Refresh.Tests.Support;
 /// An in-memory OneNote for the Refresh tests: notebooks, sections and pages with the hierarchy XML GetHierarchy
 /// returns, page XML stored as written with stable objectIDs stamped on every outline, paragraph, image and ink element
 /// the way OneNote does, image bytes kept apart so a piBasic read hands back a CallbackID and a write carrying a
-/// CallbackID keeps the bytes. Notebooks can be closed and reopened by path, and every ID can be renumbered to simulate
-/// a move to OneDrive. Every call is recorded. Meant to be shared with the OneNote tests when the integrator merges.
+/// CallbackID keeps the bytes. UpdatePageContent merges by objectID the way OneNote does: an object the XML carries with
+/// a known objectID replaces the stored one, an object without one is added, and an object the XML leaves out is kept
+/// (only DeletePageContent removes one). Notebooks can be closed and reopened by path, and every ID can be renumbered to
+/// simulate a move to OneDrive. Every call is recorded. Meant to be shared with the OneNote tests when the integrator merges.
 /// </summary>
 public sealed class FakeOneNoteApp : IOneNoteApp
 {
+    /// <summary>Top-level page children that are content objects, merged by objectID; every other child (Meta, PageSettings, Title ...) is replaced by name.</summary>
+    private static readonly HashSet<string> ContentObjects = new(StringComparer.Ordinal) { "Outline", "Image", "InkDrawing", "InsertedFile", "MediaFile" };
+
     private readonly Dictionary<string, Notebook> notebooks = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Section> sections = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Page> pages = new(StringComparer.Ordinal);
@@ -245,7 +250,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
             page.Name = PageXmlParser.PlainText(title);
         }
 
-        page.Xml = OneNoteXml.Serialize(root);
+        page.Xml = OneNoteXml.Serialize(page.Xml is null ? root : Merge(XElement.Parse(page.Xml), root, one));
     }
 
     public string GetPageContent(string pageId, PageInfo pageInfo)
@@ -340,6 +345,58 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     {
         element.Add(new XAttribute(XNamespace.Xmlns + "one", one.NamespaceName));
         return OneNoteXml.Serialize(element);
+    }
+
+    /// <summary>
+    /// The stored page with an UpdatePageContent applied as OneNote applies it: page attributes are taken from the XML,
+    /// a content object (outline, image, ink) with an objectID already on the page replaces it in place, any other content
+    /// object is added at the end, the other children (Meta by name, PageSettings, Title ...) replace the stored element of
+    /// the same name, and everything the XML leaves out stays on the page.
+    /// </summary>
+    private static XElement Merge(XElement stored, XElement incoming, XNamespace one)
+    {
+        foreach (XAttribute attribute in incoming.Attributes().Where(a => !a.IsNamespaceDeclaration))
+        {
+            stored.SetAttributeValue(attribute.Name, attribute.Value);
+        }
+
+        foreach (XElement child in incoming.Elements().ToList())
+        {
+            XElement copy = new(child);
+            if (child.Name.Namespace == one && ContentObjects.Contains(child.Name.LocalName))
+            {
+                string id = (string?)child.Attribute("objectID") ?? "";
+                XElement? existing = stored.Elements().FirstOrDefault(e => (string?)e.Attribute("objectID") == id);
+                if (existing is not null)
+                {
+                    existing.ReplaceWith(copy);
+                }
+                else
+                {
+                    stored.Add(copy);
+                }
+
+                continue;
+            }
+
+            XElement? same = child.Name == one + "Meta"
+                ? stored.Elements(one + "Meta").FirstOrDefault(m => (string?)m.Attribute("name") == (string?)child.Attribute("name"))
+                : stored.Element(child.Name);
+            if (same is not null)
+            {
+                same.ReplaceWith(copy);
+            }
+            else if (stored.Elements().FirstOrDefault(e => e.Name.Namespace == one && ContentObjects.Contains(e.Name.LocalName)) is XElement firstContent)
+            {
+                firstContent.AddBeforeSelf(copy);
+            }
+            else
+            {
+                stored.Add(copy);
+            }
+        }
+
+        return stored;
     }
 
     private void Guard()

@@ -293,11 +293,14 @@ public class RefreshOrchestratorTests
         File.Exists(FailureCounter.PathBeside(h.SidecarPath)).Should().BeTrue();
 
         calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff meeting", start, start.AddHours(1), false, false, true, "Work", null) };
+        int deletes = h.App.CallCount("DeletePageContent");
         RefreshResult second = h.Run(Request(calendar: true, today: Jan4.AddDays(1)));
 
         second.Summary!.Changes.Should().HaveCount(2).And.AllSatisfy(c => c.Kind.Should().Be(ChangeKind.Remove));
         second.Summary.EventsWritten.Should().Be(0);
         second.Summary.PagesTouched.Should().Be(2);
+        h.App.CallCount("DeletePageContent").Should().Be(deletes + 2, "the fake keeps an outline the XML leaves out, as OneNote does, so only DeletePageContent removes the two lines");
+        h.App.Calls.Where(c => c.Call == "DeletePageContent").Select(c => c.Detail).Should().Contain(h.Notebook.PageIds[tueJan5] + " " + rowId);
         h.Notebook.Read(tueJan5).Outlines.Should().NotContain(o => o.ObjectId == rowId);
         h.SavedSidecar().Pages[tueJan5.Value].Anchors.Should().NotContainKey("timeBlockEvent:9");
         h.SavedSidecar().FrozenThrough.Should().Be(Jan4);
