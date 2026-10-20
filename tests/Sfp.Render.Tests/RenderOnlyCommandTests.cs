@@ -119,6 +119,34 @@ public sealed class RenderOnlyCommandTests
         }
     }
 
+    [Fact]
+    public void A_page_that_fails_to_render_exits_4_with_the_error_and_writes_no_index()
+    {
+        // The PDF validates and rasterizes; the user manifest leaves the strip too narrow for 14 numbers, so the first
+        // daily page fails while its overlays are drawn (a render error on a page, exit 4 in the PRD's error table).
+        string dir = TestPaths.NewTempDir("render-only-fail");
+        try
+        {
+            string manifest = Path.Combine(dir, "narrow-strip.json");
+            File.WriteAllText(manifest, """{ "slots": { "weeksRemaining": { "numberSpan": { "from": 537, "to": 560 } } } }""");
+            string outDir = Path.Combine(dir, "out");
+
+            (int code, string output, string err) = Run(Request(outDir, dir) with { ManifestPath = manifest });
+
+            code.Should().Be(ExitCodes.RenderError);
+            err.Should().StartWith("Render failed: slots.weeksRemaining.numberSpan (537 to 560, 23 pt) is too narrow for 14 numbers at 10 pt");
+            err.Should().Contain("\nLog: ");
+            output.Should().NotContain("Rendered ", "there is no success summary");
+            File.Exists(Path.Combine(outDir, RenderOnlyRunner.IndexFileName)).Should().BeFalse("a failed run writes no pages.json");
+            string log = Directory.GetFiles(dir, "*render-only.log").Should().ContainSingle().Subject;
+            File.ReadAllText(log).Should().Contain("Render failed").And.Contain("too narrow for 14 numbers");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("--dpi", "--dpi must be one of 144, 220, 300; got 200.")]
     [InlineData("--date-format", "--date-format must be one of mm/dd/yy, dd/mm/yy, m/d/yy, d/m/yy; got 'yy-mm-dd'.")]
