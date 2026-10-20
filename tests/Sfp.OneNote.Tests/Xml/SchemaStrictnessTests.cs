@@ -31,6 +31,19 @@ public class SchemaStrictnessTests
     }
 
     [Fact]
+    public void Page_size_dimensions_take_width_and_height_attributes_after_the_orientation()
+    {
+        static string Page(string pageSize) =>
+            $"<one:Page xmlns:one=\"{Ns}\" ID=\"{{p}}\"><one:PageSettings RTL=\"false\" color=\"automatic\"><one:PageSize>{pageSize}</one:PageSize></one:PageSettings></one:Page>";
+
+        SchemaValidator.Problems(Page("<one:Orientation landscape=\"true\"/><one:Dimensions width=\"15.44\" height=\"10.69\"/>")).Should().BeEmpty();
+        SchemaValidator.Problems(Page("<one:Dimensions width=\"15.44\" height=\"10.69\"/>")).Should().BeEmpty("the orientation is optional");
+        SchemaValidator.Problems(Page("<one:Dimensions><one:Width value=\"1112\"/><one:Height value=\"770\"/></one:Dimensions>")).Should().NotBeEmpty("Dimensions has no child elements");
+        SchemaValidator.Problems(Page("<one:Dimensions width=\"15.44\" height=\"10.69\"/><one:Orientation landscape=\"true\"/>")).Should().NotBeEmpty("the orientation comes first");
+        SchemaValidator.Problems(Page("<one:Dimensions width=\"15.44\"/>")).Should().NotBeEmpty("both sizes are required");
+    }
+
+    [Fact]
     public void A_page_in_another_namespace_is_reported_rather_than_waved_through()
     {
         SchemaValidator.Problems("<one:Page xmlns:one=\"http://schemas.microsoft.com/office/onenote/2010/onenote\"/>").Should().NotBeEmpty();

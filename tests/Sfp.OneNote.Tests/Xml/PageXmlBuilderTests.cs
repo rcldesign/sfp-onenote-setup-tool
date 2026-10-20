@@ -233,16 +233,52 @@ public class PageXmlBuilderTests
     }
 
     [Fact]
-    public void Custom_page_size_writes_the_manifest_page_dimensions()
+    public void Custom_page_size_writes_a_landscape_orientation_then_the_manifest_page_size_in_inches()
     {
         PageXmlOptions options = MonJan4.Options(M, MonJan4.Generate() with { PageSize = PageSizeMode.Custom });
         string xml = MonJan4.Build(M, options);
         XElement page = XElement.Parse(xml);
 
-        XElement dimensions = page.Element(One + "PageSettings")!.Element(One + "PageSize")!.Element(One + "Dimensions")!;
-        dimensions.Element(One + "Width")!.Attribute("value")!.Value.Should().Be(OneNoteXml.Pt(M.PageWidthPt));
-        dimensions.Element(One + "Height")!.Attribute("value")!.Value.Should().Be(OneNoteXml.Pt(M.PageHeightPt));
+        XElement size = page.Element(One + "PageSettings")!.Element(One + "PageSize")!;
+        size.Elements().Select(e => e.Name.LocalName).Should().Equal("Orientation", "Dimensions");
+        size.Element(One + "Orientation")!.Attribute("landscape")!.Value.Should().Be("true", "the 1112 x 770 pt sheet is wider than tall");
+        XElement dimensions = size.Element(One + "Dimensions")!;
+        dimensions.Attribute("width")!.Value.Should().Be("15.44", "1112 pt / 72");
+        dimensions.Attribute("height")!.Value.Should().Be("10.69", "770 pt / 72");
+        dimensions.HasElements.Should().BeFalse("Dimensions is an empty element with width and height attributes");
+        size.ToString(SaveOptions.DisableFormatting).Should().Contain("<one:Orientation landscape=\"true\" /><one:Dimensions width=\"15.44\" height=\"10.69\" />");
         SchemaValidator.AssertValid(xml);
+    }
+
+    [Fact]
+    public void Custom_page_size_follows_the_manifest_page_shape_and_ignores_the_page_scale()
+    {
+        Manifest portrait = M with { PageSizePt = new[] { 612.0, 792.0 } };
+        PageXmlOptions options = MonJan4.Options(portrait, MonJan4.Generate() with { PageSize = PageSizeMode.Custom, PageScale = 0.5 });
+
+        XElement size = XElement.Parse(MonJan4.Build(portrait, options)).Element(One + "PageSettings")!.Element(One + "PageSize")!;
+
+        size.Element(One + "Orientation")!.Attribute("landscape")!.Value.Should().Be("false");
+        size.Element(One + "Dimensions")!.Attribute("width")!.Value.Should().Be("8.50", "Letter is 8.5 in wide, written with two decimals");
+        size.Element(One + "Dimensions")!.Attribute("height")!.Value.Should().Be("11.00");
+    }
+
+    [Fact]
+    public void Inches_are_points_over_72_with_two_decimals_whatever_the_culture()
+    {
+        CultureInfo original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            OneNoteXml.Inches(1112).Should().Be("15.44");
+            OneNoteXml.Inches(770).Should().Be("10.69");
+            OneNoteXml.Inches(612).Should().Be("8.50");
+            OneNoteXml.Inches(800.64).Should().Be("11.12");
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
     }
 
     [Fact]

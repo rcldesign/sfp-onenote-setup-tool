@@ -4,15 +4,22 @@
 
   The official 0336.OneNoteApplication_2013.xsd (Microsoft, "OneNote 2013 COM API XML schema") could not be downloaded
   from the build environment. This file is a faithful subset written from the published schema and from the XML OneNote
-  desktop returns, covering only what sfp2onenote writes and reads: Page, PageSettings, PageSize, Automatic, Dimensions,
-  RuleLines, Title, Meta, Outline, Position, Size, OEChildren, OE, T, Image, Data, Section, the ink elements InkWord,
-  InkDrawing and InkParagraph, and the style definitions a page from GetPageContent carries (QuickStyleDef, TagDef, Tag).
+  desktop returns, covering only what sfp2onenote writes and reads: Page, PageSettings, PageSize, Orientation,
+  Automatic, Dimensions, RuleLines, Title, Meta, Outline, Position, Size, OEChildren, OE, T, Image, Data, Section, the
+  ink elements InkWord, InkDrawing and InkParagraph, and the style definitions a page from GetPageContent carries
+  (QuickStyleDef, TagDef, Tag).
 
   On the owner's PC: copy the official file over this one (same path, same name) and run the Sfp.OneNote.Tests suite.
   Every generated XML must still validate. Attributes not in the official schema are errors there, as they are here.
 
   Rules kept from the original: all elements are namespace-qualified; attributes are not; element order in Page is
   QuickStyleDef, TagDef, Meta, PageSettings, Title, then content; Position and Size carry floats in points.
+
+  PageSize is reconstructed from the John Guin post on page width and height that the PRD cites: an optional
+  Orientation (landscape attribute), then Automatic or an empty Dimensions element whose width and height attributes
+  are in inches (8.5 x 11 for Letter), then optional Margins with top, bottom, left and right attributes. The official
+  file must confirm this shape; if it differs, the custom page size test (PageXmlBuilderTests) fails there first and
+  PageXmlBuilder.PageSettings follows the official file.
 -->
 <xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
             xmlns:one="http://schemas.microsoft.com/office/onenote/2013/onenote"
@@ -72,10 +79,6 @@
     <xsd:attribute name="width" type="xsd:float" use="required" />
     <xsd:attribute name="height" type="xsd:float" use="required" />
     <xsd:attribute name="isSetByUser" type="xsd:boolean" use="optional" />
-  </xsd:complexType>
-
-  <xsd:complexType name="PageDimension">
-    <xsd:attribute name="value" type="xsd:float" use="required" />
   </xsd:complexType>
 
   <xsd:complexType name="CallbackIDType">
@@ -188,9 +191,11 @@
     </xsd:complexType>
   </xsd:element>
 
+  <!-- Optional Orientation, then Automatic or Dimensions, then optional Margins (see the header note). -->
   <xsd:element name="PageSize">
     <xsd:complexType>
       <xsd:sequence>
+        <xsd:element ref="one:Orientation" minOccurs="0" maxOccurs="1" />
         <xsd:choice minOccurs="1" maxOccurs="1">
           <xsd:element ref="one:Automatic" />
           <xsd:element ref="one:Dimensions" />
@@ -200,27 +205,31 @@
     </xsd:complexType>
   </xsd:element>
 
+  <xsd:element name="Orientation">
+    <xsd:complexType>
+      <xsd:attribute name="landscape" type="xsd:boolean" use="optional" />
+    </xsd:complexType>
+  </xsd:element>
+
   <xsd:element name="Automatic">
     <xsd:complexType />
   </xsd:element>
 
+  <!-- Page width and height in inches, as attributes of an empty element. -->
   <xsd:element name="Dimensions">
     <xsd:complexType>
-      <xsd:sequence>
-        <xsd:element name="Width" type="one:PageDimension" />
-        <xsd:element name="Height" type="one:PageDimension" />
-      </xsd:sequence>
+      <xsd:attribute name="width" type="xsd:float" use="required" />
+      <xsd:attribute name="height" type="xsd:float" use="required" />
     </xsd:complexType>
   </xsd:element>
 
+  <!-- Print margins in inches, as attributes of an empty element; the tool never writes them. -->
   <xsd:element name="Margins">
     <xsd:complexType>
-      <xsd:sequence>
-        <xsd:element name="Top" type="one:PageDimension" />
-        <xsd:element name="Bottom" type="one:PageDimension" />
-        <xsd:element name="Left" type="one:PageDimension" />
-        <xsd:element name="Right" type="one:PageDimension" />
-      </xsd:sequence>
+      <xsd:attribute name="top" type="xsd:float" use="required" />
+      <xsd:attribute name="bottom" type="xsd:float" use="required" />
+      <xsd:attribute name="left" type="xsd:float" use="required" />
+      <xsd:attribute name="right" type="xsd:float" use="required" />
     </xsd:complexType>
   </xsd:element>
 
