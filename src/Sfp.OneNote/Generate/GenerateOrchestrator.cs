@@ -42,7 +42,8 @@ public sealed record GenerateOrchestratorOptions
 /// pages.json; otherwise create the notebook, every section (each section group once, before its first section), every
 /// page, the hierarchy per section and every hyperlink first (page IDs must exist before any content embeds them), then
 /// write each page as its render arrives from the parallel pipeline on this one thread, the Contents page, the sidecar,
-/// SyncHierarchy and NavigateTo the cover.
+/// the previous notebook's Next quarter link (with --previous; a warning, never a failure), SyncHierarchy and NavigateTo
+/// the cover.
 /// Cancellation is checked between pages; on cancel the partial notebook is closed and its folder deleted. Expected
 /// failures never throw: the result names the phase, the page and the HRESULT or message with the PRD exit code.
 /// </summary>
@@ -61,6 +62,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
     private readonly ISidecarStore _sidecars;
     private readonly GenerateOrchestratorOptions _options;
     private readonly ILogger _log;
+    private readonly Func<INextQuarterLinkWriter>? _nextQuarterLinks;
 
     /// <param name="preflight">The pre-run checks.</param>
     /// <param name="dates">Date engine for the quarter.</param>
@@ -70,6 +72,10 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
     /// <param name="sidecars">Sidecar store.</param>
     /// <param name="options">Run-wide settings.</param>
     /// <param name="log">Run log.</param>
+    /// <param name="nextQuarterLinks">
+    /// Creates the writer that fills the previous notebook's Next quarter link; called only when the request names a
+    /// previous notebook, after the new notebook is complete. Null reports a warning instead.
+    /// </param>
     public GenerateOrchestrator(
         IGeneratePreflight preflight,
         IDateEngine dates,
@@ -78,7 +84,8 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         Func<INotebookWriter> writerFactory,
         ISidecarStore sidecars,
         GenerateOrchestratorOptions options,
-        ILogger log)
+        ILogger log,
+        Func<INextQuarterLinkWriter>? nextQuarterLinks = null)
     {
         _preflight = preflight;
         _dates = dates;
@@ -88,6 +95,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         _sidecars = sidecars;
         _options = options;
         _log = log;
+        _nextQuarterLinks = nextQuarterLinks;
     }
 
     public GenerateResult Run(GenerateRequest request, IProgress<GenerateProgress>? progress, CancellationToken cancellationToken)
@@ -293,8 +301,9 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         string sidecarPath = _sidecars.PathFor(nb.Path);
         _sidecars.Save(sidecarPath, sidecar);
         state.SidecarPath = sidecarPath;
-        writer.Sync(nb);
         PageSpec? cover = plan.Pages.FirstOrDefault();
+        string? nextQuarterLink = LinkPreviousQuarter(state, nb, cover is null ? null : pageHrefs.GetValueOrDefault(cover.Key));
+        writer.Sync(nb);
         if (cover is not null)
         {
             writer.NavigateTo(pages[cover.Key]);
@@ -318,7 +327,54 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             LogPath = _options.LogPath,
             Warnings = state.Warnings,
             SidecarPath = sidecarPath,
+            NextQuarterLink = nextQuarterLink,
         };
+    }
+
+    /// <summary>
+    /// The --previous step: points the previous notebook's Next quarter link at the new cover. The new notebook is
+    /// complete by now, so nothing here fails the run: every problem becomes a warning. Returns the summary line when
+    /// the link was written, else null.
+    /// </summary>
+    private string? LinkPreviousQuarter(RunState state, NotebookHandle nb, string? coverHref)
+    {
+        string? previous = state.Request.Options.PreviousNotebook;
+        if (string.IsNullOrWhiteSpace(previous))
+        {
+            return null;
+        }
+
+        state.Report(GeneratePhase.Finishing, 0, 0, "Next quarter link on " + previous);
+        if (string.IsNullOrEmpty(coverHref))
+        {
+            state.Warnings.Add(NextQuarterLinkWriter.WarningFor(previous, "the new notebook has no cover page to link to"));
+            return null;
+        }
+
+        if (_nextQuarterLinks is null)
+        {
+            state.Warnings.Add(NextQuarterLinkWriter.WarningFor(previous, "this build composes no writer for the previous notebook"));
+            return null;
+        }
+
+        try
+        {
+            NextQuarterLinkResult result = _nextQuarterLinks().Link(previous, nb, coverHref);
+            if (result.Warning is not null)
+            {
+                state.Warnings.Add(result.Warning);
+            }
+
+            _log.Information("Next quarter link on {Previous}: {Outcome}", previous, result.Outcome);
+            return result.Summary;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // The link is a courtesy to the previous notebook; an unexpected failure is reported, never fatal.
+            _log.Warning(ex, "The Next quarter link step failed for {Previous}", previous);
+            state.Warnings.Add(NextQuarterLinkWriter.WarningFor(previous, ex.Message));
+            return null;
+        }
     }
 
     private RenderPipeline CreatePipeline(RunState state, NotebookPlan plan, IReadOnlyList<PageSpec> renderable)

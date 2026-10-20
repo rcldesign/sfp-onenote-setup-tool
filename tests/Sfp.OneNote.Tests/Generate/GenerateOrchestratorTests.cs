@@ -75,6 +75,9 @@ public class GenerateOrchestratorTests
 
         public int Capacity { get; set; } = 2;
 
+        /// <summary>The link writer for --previous, or null to compose none.</summary>
+        public Func<INextQuarterLinkWriter>? NextQuarterLinks { get; set; }
+
         public GenerateOptions Options(bool links = true) => new()
         {
             Start = new QuarterSpec(2027, 1),
@@ -103,7 +106,8 @@ public class GenerateOrchestratorTests
                 RenderBufferCapacity = Capacity,
                 Now = () => Now,
             },
-            Log.CreateLogger());
+            Log.CreateLogger(),
+            NextQuarterLinks);
 
         public GenerateResult Run(GenerateRequest? request = null, CancellationToken ct = default) => Build().Run(request ?? Request(), Progress, ct);
     }
@@ -399,6 +403,83 @@ public class GenerateOrchestratorTests
         sidecar.SectionGroups.Should().BeEmpty();
         XElement contents = XElement.Parse(app.PageContent(sidecar.Pages[PageKey.Contents.Value].PageId)!).Element(One + "Outline")!;
         contents.Element(One + "OEChildren")!.Elements(One + "OE").Should().HaveCount(19);
+    }
+
+    [Fact]
+    public void With_previous_the_previous_quarterly_review_links_to_the_new_cover_after_the_sidecar_and_before_the_sync()
+    {
+        Harness h = new();
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        PreviousNotebook previous = PreviousNotebook.Create(app, h.Root, M);
+        GenerateOptions options = h.Options() with { PreviousNotebook = previous.Folder };
+        PageXmlOptions xml = PageXmlOptions.From(M, options, "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+        h.NextQuarterLinks = () => new NextQuarterLinkWriter(app, new SidecarStore(), M, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run(h.Request(options));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.ExitCode.Should().Be(0);
+        result.Warnings.Should().BeEmpty();
+        result.NextQuarterLink.Should().Be("Next quarter link added to the quarterly review of SFP Q4 2026.");
+        Sidecar sidecar = new SidecarStore().Load(result.SidecarPath!)!;
+        sidecar.PreviousNotebook.Should().Be(previous.Folder);
+        string linkId = previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId];
+        OutlineInfo link = previous.Read(app).Outlines.Single(o => o.ObjectId == linkId);
+        link.PlainText.Should().Be("Next quarter ›");
+        string href = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Match(link.TextRuns.Single().Html, "href=\"([^\"]+)\"").Groups[1].Value);
+        HyperlinkParser.Parse(href).PageId.Should().Be(sidecar.Pages[PageKey.Cover.Value].PageId, "the link opens the new notebook's cover");
+
+        List<(string Call, string Detail)> calls = app.Calls.ToList();
+        int linkWrite = calls.FindLastIndex(c => c.Call == "UpdatePageContent" && c.Detail == "Page:" + previous.PageId);
+        linkWrite.Should().BeGreaterThan(calls.FindIndex(c => c.Call == "UpdatePageContent" && c.Detail == "Page:" + sidecar.Pages[PageKey.Contents.Value].PageId), "the link is written after the new notebook");
+        linkWrite.Should().BeLessThan(calls.FindIndex(c => c.Call == "SyncHierarchy"), "before SyncHierarchy");
+        h.Progress.Reports.Should().Contain(r => r.Phase == GeneratePhase.Finishing && r.Detail == "Next quarter link on " + previous.Folder);
+    }
+
+    [Fact]
+    public void A_previous_folder_that_does_not_exist_is_a_warning_and_the_run_still_succeeds()
+    {
+        Harness h = new();
+        using FakeOneNoteApp app = new();
+        string missing = Path.Combine(h.Root, "nowhere", "SFP Q4 2026");
+        GenerateOptions options = h.Options() with { PreviousNotebook = missing };
+        PageXmlOptions xml = PageXmlOptions.From(M, options, "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+        h.NextQuarterLinks = () => new NextQuarterLinkWriter(app, new SidecarStore(), M, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run(h.Request(options));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.ExitCode.Should().Be(0);
+        result.Phase.Should().Be(GeneratePhase.Done);
+        result.NextQuarterLink.Should().BeNull();
+        result.Warnings.Should().ContainSingle().Which.Should().StartWith("The Next quarter link was not written to the previous notebook " + missing + ":");
+        app.CallsOf("SyncHierarchy").Should().ContainSingle();
+        app.CallsOf("NavigateTo").Should().ContainSingle();
+    }
+
+    [Fact]
+    public void A_link_step_that_throws_or_is_not_composed_is_a_warning_never_a_failure()
+    {
+        Harness throwing = new() { NextQuarterLinks = () => throw new InvalidOperationException("the COM session is gone") };
+        GenerateResult result = throwing.Run(throwing.Request(throwing.Options() with { PreviousNotebook = "/notebooks/SFP Q4 2026" }));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Warnings.Should().ContainSingle().Which.Should().Contain("/notebooks/SFP Q4 2026").And.Contain("the COM session is gone");
+        throwing.Writer.Calls.Should().Contain("Sync");
+
+        Harness none = new();
+        GenerateResult without = none.Run(none.Request(none.Options() with { PreviousNotebook = "/notebooks/SFP Q4 2026" }));
+
+        without.Success.Should().BeTrue(without.Error);
+        without.Warnings.Should().ContainSingle().Which.Should().Contain("composes no writer");
+
+        Harness unused = new() { NextQuarterLinks = () => throw new InvalidOperationException("must not be called without --previous") };
+        GenerateResult plain = unused.Run();
+        plain.Success.Should().BeTrue(plain.Error);
+        plain.Warnings.Should().BeEmpty();
+        plain.NextQuarterLink.Should().BeNull();
     }
 
     [Fact]

@@ -250,6 +250,40 @@ public class GenerateCommandTests
     }
 
     [Fact]
+    public void The_summary_says_whether_the_previous_notebook_got_its_next_quarter_link()
+    {
+        string notebook = Path.Combine(Root, "out", "SFP Q1 2027");
+        GenerateResult linked = new()
+        {
+            Success = true,
+            ExitCode = 0,
+            Phase = GeneratePhase.Done,
+            OutputPath = notebook,
+            NotebookName = "SFP Q1 2027",
+            PagesWritten = 144,
+            SidecarPath = notebook + ".sfp-state.json",
+            NextQuarterLink = "Next quarter link added to the quarterly review of SFP Q4 2026.",
+        };
+        GenerateResult notLinked = linked with
+        {
+            NextQuarterLink = null,
+            Warnings = new[] { "The Next quarter link was not written to the previous notebook /old/SFP Q4 2026: its state file /old/SFP Q4 2026.sfp-state.json was not found." },
+        };
+
+        (int code, string stdout, string stderr, _, GenerateRequest? request, _) = RunWith(Args() with { Previous = Path.Combine(Root, "old", "SFP Q4 2026") }, linked);
+        (int code2, string stdout2, _, _, _, _) = RunWith(Args(), notLinked);
+
+        code.Should().Be(0);
+        stderr.Should().BeEmpty();
+        request!.Options.PreviousNotebook.Should().Be(Path.Combine(Root, "old", "SFP Q4 2026"));
+        string[] lines = stdout.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+        int state = Array.IndexOf(lines, "State file: " + notebook + ".sfp-state.json");
+        lines[state + 1].Should().Be("Next quarter link added to the quarterly review of SFP Q4 2026.", "the link line follows the state file line");
+        code2.Should().Be(0);
+        stdout2.Should().Contain("Warning: The Next quarter link was not written to the previous notebook /old/SFP Q4 2026: its state file").And.NotContain("Next quarter link added");
+    }
+
+    [Fact]
     public void A_failed_run_prints_the_failure_block_to_stderr_and_returns_its_exit_code()
     {
         string notebook = Path.Combine(Root, "out", "SFP Q1 2027");
