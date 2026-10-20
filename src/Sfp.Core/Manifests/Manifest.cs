@@ -182,6 +182,12 @@ public sealed record SlotsSpec
 
     public required CalendarEventLinesSlot CalendarEventLines { get; init; }
 
+    /// <summary>Annual Objectives title rows that Refresh fills with the objective titles ("annualRow:{n}").</summary>
+    public required AnnualTitleSlot AnnualTitle { get; init; }
+
+    /// <summary>The objective title beside the Objective Details heading that Refresh fills ("objectiveHeading").</summary>
+    public required BandSlot ObjectiveHeading { get; init; }
+
     /// <summary>Every slot's manifest name with the page names it applies to, in manifest order.</summary>
     public IReadOnlyList<(string Slot, IReadOnlyList<string> AppliesTo)> AppliesToBySlot() => new[]
     {
@@ -199,7 +205,33 @@ public sealed record SlotsSpec
         ("allDayBand", AllDayBand.AppliesTo),
         ("overviewDayColumns", OverviewDayColumns.AppliesTo),
         ("calendarEventLines", CalendarEventLines.AppliesTo),
+        ("annualTitle", AnnualTitle.AppliesTo),
+        ("objectiveHeading", ObjectiveHeading.AppliesTo),
     };
+}
+
+/// <summary>Annual Objectives title band per block: x fixed, y = block top + offset (the "annualRow:{n}" slots Refresh fills).</summary>
+public sealed record AnnualTitleSlot
+{
+    public required IReadOnlyList<string> AppliesTo { get; init; }
+
+    public required double X { get; init; }
+
+    /// <summary>Tops of the four objective blocks on an annual page, the same values as links.annualObjective.blockTops.</summary>
+    public required IReadOnlyList<double> BlockTops { get; init; }
+
+    public required double YOffset { get; init; }
+
+    public required double W { get; init; }
+
+    public required double H { get; init; }
+
+    public required double SizePt { get; init; }
+
+    public TextAlign Align { get; init; } = TextAlign.Left;
+
+    /// <summary>Rectangle for block index 0 to 3 on a page.</summary>
+    public RectPt Rect(int blockIndex) => new(X, BlockTops[blockIndex] + YOffset, W, H);
 }
 
 public sealed record DateField(string Name, TextAlign Align, double X);

@@ -58,6 +58,9 @@ public sealed record SetupValues(
     /// <summary>Slot ids whose value came from ink, for the preview.</summary>
     public IReadOnlyList<string> InkedSlots { get; init; } = Array.Empty<string>();
 
+    /// <summary>Calendar source lines that could not be parsed, worded for the summary (added by M4.2).</summary>
+    public IReadOnlyList<string> SourceProblems { get; init; } = Array.Empty<string>();
+
     public static SetupValues Empty { get; } = new(
         new string?[8], new string?[3], new string?[3], new string?[16], Array.Empty<CalendarSource>(), false);
 }
@@ -84,7 +87,11 @@ public enum ChangeKind
 /// <param name="Kind">Create, Update or Remove.</param>
 /// <param name="Blocked">True when a user object sits in the slot rectangle; nothing is written.</param>
 /// <param name="Reason">Why it is blocked, or null.</param>
-public sealed record PlannedChange(PageKey Page, string SlotId, string? OldText, string NewText, ChangeKind Kind, bool Blocked, string? Reason);
+public sealed record PlannedChange(PageKey Page, string SlotId, string? OldText, string NewText, ChangeKind Kind, bool Blocked, string? Reason)
+{
+    /// <summary>True when the new text comes from an inked Setup value, which the real run writes only when confirmed (added by M4.4).</summary>
+    public bool Inked { get; init; }
+}
 
 /// <summary>Computes every change Refresh would make from Setup values, never touching user content.</summary>
 public interface IPropagator

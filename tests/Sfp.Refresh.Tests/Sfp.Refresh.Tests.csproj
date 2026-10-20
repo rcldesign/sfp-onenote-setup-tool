@@ -6,6 +6,8 @@
     <ProjectReference Include="../../src/Sfp.Core/Sfp.Core.csproj" />
     <ProjectReference Include="../../src/Sfp.OneNote/Sfp.OneNote.csproj" />
     <ProjectReference Include="../../src/Sfp.Refresh/Sfp.Refresh.csproj" />
+    <!-- The refresh verb (M4.7) is tested here through RefreshCommand.Run with TextWriters; no separate CLI test project exists. -->
+    <ProjectReference Include="../../src/Sfp.Cli/Sfp.Cli.csproj" />
     <ProjectReference Include="../Sfp.TestSupport/Sfp.TestSupport.csproj" />
   </ItemGroup>
   <ItemGroup>
