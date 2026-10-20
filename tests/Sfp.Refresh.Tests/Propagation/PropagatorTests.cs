@@ -53,7 +53,11 @@ public class PropagatorTests
         bySlot["objectiveHeading"].Single(c => c.Page == PageKey.Objective(3)).NewText.Should().Be("Launch v2");
         bySlot["scorecardRow"].Should().HaveCount(8).And.AllSatisfy(c => c.Page.Should().Be(PageKey.Scorecard));
         changes.Should().HaveCount(104 + 8 + 8 + 8);
-        changes.Single(c => c.Page == MonJan4).NewText.Should().StartWith("O1 Ship the connector  O2 Hire two PMs  O3 Launch v2");
+        string legend = changes.Single(c => c.Page == MonJan4).NewText;
+        legend.Should().StartWith("O1 Ship th", "the legend lists the objectives in order, each cut to its share of the band");
+        legend.Split("  ").Should().HaveCount(8).And.SatisfyRespectively(
+            e => e.Should().StartWith("O1 "), e => e.Should().StartWith("O2 "), e => e.Should().StartWith("O3 "), e => e.Should().StartWith("O4 "),
+            e => e.Should().StartWith("O5 "), e => e.Should().StartWith("O6 "), e => e.Should().StartWith("O7 "), e => e.Should().StartWith("O8 "));
         changes.Select(c => c.Page).Distinct().Count().Should().Be(104 + 2 + 8 + 1);
     }
 

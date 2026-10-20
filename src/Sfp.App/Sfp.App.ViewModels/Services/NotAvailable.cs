@@ -64,6 +64,8 @@ public sealed class NotAvailableScheduledTaskService : IScheduledTaskService
 
     public void Register(string notebookName, string executablePath, int horizonDays) => throw new NotSupportedException(Message);
 
+    public void Register(string notebookName, string executablePath, int horizonDays, string? notebooksFolder) => throw new NotSupportedException(Message);
+
     public void Remove(string notebookName) => throw new NotSupportedException(Message);
 }
 

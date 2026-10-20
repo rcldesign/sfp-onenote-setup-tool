@@ -120,7 +120,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
             return Serialize(one, PageElement(one, page));
         }
 
-        throw new OneNoteException("GetHierarchy", OneNoteHResults.ObjectDoesNotExist, "No object " + startId, null);
+        throw new OneNoteException("GetHierarchy", OneNoteHResults.PageObjectDoesNotExist, "No object " + startId, null);
     }
 
     public string OpenHierarchy(string path, string? relativeToId, CreateFileType createFileType)
@@ -300,6 +300,27 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     }
 
     public void NavigateTo(string id) => Record("NavigateTo", id);
+
+    /// <summary>Removes the element with the given objectID from the stored page XML, as OneNote does.</summary>
+    public void DeletePageContent(string pageId, string objectId, DateTime dateExpectedLastModified)
+    {
+        Guard();
+        Record("DeletePageContent", pageId + " " + objectId);
+        if (!pages.TryGetValue(pageId, out Page? page) || page.Xml is null)
+        {
+            throw new OneNoteException("DeletePageContent", OneNoteHResults.PageDoesNotExist, "No page " + pageId, null);
+        }
+
+        XElement root = XElement.Parse(page.Xml);
+        XElement? target = root.Descendants().FirstOrDefault(e => (string?)e.Attribute("objectID") == objectId);
+        if (target is null)
+        {
+            throw new OneNoteException("DeletePageContent", OneNoteHResults.PageObjectDoesNotExist, "No object " + objectId + " on page " + pageId, null);
+        }
+
+        target.Remove();
+        page.Xml = OneNoteXml.Serialize(root);
+    }
 
     public void DeleteHierarchy(string id, bool deletePermanently)
     {

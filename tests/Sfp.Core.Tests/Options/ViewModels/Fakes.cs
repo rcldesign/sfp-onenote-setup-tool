@@ -308,7 +308,12 @@ public sealed class FakeScheduledTaskService : IScheduledTaskService
 
     public bool IsRegistered(string notebookName) => Registered.Contains(notebookName);
 
-    public void Register(string notebookName, string executablePath, int horizonDays)
+    public List<string?> Folders { get; } = new();
+
+    public void Register(string notebookName, string executablePath, int horizonDays) =>
+        Register(notebookName, executablePath, horizonDays, null);
+
+    public void Register(string notebookName, string executablePath, int horizonDays, string? notebooksFolder)
     {
         if (Throw is not null)
         {
@@ -317,6 +322,7 @@ public sealed class FakeScheduledTaskService : IScheduledTaskService
 
         Registered.Add(notebookName);
         Registrations.Add((notebookName, executablePath, horizonDays));
+        Folders.Add(notebooksFolder);
     }
 
     public void Remove(string notebookName)

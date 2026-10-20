@@ -95,5 +95,8 @@ public interface IScheduledTaskService
 
     void Register(string notebookName, string executablePath, int horizonDays);
 
+    /// <summary>Registers the task with --folder so the run finds the notebook's sidecar outside the default search folders.</summary>
+    void Register(string notebookName, string executablePath, int horizonDays, string? notebooksFolder);
+
     void Remove(string notebookName);
 }

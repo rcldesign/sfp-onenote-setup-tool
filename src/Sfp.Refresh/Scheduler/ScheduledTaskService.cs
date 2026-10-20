@@ -53,22 +53,36 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     }
 
     /// <summary>The /TR value: "{exe}" refresh --notebook "{name}" --calendar --horizon {n}.</summary>
-    public static string TaskRun(string notebookName, string executablePath, int horizonDays)
+    public static string TaskRun(string notebookName, string executablePath, int horizonDays) =>
+        TaskRun(notebookName, executablePath, horizonDays, null);
+
+    /// <summary>The /TR value with --folder "{folder}" appended when a notebooks folder is given (the sidecar lives there).</summary>
+    public static string TaskRun(string notebookName, string executablePath, int horizonDays, string? notebooksFolder)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(notebookName);
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
-        return string.Format(
+        string run = string.Format(
             CultureInfo.InvariantCulture,
             "\"{0}\" refresh --notebook \"{1}\" --calendar --horizon {2}",
             executablePath,
             notebookName.Trim(),
             horizonDays);
+        if (!string.IsNullOrWhiteSpace(notebooksFolder))
+        {
+            run += " --folder \"" + notebooksFolder.Trim().TrimEnd('\\') + "\"";
+        }
+
+        return run;
     }
 
     /// <summary>The schtasks arguments that create (or replace) the task.</summary>
-    public static IReadOnlyList<string> CreateArguments(string notebookName, string executablePath, int horizonDays) => new[]
+    public static IReadOnlyList<string> CreateArguments(string notebookName, string executablePath, int horizonDays) =>
+        CreateArguments(notebookName, executablePath, horizonDays, null);
+
+    /// <summary>The schtasks arguments that create (or replace) the task, with the notebooks folder on the command line.</summary>
+    public static IReadOnlyList<string> CreateArguments(string notebookName, string executablePath, int horizonDays, string? notebooksFolder) => new[]
     {
-        "/Create", "/SC", "DAILY", "/ST", StartTime, "/TN", TaskName(notebookName), "/TR", TaskRun(notebookName, executablePath, horizonDays), "/F",
+        "/Create", "/SC", "DAILY", "/ST", StartTime, "/TN", TaskName(notebookName), "/TR", TaskRun(notebookName, executablePath, horizonDays, notebooksFolder), "/F",
     };
 
     /// <summary>The schtasks arguments that query the task.</summary>
@@ -93,19 +107,23 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     }
 
     /// <inheritdoc />
-    public void Register(string notebookName, string executablePath, int horizonDays)
+    public void Register(string notebookName, string executablePath, int horizonDays) =>
+        Register(notebookName, executablePath, horizonDays, null);
+
+    /// <inheritdoc />
+    public void Register(string notebookName, string executablePath, int horizonDays, string? notebooksFolder)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(notebookName);
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
         ArgumentOutOfRangeException.ThrowIfNegative(horizonDays);
         RequireWindows();
-        ProcessResult result = runner.Run(SchtasksExe, CreateArguments(notebookName, executablePath, horizonDays));
+        ProcessResult result = runner.Run(SchtasksExe, CreateArguments(notebookName, executablePath, horizonDays, notebooksFolder));
         if (!result.Succeeded)
         {
             throw new InvalidOperationException(Failure("register", notebookName, result));
         }
 
-        log.Information("Scheduled task {Task} registered: daily at {Time}, {Run}", TaskName(notebookName), StartTime, TaskRun(notebookName, executablePath, horizonDays));
+        log.Information("Scheduled task {Task} registered: daily at {Time}, {Run}", TaskName(notebookName), StartTime, TaskRun(notebookName, executablePath, horizonDays, notebooksFolder));
     }
 
     /// <inheritdoc />

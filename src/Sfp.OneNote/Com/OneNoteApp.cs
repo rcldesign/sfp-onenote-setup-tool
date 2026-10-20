@@ -48,6 +48,8 @@ public sealed class OneNoteApp : IOneNoteApp
 
     public void DeleteHierarchy(string id, bool deletePermanently) => _session.DeleteHierarchy(id, deletePermanently);
 
+    public void DeletePageContent(string pageId, string objectId, DateTime dateExpectedLastModified) => _session.DeletePageContent(pageId, objectId, dateExpectedLastModified);
+
     public void CloseNotebook(string id) => _session.CloseNotebook(id);
 
     public void Dispose() => _session.Dispose();

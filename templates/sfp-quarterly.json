@@ -71,7 +71,7 @@
       "baselineY": 39.4,
       "numberX": [537.3, 556.1, 574.9, 593.7, 615.7, 628.3, 640.9, 653.5, 666.1, 678.7, 691.3, 703.9, 716.5],
       "numberSpan": { "from": 537, "to": 723 },
-      "circleDiameterPt": 12,
+      "circleDiameterPt": 13.4,
       "circleCenterY": 36,
       "labelRect": { "x": 386.1, "y": 30.0, "w": 141.6, "h": 11.7 }
     },
@@ -92,9 +92,9 @@
     "dayCounter": { "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "rightX": 1000, "baselineY": 54, "sizePt": 8, "format": "Day {dayOfQuarter} of {quarterLength} · Week {week} of {weekCount}" },
     "objectiveLegend": {
       "appliesTo": ["overview", "mon", "tue", "wed", "thu", "fri", "sat", "sun"],
-      "rect": { "x": 230, "y": 49, "w": 640, "h": 13 },
+      "rect": { "x": 230, "y": 49, "w": 470, "h": 13 },
       "sizePt": 8,
-      "maxWidthPt": 640,
+      "maxWidthPt": 470,
       "separator": "  "
     },
     "standingGoals": {
@@ -133,7 +133,7 @@
       "eventSizePt": 8,
       "eventLineHeight": 10
     },
-    "allDayBand": { "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "rect": { "x": 560, "y": 49, "w": 300, "h": 13 }, "sizePt": 8 },
+    "allDayBand": { "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "rect": { "x": 708, "y": 49, "w": 165, "h": 13 }, "sizePt": 8 },
     "overviewDayColumns": {
       "appliesTo": ["overview"],
       "x0": 29.5,

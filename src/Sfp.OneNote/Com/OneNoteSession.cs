@@ -108,6 +108,13 @@ internal sealed class OneNoteSession : IOneNoteApp
             return true;
         });
 
+    public void DeletePageContent(string pageId, string objectId, DateTime dateExpectedLastModified) =>
+        Call("DeletePageContent", pageId + " " + objectId, app =>
+        {
+            app.DeletePageContent(pageId, objectId, dateExpectedLastModified, false);
+            return true;
+        });
+
     public void CloseNotebook(string id) =>
         Call("CloseNotebook", id, app =>
         {

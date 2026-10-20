@@ -38,5 +38,11 @@ public interface IOneNoteApp : IDisposable
 
     void DeleteHierarchy(string id, bool deletePermanently);
 
+    /// <summary>
+    /// Deletes one object (an outline the tool wrote) from a page. UpdatePageContent never removes objects that are
+    /// absent from the XML it is given, so a Remove must go through this call.
+    /// </summary>
+    void DeletePageContent(string pageId, string objectId, DateTime dateExpectedLastModified);
+
     void CloseNotebook(string id);
 }

@@ -52,7 +52,7 @@
   </one:Outline>
   <one:Outline>
     <one:Position x="230" y="85" z="1" />
-    <one:Size width="640" height="13" isSetByUser="true" />
+    <one:Size width="470" height="13" isSetByUser="true" />
     <one:OEChildren>
       <one:OE alignment="left">
         <one:T><![CDATA[<span style='font-family:Bookman Old Style;font-size:8.0pt;color:#1E1E20'>O1 Ship the connector  O2 Hire two PMs</span>]]></one:T>
