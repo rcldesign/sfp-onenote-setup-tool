@@ -26,4 +26,20 @@
     <!-- The templates folder ships beside the executable. -->
     <None Include="$(TemplatesDir)**/*" Link="templates/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <PropertyGroup>
+    <!-- Publishing (build/publish.sh, build/publish.ps1): a self-contained single-file win-x64 sfp2onenote.exe in the
+         release folder, templates beside it. Never trimmed: the app is WPF, which is not trim-safe, and both executables
+         carry the same libraries. Symbols and XML documentation stay out of the release folder. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishDocumentationFile>false</PublishDocumentationFile>
+    <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+  </PropertyGroup>
+  <Target Name="ExcludeSymbolsFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <!-- The referenced projects' .pdb files and the native libSkiaSharp.pdb (89 MB) of the SkiaSharp package would
+         otherwise land loose beside the single-file executable. -->
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
 </Project>

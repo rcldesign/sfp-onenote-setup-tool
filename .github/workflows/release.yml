@@ -1,0 +1,47 @@
+name: release
+
+# M6.6 and M7.5: pushing a tag such as v1.0.0 builds and tests on Windows, publishes both self-contained single-file
+# executables with the templates folder through build/publish.ps1, and attaches the zip to the GitHub release of the
+# tag (created when it does not exist yet). A tag with a hyphen (v1.1.0-rc.1) makes a prerelease.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build, test, publish and attach the zip
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore
+        run: dotnet restore
+      - name: Build (warnings as errors)
+        run: dotnet build --no-restore -warnaserror -c Release
+      - name: Test (no Office needed)
+        run: dotnet test --no-build -c Release --filter "Category!=COM" --logger "trx;LogFileName=results.trx"
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-results
+          path: "**/TestResults/*.trx"
+          if-no-files-found: ignore
+      - name: Publish the release folder and zip
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ./build/publish.ps1 -Version $env:TAG
+      - name: Attach the zip to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/sfp2onenote-*-win-x64.zip
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
