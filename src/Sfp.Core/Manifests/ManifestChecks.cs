@@ -3,10 +3,10 @@ using System.Globalization;
 namespace Sfp.Core.Manifests;
 
 /// <summary>
-/// Structural sanity and token validation run on every loaded manifest: page size and count, the nine-page week run,
-/// PDF page numbers inside the document, known page names in every <c>appliesTo</c> list and page template, and the
-/// PRD token set in every section name and page title pattern. Each failure is a <see cref="ManifestException"/>
-/// naming the manifest and the offending value.
+/// Structural sanity and token validation run on every loaded manifest: no null where the record needs a value, page
+/// size and count, the nine-page week run, PDF page numbers inside the document, known page names in every
+/// <c>appliesTo</c> list and page template, and the PRD token set in every section name and page title pattern. Each
+/// failure is a <see cref="ManifestException"/> naming the manifest and the offending value.
 /// </summary>
 public static class ManifestChecks
 {
@@ -16,11 +16,16 @@ public static class ManifestChecks
     /// <summary>OneNote supports page levels 1 to 3.</summary>
     public const int MaxPageLevel = 3;
 
-    /// <summary>Runs every check; <paramref name="sourceName"/> names the manifest in error messages.</summary>
+    /// <summary>
+    /// Runs every check; <paramref name="sourceName"/> names the manifest in error messages. The null walk runs first
+    /// (a user manifest's {"slots": {"date": null}} is reported as "$.slots.date must not be null" instead of failing
+    /// later with a NullReferenceException), so the remaining checks can rely on every non-nullable member.
+    /// </summary>
     public static void Run(Manifest manifest, string sourceName)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(sourceName);
+        ManifestNullChecks.Run(manifest, sourceName);
         CheckPage(manifest, sourceName);
         CheckPageTypes(manifest, sourceName);
         CheckSlots(manifest, sourceName);
