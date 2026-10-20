@@ -113,6 +113,39 @@ public class GenerateViewModelTests
     }
 
     [Fact]
+    public async Task A_saved_start_before_the_next_quarter_is_not_restored()
+    {
+        using GenerateViewModel vm = _h.NewGenerate();
+
+        // Today is October 20, 2026: the next quarter starts in January 2027; October 2026 is already under way.
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2026, 10), NotebookName = "SFP Q4 2026", Dpi = 144 });
+        await Settle(vm);
+
+        vm.Start.Should().Be(new QuarterSpec(2027, 1), "the form opens on the next quarter, not on last time's");
+        vm.NotebookName.Should().Be("SFP Q1 2027", "a saved name that was the old start's default follows the new default");
+        vm.Dpi.Should().Be(144, "the other saved values still apply");
+        vm.Month = 4;
+        vm.NotebookName.Should().Be("SFP Q2 2027", "the name keeps following the start");
+
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2026, 7), NotebookName = "My planner" });
+        vm.Start.Should().Be(new QuarterSpec(2027, 1));
+        vm.NotebookName.Should().Be("My planner", "a name the user typed is kept");
+
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2027, 1), NotebookName = "SFP Q1 2027" });
+        vm.Start.Should().Be(new QuarterSpec(2027, 1), "the next quarter itself is restored");
+
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2027, 7), NotebookName = "SFP Q3 2027" });
+        vm.Start.Should().Be(new QuarterSpec(2027, 7), "a later quarter planned ahead is restored");
+        vm.NotebookName.Should().Be("SFP Q3 2027");
+
+        _h.Now = new DateOnly(2027, 1, 5);
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2027, 1), NotebookName = "SFP Q1 2027" });
+        vm.Start.Should().Be(new QuarterSpec(2027, 4), "the clock is read when the settings load");
+        vm.NotebookName.Should().Be("SFP Q2 2027");
+        await Settle(vm);
+    }
+
+    [Fact]
     public async Task Notebook_name_follows_the_default_until_the_user_edits_it()
     {
         using GenerateViewModel vm = _h.NewGenerate();

@@ -214,19 +214,27 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     /// <summary>The last validation pass, with every message.</summary>
     public GenerateFormValidation Validation => _validation;
 
-    /// <summary>Fills every field from saved settings, with the PRD defaults where a value is missing, then starts the PDF check.</summary>
+    /// <summary>
+    /// Fills every field from saved settings, with the PRD defaults where a value is missing, then starts the PDF check.
+    /// The saved start month is restored only when it is not before the next calendar quarter (as of the clock now):
+    /// last quarter's start would otherwise greet the user every time. A saved name that was the default of the saved
+    /// start follows the default of the start shown; a name the user typed is kept.
+    /// </summary>
     public void LoadFrom(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _loading = true;
         try
         {
-            QuarterSpec start = IsSupported(settings.Start) ? settings.Start : GenerateFormDefaults.NextQuarterStart(_env.CurrentDate());
+            QuarterSpec next = GenerateFormDefaults.NextQuarterStart(_env.CurrentDate());
+            QuarterSpec? saved = settings.Start;
+            QuarterSpec start = IsSupported(saved) && !IsBefore(saved, next) ? saved : next;
             _lastValidStart = start;
             Month = start.Month;
             YearText = start.Year.ToString(CultureInfo.InvariantCulture);
             _defaultName = DefaultNameFor(start);
-            NotebookName = string.IsNullOrWhiteSpace(settings.NotebookName) ? _defaultName : settings.NotebookName;
+            string? savedDefault = IsSupported(saved) ? DefaultNameFor(saved) : null;
+            NotebookName = string.IsNullOrWhiteSpace(settings.NotebookName) || settings.NotebookName == savedDefault ? _defaultName : settings.NotebookName;
             _nameFollowsDefault = NotebookName == _defaultName;
             OutputFolder = string.IsNullOrWhiteSpace(settings.OutputFolder) ? _env.DefaultOutputFolder : settings.OutputFolder;
             DateFormat = DateFormatChoice.For(settings.DateOrder, settings.PadDateFields);
@@ -395,6 +403,9 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     private static bool IsSupported(int year, int month) => year is >= QuarterSpec.MinYear and <= QuarterSpec.MaxYear && month is >= 1 and <= 12;
 
     private static bool IsSupported([NotNullWhen(true)] QuarterSpec? spec) => spec is not null && IsSupported(spec.Year, spec.Month);
+
+    /// <summary>True when <paramref name="a"/> is an earlier month than <paramref name="b"/>.</summary>
+    private static bool IsBefore(QuarterSpec a, QuarterSpec b) => a.Year < b.Year || (a.Year == b.Year && a.Month < b.Month);
 
     /// <summary>The quarter of a supported start, else null. Every date engine call goes through here because <see cref="IDateEngine.Build"/> throws outside 1900 to 2199.</summary>
     private Quarter? QuarterOf(QuarterSpec? spec) => IsSupported(spec) ? _dates.Build(spec) : null;
