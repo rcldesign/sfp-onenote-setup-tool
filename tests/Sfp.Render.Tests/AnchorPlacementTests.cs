@@ -1,5 +1,8 @@
 using System.Globalization;
 using System.Text;
+using Sfp.Core;
+using Sfp.Core.Dates;
+using Sfp.Core.Manifests;
 using Sfp.Core.Options;
 using Sfp.Core.Plan;
 
@@ -108,6 +111,84 @@ public sealed class AnchorPlacementTests
         }
     }
 
+    /// <summary>
+    /// Wave 3 review: no two placements of a page overlap, so a native object never lands on another (the legend and the
+    /// all-day band once shared x 560 to 860 of the title band). Q4 2026 adds the six-row November, whose stacked
+    /// "23 / 30" box narrows its link to the "23"; it needs no exception.
+    /// </summary>
+    [Theory]
+    [InlineData(2027, 1)]
+    [InlineData(2026, 10)]
+    public void No_two_placements_overlap_on_any_page_of_the_quarter(int year, int month)
+    {
+        GenerateOptions options = f.Q1Options with { Start = new QuarterSpec(year, month) };
+        NotebookPlan plan = f.Plan(options);
+        RenderOptions render = f.Options(options, dpi: 72);
+        List<string> problems = new();
+        int pagesWithPlacements = 0;
+        foreach (PageSpec page in plan.Pages)
+        {
+            RenderedPage art = f.Renderer.Render(page, plan, render);
+            pagesWithPlacements += art.Anchors.Count > 1 ? 1 : 0;
+            problems.AddRange(Overlaps(art.Anchors).Select(p => $"{page.Key}: {Describe(p.A)} overlaps {Describe(p.B)}"));
+        }
+
+        pagesWithPlacements.Should().BeGreaterThan(100, "the check must see the daily, overview, calendar and review pages");
+        problems.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void The_overlap_check_catches_the_legend_and_all_day_band_sharing_the_title_band()
+    {
+        // The daily title band before the wave 3 adjudication: legend x 230 to 870, all-day events x 560 to 860.
+        Manifest m = f.Manifest;
+        Manifest old = m with
+        {
+            Slots = m.Slots with
+            {
+                ObjectiveLegend = m.Slots.ObjectiveLegend with { Rect = new RectPt(230, 49, 640, 13) },
+                AllDayBand = m.Slots.AllDayBand with { Rect = new RectPt(560, 49, 300, 13) },
+            },
+        };
+        PageRenderer renderer = new(old, f.Rasterizer, f.Fonts, f.Engine);
+        RenderedPage page = renderer.Render(f.Q1Plan.Page(MonJan4), f.Q1Plan, f.Options(f.Q1Options, dpi: 72));
+
+        Overlaps(page.Anchors).Select(p => (p.A.AnchorId, p.B.AnchorId)).Should().Equal(new[] { ("objectiveLegend", "allDayBand") });
+    }
+
+    [Fact]
+    public void Placements_that_only_share_an_edge_do_not_overlap()
+    {
+        AnchorPlacement row9 = new("timeBlockEvent:9", 900, 100, 182.7f, 34.6875f, "", TextAlign.Left, 8);
+        AnchorPlacement row10 = row9 with { AnchorId = "timeBlockEvent:10", Y = 134.6875f };
+        AnchorPlacement inside = row9 with { AnchorId = "inside", X = 950, Y = 120, W = 10, H = 5 };
+
+        Overlaps(new[] { row9, row10 }).Should().BeEmpty("consecutive hour rows touch");
+        Overlaps(new[] { row9, inside }).Should().ContainSingle();
+    }
+
+    /// <summary>Every pair of placements whose rectangles share an area wider and taller than <paramref name="tolerancePt"/>.</summary>
+    internal static IReadOnlyList<(AnchorPlacement A, AnchorPlacement B)> Overlaps(IReadOnlyList<AnchorPlacement> anchors, double tolerancePt = 0.01)
+    {
+        List<(AnchorPlacement, AnchorPlacement)> pairs = new();
+        for (int i = 0; i < anchors.Count; i++)
+        {
+            for (int j = i + 1; j < anchors.Count; j++)
+            {
+                AnchorPlacement a = anchors[i];
+                AnchorPlacement b = anchors[j];
+                double width = Math.Min(a.X + a.W, b.X + b.W) - Math.Max(a.X, b.X);
+                double height = Math.Min(a.Y + a.H, b.Y + b.H) - Math.Max(a.Y, b.Y);
+                if (width > tolerancePt && height > tolerancePt)
+                {
+                    pairs.Add((a, b));
+                }
+            }
+        }
+
+        return pairs;
+    }
+
     [Fact]
     public void Links_off_leaves_only_propagated_slots()
     {
@@ -119,6 +200,9 @@ public sealed class AnchorPlacementTests
             f.Renderer.Render(page, plan, options).Anchors.Should().NotContain(a => a.Kind == AnchorKind.Link, $"page {page.Key}");
         }
     }
+
+    private static string Describe(AnchorPlacement a) =>
+        string.Create(CultureInfo.InvariantCulture, $"{a.AnchorId} (x {a.X:0.##} to {a.X + a.W:0.##}, y {a.Y:0.##} to {a.Y + a.H:0.##})");
 
     /// <summary>One line per placement in emission order, every number with two decimals at most.</summary>
     private static string Describe(RenderedPage page)
