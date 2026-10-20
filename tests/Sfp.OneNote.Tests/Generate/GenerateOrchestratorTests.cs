@@ -529,20 +529,22 @@ public class GenerateOrchestratorTests
         result.Success.Should().BeTrue(result.Error);
         result.ExitCode.Should().Be(0);
         result.OutputPath.Should().Be(dir);
-        result.PagesRendered.Should().Be(6);
+        result.PagesRendered.Should().Be(7, "every page of the plan is listed, the native Contents page included");
         result.PagesWritten.Should().Be(0);
         result.OutputBytes.Should().BeGreaterThan(0);
         Directory.GetFiles(dir, "*.png").Select(Path.GetFileName).Should().BeEquivalentTo(
             "cover.png", "setup.png", "week-02-overview.png", "day-2027-01-04.png", "day-2027-01-05.png", "week-02-reflection.png");
         File.ReadAllBytes(Path.Combine(dir, "cover.png")).Should().Equal(MonJan4.Png);
-        PageIndex index = RenderOnlyOutput.ReadIndex(Path.Combine(dir, RenderOnlyOutput.IndexFileName));
-        index.Notebook.Should().Be("SFP Q1 2027");
-        index.Quarter.Should().Be("2027-01");
+        RenderIndex index = RenderIndex.Parse(File.ReadAllText(Path.Combine(dir, RenderOnlyRunner.IndexFileName)));
+        index.Name.Should().Be("SFP Q1 2027");
+        index.Quarter.Should().Be("Q1 2027");
         index.Dpi.Should().Be(144);
-        index.Count.Should().Be(6);
-        index.Pages.Select(p => p.Key).Should().Equal("cover", "setup", "week:02:overview", "day:2027-01-04", "day:2027-01-05", "week:02:reflection");
-        PageIndexEntry monday = index.Pages.Single(p => p.Key == "day:2027-01-04");
-        monday.File.Should().Be("day-2027-01-04.png");
+        index.Pages.Select(p => p.Key).Should().Equal("cover", "contents", "setup", "week:02:overview", "day:2027-01-04", "day:2027-01-05", "week:02:reflection");
+        RenderIndexPage contents = index.Pages.Single(p => p.Key == "contents");
+        contents.Png.Should().BeNull("the native Contents page has no image and gets no file");
+        contents.Width.Should().Be(0);
+        RenderIndexPage monday = index.Pages.Single(p => p.Key == "day:2027-01-04");
+        monday.Png.Should().Be("day-2027-01-04.png");
         monday.Title.Should().Be("Mon Jan 4");
         monday.Section.Should().Be(TestPlans.WeekSectionName);
         monday.Level.Should().Be(2);
@@ -552,7 +554,75 @@ public class GenerateOrchestratorTests
         monday.Anchors.Select(a => a.AnchorId).Should().Equal("dailyDate", "next", "objectiveLegend");
         monday.Anchors.Last().Kind.Should().Be(AnchorKind.Propagated);
         h.Progress.Phases.Should().Equal(GeneratePhase.CheckingOneNote, GeneratePhase.Validating, GeneratePhase.Rendering, GeneratePhase.Finishing, GeneratePhase.Done);
+        h.Progress.Reports.Where(r => r.Phase == GeneratePhase.Rendering && r.Current > 0).Select(r => r.Current).OrderBy(c => c).Should().Equal(1, 2, 3, 4, 5, 6, 7);
         h.Renderer.Threads.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public void Generate_render_only_writes_exactly_what_the_render_only_verb_writes_and_no_file_for_image_less_pages()
+    {
+        Harness h = new() { Plans = new PlanBuilder(new DateEngine()) };
+        h.WriterFactory = () => throw new InvalidOperationException("render-only must not create a writer");
+        GenerateOptions options = h.Options() with { Dpi = 144 };
+        string viaGenerate = Path.Combine(h.Root, "generate");
+        string viaVerb = Path.Combine(h.Root, "verb");
+
+        GenerateResult result = h.Run(h.Request(options, viaGenerate));
+        NotebookPlan plan = new PlanBuilder(new DateEngine()).Build(M, TestPlans.Q1, options);
+        RenderOnlyResult verb = new RenderOnlyRunner(new FakePageRenderer(), maxDegreeOfParallelism: 2).Run(plan, new RenderOptions(options.PdfPath, options.Dpi, options), viaVerb);
+
+        result.Success.Should().BeTrue(result.Error);
+        result.PagesRendered.Should().Be(verb.PagesRendered).And.Be(144);
+        static List<string> Files(string dir) => Directory.GetFiles(dir).Select(f => Path.GetFileName(f)).Order(StringComparer.Ordinal).ToList();
+        Files(viaGenerate).Should().Equal(Files(viaVerb));
+        File.ReadAllText(Path.Combine(viaGenerate, RenderOnlyRunner.IndexFileName)).Should().Be(File.ReadAllText(Path.Combine(viaVerb, RenderOnlyRunner.IndexFileName)), "both verbs share one pages.json schema");
+        Directory.GetFiles(viaGenerate, "*.png").Should().HaveCount(142).And.OnlyContain(f => new FileInfo(f).Length > 0, "no empty PNG is written");
+        File.Exists(Path.Combine(viaGenerate, "objectives.png")).Should().BeFalse("the blank parent page has no image");
+        File.Exists(Path.Combine(viaGenerate, "contents.png")).Should().BeFalse();
+        RenderIndex index = RenderIndex.Parse(File.ReadAllText(Path.Combine(viaGenerate, RenderOnlyRunner.IndexFileName)));
+        index.Pages.Should().HaveCount(144);
+        index.Pages.Single(p => p.Key == PageKey.ObjectiveDetails.Value).Png.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_render_only_page_that_fails_is_named_with_exit_4_and_no_index_is_written()
+    {
+        Harness h = new() { Parallelism = 1 };
+        h.Renderer.Failure = page => page.Key == TestPlans.Monday ? new InvalidOperationException("PDFium could not decode the page") : null;
+        string dir = Path.Combine(h.Root, "png");
+
+        GenerateResult result = h.Run(h.Request(h.Options(), dir));
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(4);
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.FailedPage.Should().Be("Mon Jan 4");
+        result.Error.Should().Contain("Rendering pages").And.Contain("Day page 'Mon Jan 4' (PDF page 26)").And.Contain("PDFium could not decode the page");
+        result.OutputPath.Should().Be(dir);
+        File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Cancelling_render_only_stops_after_the_pages_in_flight_and_writes_no_index()
+    {
+        Harness h = new() { Parallelism = 1 };
+        using CancellationTokenSource cts = new();
+        h.Renderer.BeforeRender = page =>
+        {
+            if (page.Key == TestPlans.Overview)
+            {
+                cts.Cancel();
+            }
+        };
+        string dir = Path.Combine(h.Root, "png");
+
+        GenerateResult result = h.Run(h.Request(h.Options(), dir), cts.Token);
+
+        result.Cancelled.Should().BeTrue();
+        result.ExitCode.Should().Be(0);
+        result.Phase.Should().Be(GeneratePhase.Cancelled);
+        File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse();
+        h.Renderer.Rendered.Should().NotContain(TestPlans.Reflection, "pages after the cancel are not rendered");
     }
 
     [Fact]

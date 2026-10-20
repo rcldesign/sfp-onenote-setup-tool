@@ -39,11 +39,12 @@ public sealed record GenerateOrchestratorOptions
 
 /// <summary>
 /// The production <see cref="IGenerateOrchestrator"/>. Phases: preflight, plan, then for render-only the PNG files and
-/// pages.json; otherwise create the notebook, every section (each section group once, before its first section), every
-/// page, the hierarchy per section and every hyperlink first (page IDs must exist before any content embeds them), then
-/// write each page as its render arrives from the parallel pipeline on this one thread, the Contents page, the sidecar,
-/// the previous notebook's Next quarter link (with --previous; a warning, never a failure), SyncHierarchy and NavigateTo
-/// the cover.
+/// pages.json through the render-only verb's <see cref="RenderOnlyRunner"/>; otherwise create the notebook (its first
+/// OpenHierarchy decides the PRD's not-signed-in case), every section (each section group once, before its first
+/// section), every page, the hierarchy per section and every hyperlink first (page IDs must exist before any content
+/// embeds them), then write each page as its render arrives from the parallel pipeline on this one thread, the
+/// Contents page, the sidecar, the previous notebook's Next quarter link (with --previous; a warning, never a
+/// failure), SyncHierarchy and NavigateTo the cover.
 /// Cancellation is checked between pages; on cancel the partial notebook is closed and its folder deleted. Expected
 /// failures never throw: the result names the phase, the page and the HRESULT or message with the PRD exit code.
 /// </summary>
@@ -156,32 +157,35 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         _log.Information("Plan {Name}: {Sections} sections, {Pages} pages ({Renderable} rendered), {Links} links", plan.Name, plan.Sections.Count, plan.Pages.Count(), renderable.Count, plan.Links.Count);
         state.Cancellation.ThrowIfCancellationRequested();
 
-        return request.RenderOnly ? RunRenderOnly(state, plan, renderable) : RunNotebook(state, plan, renderable);
+        return request.RenderOnly ? RunRenderOnly(state, plan) : RunNotebook(state, plan, renderable);
     }
 
-    private GenerateResult RunRenderOnly(RunState state, NotebookPlan plan, IReadOnlyList<PageSpec> renderable)
+    /// <summary>
+    /// Render-only goes through <see cref="RenderOnlyRunner"/>, the render-only verb's runner, so both write the same
+    /// output: one {key}.png per page that has an image (none for Contents and the blank parent page) and the
+    /// pages.json index (<see cref="RenderIndex"/>) listing every page of the plan. A page that fails to render is
+    /// named in the result (exit 4); cancellation stops after the pages in flight and writes no pages.json.
+    /// </summary>
+    private GenerateResult RunRenderOnly(RunState state, NotebookPlan plan)
     {
         string dir = state.Request.RenderOutputDir ?? throw new InvalidOperationException("Render-only needs an output folder.");
-        Directory.CreateDirectory(dir);
+        GenerateOptions o = state.Request.Options;
         state.Enter(GeneratePhase.Rendering);
-        state.Report(GeneratePhase.Rendering, 0, renderable.Count, null);
-        Dictionary<PageKey, string> sectionOf = SectionNames(plan);
-        List<PageIndexEntry> entries = new(renderable.Count);
-        using (RenderPipeline pipeline = CreatePipeline(state, plan, renderable))
-        {
-            foreach (RenderedPage art in pipeline.Pages())
+        state.Report(GeneratePhase.Rendering, 0, plan.Pages.Count(), null);
+        RenderOnlyRunner runner = new(new PageNamingRenderer(_renderer), Math.Max(1, _options.MaxDegreeOfParallelism));
+        RenderOnlyResult rendered = runner.Run(
+            plan,
+            new RenderOptions(o.PdfPath, o.Dpi, o),
+            dir,
+            new SynchronousProgress<RenderProgress>(p =>
             {
-                PageSpec spec = plan.Page(art.Key);
-                state.CurrentPage = spec;
-                entries.Add(RenderOnlyOutput.WritePage(dir, spec, sectionOf[art.Key], art));
-                state.Report(GeneratePhase.Rendering, entries.Count, renderable.Count, spec.Title);
-                state.Cancellation.ThrowIfCancellationRequested();
-            }
-        }
+                _log.Information("Rendered page {Key} ({Title})", p.Key.Value, p.Title);
+                state.Report(GeneratePhase.Rendering, p.Done, p.Total, p.Title);
+            }),
+            state.Cancellation);
+        _log.Information("Render-only wrote {Files} PNG files for {Pages} pages and {Index}", rendered.PngFiles, rendered.PagesRendered, rendered.IndexPath);
 
-        state.CurrentPage = null;
         state.Enter(GeneratePhase.Finishing);
-        RenderOnlyOutput.WriteIndex(dir, plan, state.Request.Options.Dpi, entries);
         state.Enter(GeneratePhase.Done);
         return new GenerateResult
         {
@@ -190,7 +194,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             Phase = GeneratePhase.Done,
             OutputPath = dir,
             NotebookName = plan.Name,
-            PagesRendered = entries.Count,
+            PagesRendered = rendered.PagesRendered,
             Elapsed = state.Clock.Elapsed,
             OutputBytes = FolderSize(dir),
             LogPath = _options.LogPath,
@@ -608,18 +612,43 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         }
     }
 
-    private static Dictionary<PageKey, string> SectionNames(NotebookPlan plan)
+    /// <summary>
+    /// Wraps the renderer for render-only so a page that fails is named (<see cref="RenderFailedException"/>), as the
+    /// render pipeline does for a notebook run.
+    /// </summary>
+    private sealed class PageNamingRenderer : IPageRenderer
     {
-        Dictionary<PageKey, string> result = new();
-        foreach (SectionSpec section in plan.Sections)
+        private readonly IPageRenderer _inner;
+
+        public PageNamingRenderer(IPageRenderer inner)
         {
-            foreach (PageSpec page in section.Pages)
-            {
-                result[page.Key] = section.Name;
-            }
+            _inner = inner;
         }
 
-        return result;
+        public RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions o)
+        {
+            try
+            {
+                return _inner.Render(page, plan, o);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+            {
+                throw new RenderFailedException(page, ex);
+            }
+        }
+    }
+
+    /// <summary>Reports on the calling thread (Progress&lt;T&gt; would post to the thread pool and could report after the run ended).</summary>
+    private sealed class SynchronousProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> _report;
+
+        public SynchronousProgress(Action<T> report)
+        {
+            _report = report;
+        }
+
+        public void Report(T value) => _report(value);
     }
 
     /// <summary>Mutable state of one run: where it is, what it holds, what to clean up.</summary>
