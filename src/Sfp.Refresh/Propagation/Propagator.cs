@@ -13,8 +13,9 @@ namespace Sfp.Refresh.Propagation;
 /// every calendar page. The current page XML is read lazily through the injected reader (the dry run reads nothing it
 /// does not need); a page that cannot be read is skipped with a blocked change naming the reason. A slot is blocked when
 /// an object the tool does not own overlaps its rectangle, or when the tool's own object was moved by the user. The plan
-/// is idempotent: a tool-owned object that already holds the text yields nothing. A cleared Setup slot removes the
-/// tool-owned object it fed (the object is the tool's, so removing it never touches user content).
+/// is idempotent: a tool-owned object that already holds the text yields nothing, unless a user object now covers it,
+/// which is reported as a blocked entry that writes nothing. A cleared Setup slot removes the tool-owned object it fed
+/// (the object is the tool's, so removing it never touches user content).
 /// </summary>
 public sealed class Propagator : IPropagator
 {
@@ -110,7 +111,9 @@ public sealed class Propagator : IPropagator
     /// <summary>
     /// The change for one slot from its desired text and current state: nothing when the owned object already holds the
     /// text (or there is nothing to write), Create when the slot is empty, Update when the text differs, Remove when the
-    /// desired text is empty; blocked when a user object overlaps the slot or the owned object was moved.
+    /// desired text is empty; blocked when a user object overlaps the slot or the owned object was moved. When the owned
+    /// object already holds the text but a user object overlaps it, a blocked entry reports the slot (nothing is
+    /// written), so the summary names the slot the user wrote over (PRD Refresh acceptance item 2).
     /// </summary>
     public static PlannedChange? Decide(PageKey page, string slotId, string desired, SlotState state)
     {
@@ -134,7 +137,9 @@ public sealed class Propagator : IPropagator
         string old = state.OwnedText ?? "";
         if (string.Equals(old, wanted, StringComparison.Ordinal))
         {
-            return null;
+            return state.IsBlocked && !state.Moved
+                ? new PlannedChange(page, slotId, old, wanted, ChangeKind.Update, true, CoveredReason(state))
+                : null;
         }
 
         ChangeKind kind = wanted.Length == 0 ? ChangeKind.Remove : ChangeKind.Update;
@@ -157,6 +162,10 @@ public sealed class Propagator : IPropagator
         ArgumentNullException.ThrowIfNull(state);
         return "A user object overlaps the slot: " + state.IntruderSummary + ".";
     }
+
+    /// <summary>"A user object overlaps the slot: text 'my note'. The tool's text there is already current and was left as it is."</summary>
+    public static string CoveredReason(SlotState state) =>
+        BlockedReason(state) + " The tool's text there is already current and was left as it is.";
 
     private static (string Text, bool Inked) Desired(string slotId, PageSpec page, SetupValues v, Texts texts)
     {

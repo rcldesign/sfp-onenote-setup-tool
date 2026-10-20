@@ -198,6 +198,31 @@ public class RefreshOrchestratorTests
     }
 
     [Fact]
+    public void A_note_written_over_a_current_legend_is_reported_as_skipped_and_left_alone()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        h.Run(Request()).Summary!.Skipped.Should().Be(0);
+        h.Notebook.TypeUserText(MonJan4, M.Slots.ObjectiveLegend.Rect, "my note");
+        string pageId = h.Notebook.PageIds[MonJan4];
+        int updates = h.App.UpdateCount(pageId);
+
+        RefreshResult again = h.Run(Request());
+
+        again.Success.Should().BeTrue();
+        PlannedChange skipped = again.Summary!.Changes.Should().ContainSingle("the legend is current everywhere else").Which;
+        skipped.Page.Should().Be(MonJan4);
+        skipped.SlotId.Should().Be("objectiveLegend");
+        skipped.Blocked.Should().BeTrue();
+        skipped.Reason.Should().Be("A user object overlaps the slot: text 'my note'. The tool's text there is already current and was left as it is.");
+        again.Summary.Skipped.Should().Be(1);
+        again.Summary.PagesTouched.Should().Be(0);
+        h.App.UpdateCount(pageId).Should().Be(updates, "nothing is written for a reported slot");
+        h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "my note");
+        RefreshText.SummaryLines(again, "SFP Q1 2027").Should().Contain(l => l.StartsWith("Skipped: Mon Jan 4  objectiveLegend", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Inked_values_are_listed_but_written_only_when_confirmed()
     {
         Harness h = new();

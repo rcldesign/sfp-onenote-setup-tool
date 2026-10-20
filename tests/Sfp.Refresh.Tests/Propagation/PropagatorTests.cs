@@ -224,6 +224,9 @@ public class PropagatorTests
 
         Propagator.Decide(page, "s", "old", held).Should().BeNull("idempotent");
         Propagator.Decide(page, "s", " old ", held).Should().BeNull("trimmed");
+        Propagator.Decide(page, "s", "old", heldBlocked).Should().Be(
+            new PlannedChange(page, "s", "old", "old", ChangeKind.Update, true, "A user object overlaps the slot: ink. The tool's text there is already current and was left as it is."),
+            "a user object over current tool text is reported, though nothing is written");
         Propagator.Decide(page, "s", "new", held).Should().Be(new PlannedChange(page, "s", "old", "new", ChangeKind.Update, false, null));
         Propagator.Decide(page, "s", "", held).Should().Be(new PlannedChange(page, "s", "old", "", ChangeKind.Remove, false, null));
         Propagator.Decide(page, "s", "", heldBlocked)!.Blocked.Should().BeFalse("removing the tool's own object touches nothing of the user's");
