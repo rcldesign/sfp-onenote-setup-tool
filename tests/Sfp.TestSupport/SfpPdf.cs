@@ -10,13 +10,22 @@ public static class SfpPdf
 {
     public const string EnvVar = "SFP_PDF_PATH";
 
-    /// <summary>The configured path, or null.</summary>
+    /// <summary>The owner's copy inside the repository (docs/SFP No Dates.pdf), used when the variable is unset.</summary>
+    public const string RepositoryRelativePath = "docs/SFP No Dates.pdf";
+
+    /// <summary>The configured path, else the repository copy when present, else null.</summary>
     public static string? Path
     {
         get
         {
             string? p = Environment.GetEnvironmentVariable(EnvVar);
-            return string.IsNullOrWhiteSpace(p) || !File.Exists(p) ? null : p;
+            if (!string.IsNullOrWhiteSpace(p))
+            {
+                return File.Exists(p) ? p : null;
+            }
+
+            string repoCopy = System.IO.Path.Combine(TestPaths.RepoRoot, RepositoryRelativePath);
+            return File.Exists(repoCopy) ? repoCopy : null;
         }
     }
 
@@ -25,7 +34,7 @@ public static class SfpPdf
     /// <summary>Skips the current [SkippableFact] test when the PDF is not configured, and returns the path otherwise.</summary>
     public static string RequireOrSkip()
     {
-        Skip.If(!IsAvailable, $"{EnvVar} is not set or does not point at SFP_No_Dates.pdf; skipping a test that needs the real planner PDF.");
+        Skip.If(!IsAvailable, $"{EnvVar} is not set and {RepositoryRelativePath} is absent; skipping a test that needs the real planner PDF.");
         return Path!;
     }
 }

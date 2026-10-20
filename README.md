@@ -4,8 +4,8 @@ A small Windows tool that turns the Structured Focus Planner quarterly PDF plus 
 dated OneNote notebook: a section per week plus Quarter, Objectives, Calendar, Reviews and Notes, about 144 pages,
 every page a locked background image you can type over on Windows and ink over on an iPad.
 
-The requirements are in [prd.md](prd.md); the order of work and the code structure are in
-[development-plan.md](development-plan.md). Judgment calls are logged in [docs/decisions.md](docs/decisions.md),
+The requirements are in [docs/prd.md](docs/prd.md); the order of work and the code structure are in
+[docs/development-plan.md](docs/development-plan.md). Judgment calls are logged in [docs/decisions.md](docs/decisions.md),
 spike results in [docs/spike-findings.md](docs/spike-findings.md), and every task card in
 [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
@@ -13,7 +13,7 @@ spike results in [docs/spike-findings.md](docs/spike-findings.md), and every tas
 
 - Windows 10 22H2 or Windows 11, x64.
 - OneNote desktop 16.x (Office 2016 or later, perpetual or Microsoft 365). OneNote for Windows 10 is not supported.
-- Your own licensed copy of `SFP_No_Dates.pdf` (132 pages). The tool ships without it and never copies it anywhere.
+- Your own licensed copy of `SFP_No_Dates.pdf` (132 pages). The release zip ships without it and the tool never copies it anywhere; the owner keeps a copy under docs/ in this repository for the test suite.
 - Bookman Old Style, which ships with Office. If it is missing the bundled TeX Gyre Bonum is used and a warning is shown.
 
 No installer: unzip the release, keep the `templates` folder beside the executable, and double-click `sfp2onenote-app.exe`,
@@ -39,7 +39,7 @@ dotnet test --filter "Category!=COM"          # anywhere
 dotnet test --filter "Category=COM"           # a Windows PC with OneNote
 ```
 
-Tests that need the planner PDF read it from `SFP_PDF_PATH` and skip with a message when it is not set. OCR checks on
+Tests that need the planner PDF read it from `SFP_PDF_PATH`, else from `docs/SFP No Dates.pdf`, and skip with a message when neither exists. OCR checks on
 rendered pages use the `tesseract` CLI or the Python `tesserocr` module when one is present and skip otherwise;
 `TESSDATA_PREFIX` must point at a folder holding `eng.traineddata`.
 
