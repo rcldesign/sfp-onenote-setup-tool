@@ -1,0 +1,71 @@
+﻿calendar:2027-01: 70 anchors
+calendarDay:2027-01-01  Link  x=513.3 y=121.2 w=30.3 h=14  "1"  Center  10pt  opacity=1
+calendarEvents:2027-01-01  Propagated  x=515.3 y=145.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-02  Link  x=634.5 y=121.2 w=30.3 h=14  "2"  Center  10pt  opacity=1
+calendarEvents:2027-01-02  Propagated  x=636.5 y=145.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-03  Link  x=755.6 y=121.2 w=30.3 h=14  "3"  Center  10pt  opacity=1
+calendarEvents:2027-01-03  Propagated  x=757.6 y=145.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-04  Link  x=28.8 y=241.2 w=30.3 h=14  "4"  Center  10pt  opacity=1
+calendarEvents:2027-01-04  Propagated  x=30.8 y=265.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-05  Link  x=149.9 y=241.2 w=30.3 h=14  "5"  Center  10pt  opacity=1
+calendarEvents:2027-01-05  Propagated  x=151.9 y=265.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-06  Link  x=271.1 y=241.2 w=30.3 h=14  "6"  Center  10pt  opacity=1
+calendarEvents:2027-01-06  Propagated  x=273.1 y=265.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-07  Link  x=392.2 y=241.2 w=30.3 h=14  "7"  Center  10pt  opacity=1
+calendarEvents:2027-01-07  Propagated  x=394.2 y=265.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-08  Link  x=513.3 y=241.2 w=30.3 h=14  "8"  Center  10pt  opacity=1
+calendarEvents:2027-01-08  Propagated  x=515.3 y=265.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-09  Link  x=634.5 y=241.2 w=30.3 h=14  "9"  Center  10pt  opacity=1
+calendarEvents:2027-01-09  Propagated  x=636.5 y=265.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-10  Link  x=755.6 y=241.2 w=30.3 h=14  "10"  Center  10pt  opacity=1
+calendarEvents:2027-01-10  Propagated  x=757.6 y=265.5 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-11  Link  x=28.8 y=361.1 w=30.3 h=14  "11"  Center  10pt  opacity=1
+calendarEvents:2027-01-11  Propagated  x=30.8 y=385.4 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-12  Link  x=149.9 y=361.1 w=30.3 h=14  "12"  Center  10pt  opacity=1
+calendarEvents:2027-01-12  Propagated  x=151.9 y=385.4 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-13  Link  x=271.1 y=361.1 w=30.3 h=14  "13"  Center  10pt  opacity=1
+calendarEvents:2027-01-13  Propagated  x=273.1 y=385.4 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-14  Link  x=392.2 y=361.1 w=30.3 h=14  "14"  Center  10pt  opacity=1
+calendarEvents:2027-01-14  Propagated  x=394.2 y=385.4 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-15  Link  x=513.3 y=361.1 w=30.3 h=14  "15"  Center  10pt  opacity=1
+calendarEvents:2027-01-15  Propagated  x=515.3 y=385.4 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-16  Link  x=634.5 y=361.1 w=30.3 h=14  "16"  Center  10pt  opacity=1
+calendarEvents:2027-01-16  Propagated  x=636.5 y=385.4 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-17  Link  x=755.6 y=361.1 w=30.3 h=14  "17"  Center  10pt  opacity=1
+calendarEvents:2027-01-17  Propagated  x=757.6 y=385.4 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-18  Link  x=28.8 y=481 w=30.3 h=14  "18"  Center  10pt  opacity=1
+calendarEvents:2027-01-18  Propagated  x=30.8 y=505.3 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-19  Link  x=149.9 y=481 w=30.3 h=14  "19"  Center  10pt  opacity=1
+calendarEvents:2027-01-19  Propagated  x=151.9 y=505.3 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-20  Link  x=271.1 y=481 w=30.3 h=14  "20"  Center  10pt  opacity=1
+calendarEvents:2027-01-20  Propagated  x=273.1 y=505.3 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-21  Link  x=392.2 y=481 w=30.3 h=14  "21"  Center  10pt  opacity=1
+calendarEvents:2027-01-21  Propagated  x=394.2 y=505.3 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-22  Link  x=513.3 y=481 w=30.3 h=14  "22"  Center  10pt  opacity=1
+calendarEvents:2027-01-22  Propagated  x=515.3 y=505.3 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-23  Link  x=634.5 y=481 w=30.3 h=14  "23"  Center  10pt  opacity=1
+calendarEvents:2027-01-23  Propagated  x=636.5 y=505.3 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-24  Link  x=755.6 y=481 w=30.3 h=14  "24"  Center  10pt  opacity=1
+calendarEvents:2027-01-24  Propagated  x=757.6 y=505.3 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-25  Link  x=28.8 y=600.9 w=30.3 h=14  "25"  Center  10pt  opacity=1
+calendarEvents:2027-01-25  Propagated  x=30.8 y=625.2 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-26  Link  x=149.9 y=600.9 w=30.3 h=14  "26"  Center  10pt  opacity=1
+calendarEvents:2027-01-26  Propagated  x=151.9 y=625.2 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-27  Link  x=271.1 y=600.9 w=30.3 h=14  "27"  Center  10pt  opacity=1
+calendarEvents:2027-01-27  Propagated  x=273.1 y=625.2 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-28  Link  x=392.2 y=600.9 w=30.3 h=14  "28"  Center  10pt  opacity=1
+calendarEvents:2027-01-28  Propagated  x=394.2 y=625.2 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-29  Link  x=513.3 y=600.9 w=30.3 h=14  "29"  Center  10pt  opacity=1
+calendarEvents:2027-01-29  Propagated  x=515.3 y=625.2 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-30  Link  x=634.5 y=600.9 w=30.3 h=14  "30"  Center  10pt  opacity=1
+calendarEvents:2027-01-30  Propagated  x=636.5 y=625.2 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarDay:2027-01-31  Link  x=755.6 y=600.9 w=30.3 h=14  "31"  Center  10pt  opacity=1
+calendarEvents:2027-01-31  Propagated  x=757.6 y=625.2 w=117 h=20  ""  Left  8pt  opacity=0.7
+calendarWeek:01  Link  x=64.8 y=121.2 w=60 h=14  "Week 01"  Left  10pt  opacity=1
+calendarWeek:02  Link  x=64.8 y=241.2 w=60 h=14  "Week 02"  Left  10pt  opacity=1
+calendarWeek:03  Link  x=64.8 y=361.1 w=60 h=14  "Week 03"  Left  10pt  opacity=1
+calendarWeek:04  Link  x=64.8 y=481 w=60 h=14  "Week 04"  Left  10pt  opacity=1
+calendarWeek:05  Link  x=64.8 y=600.9 w=60 h=14  "Week 05"  Left  10pt  opacity=1
+habitLegend  Propagated  x=28.8 y=718 w=850 h=40  ""  Left  8pt  opacity=1
+nextCalendar  Link  x=890 y=56 w=100 h=14  "February 2027 ›"  Left  10pt  opacity=1
+calendarReview  Link  x=1000 y=56 w=82 h=14  "Review ›"  Right  10pt  opacity=1
