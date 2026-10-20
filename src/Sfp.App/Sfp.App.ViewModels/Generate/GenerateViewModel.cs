@@ -18,6 +18,13 @@ namespace Sfp.App.ViewModels.Generate;
 /// </summary>
 public sealed partial class GenerateViewModel : ObservableObject, IDisposable
 {
+    /// <summary>Title of the question asked when the window is closed during a run.</summary>
+    public const string CloseWhileRunningTitle = "Generate is running";
+
+    /// <summary>The question asked when the window is closed during a run; yes cancels the run and closes.</summary>
+    public const string CloseWhileRunningQuestion =
+        "A notebook is being generated. Cancel the run and close the window? The run stops after the current page and the partial notebook is deleted.";
+
     private static readonly HashSet<string> InputProperties = new(StringComparer.Ordinal)
     {
         nameof(PdfPath), nameof(Month), nameof(YearText), nameof(NotebookName), nameof(OutputFolder), nameof(DateFormat),
@@ -317,6 +324,29 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         Dpi,
         ParsePageScale(),
         new TimeBlockWindow(TimeBlockStart, TimeBlockEnd));
+
+    /// <summary>
+    /// Readies the tab for the window to close; true when it may close. During a run the user is asked whether to cancel
+    /// it: no keeps the window open (false); yes cancels the run and completes only once the run has stopped, after the
+    /// orchestrator deleted the partial notebook, so closing never leaves one behind. The preview render is stopped and
+    /// awaited too, so the composition root can dispose the renderer's fonts and rasterizer afterwards. Completes at once
+    /// when nothing is running.
+    /// </summary>
+    public async Task<bool> PrepareToCloseAsync()
+    {
+        if (Run.IsRunning)
+        {
+            if (!_dialogs.Confirm(CloseWhileRunningTitle, CloseWhileRunningQuestion))
+            {
+                return false;
+            }
+
+            await Run.CancelAndWaitAsync();
+        }
+
+        await Previews.StopAsync();
+        return true;
+    }
 
     public void Dispose()
     {

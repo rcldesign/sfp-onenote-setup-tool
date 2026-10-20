@@ -167,6 +167,28 @@ public class MainViewModelTests
     }
 
     [Fact]
+    public async Task Closing_the_window_goes_through_the_generate_tab()
+    {
+        _h.Generator.WaitForCancel = true;
+        using MainViewModel main = _h.NewMain();
+        main.Initialize();
+        main.Generate.PdfPath = Harness.Pdf;
+        await main.Generate.PendingPdfCheck;
+        await main.Generate.Previews.Pending;
+        (await main.PrepareToCloseAsync()).Should().BeTrue("nothing runs");
+
+        Task generating = main.Generate.GenerateCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        _h.Dialogs.ConfirmAnswer = false;
+        (await main.PrepareToCloseAsync()).Should().BeFalse("the user kept the run going");
+
+        _h.Dialogs.ConfirmAnswer = true;
+        (await main.PrepareToCloseAsync()).Should().BeTrue();
+        main.Generate.Run.ShowCancelled.Should().BeTrue();
+        await generating;
+    }
+
+    [Fact]
     public void Tab_index_and_notice_are_observable()
     {
         using MainViewModel main = _h.NewMain();

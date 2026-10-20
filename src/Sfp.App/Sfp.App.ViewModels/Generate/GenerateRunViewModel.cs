@@ -45,6 +45,9 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     private readonly IDialogService _dialogs;
     private CancellationTokenSource? _cts;
 
+    /// <summary>The run in progress, or the last one (completed); a window close awaits it after cancelling.</summary>
+    private Task _running = Task.CompletedTask;
+
     /// <summary>The run has reached its write phase: render reports from the workers ahead of the writer no longer drive the bar.</summary>
     private bool _writingStarted;
 
@@ -179,14 +182,40 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>Runs the request to completion; returns when the result views are set. A second call while running does nothing.</summary>
-    public async Task StartAsync(GenerateRequest request)
+    public Task StartAsync(GenerateRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (IsRunning)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        _running = RunAsync(request);
+        return _running;
+    }
+
+    /// <summary>
+    /// Cancels the run in progress and completes once it has stopped and the cancelled view is shown: the orchestrator
+    /// stops after the current page and deletes the partial notebook before it returns. Completes at once when no run is on.
+    /// </summary>
+    public Task CancelAndWaitAsync()
+    {
+        if (IsRunning)
+        {
+            Cancel();
+        }
+
+        return _running;
+    }
+
+    public void Dispose()
+    {
+        _cts?.Dispose();
+        _cts = null;
+    }
+
+    private async Task RunAsync(GenerateRequest request)
+    {
         ResetViews();
         IsRunning = true;
         IsIndeterminate = true;
@@ -231,12 +260,6 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
 
         Apply(result);
         Completed?.Invoke(this, result);
-    }
-
-    public void Dispose()
-    {
-        _cts?.Dispose();
-        _cts = null;
     }
 
     [RelayCommand(CanExecute = nameof(IsRunning))]

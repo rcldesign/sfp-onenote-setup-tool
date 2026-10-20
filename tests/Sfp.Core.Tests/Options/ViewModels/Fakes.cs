@@ -57,6 +57,19 @@ public sealed class FakeDialogService : IDialogService
         LastInitialPath = suggestedFileName;
         return NextSaveFile;
     }
+
+    /// <summary>The answer every yes/no question gets.</summary>
+    public bool ConfirmAnswer { get; set; } = true;
+
+    /// <summary>The questions asked, in order.</summary>
+    public List<string> Questions { get; } = new();
+
+    public bool Confirm(string title, string question)
+    {
+        Titles.Add(title);
+        Questions.Add(question);
+        return ConfirmAnswer;
+    }
 }
 
 public sealed class FakeShellService : IShellService

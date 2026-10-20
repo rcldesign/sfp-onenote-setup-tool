@@ -504,6 +504,92 @@ public class GenerateViewModelTests
     }
 
     [Fact]
+    public async Task Closing_with_nothing_running_is_allowed_at_once_without_a_question()
+    {
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+
+        Task<bool> closing = vm.PrepareToCloseAsync();
+
+        closing.IsCompleted.Should().BeTrue("the window's Closing handler can answer synchronously");
+        (await closing).Should().BeTrue();
+        _h.Dialogs.Questions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Closing_during_a_run_asks_first_and_no_keeps_the_window_and_the_run()
+    {
+        _h.Generator.WaitForCancel = true;
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+        Task generating = vm.GenerateCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        _h.Dialogs.ConfirmAnswer = false;
+
+        bool close = await vm.PrepareToCloseAsync();
+
+        close.Should().BeFalse();
+        _h.Dialogs.Questions.Should().Equal(GenerateViewModel.CloseWhileRunningQuestion);
+        vm.Run.IsRunning.Should().BeTrue("the user chose to keep the run going");
+        _h.Generator.SawCancel.Should().BeFalse();
+
+        vm.Run.CancelCommand.Execute(null);
+        await generating;
+    }
+
+    [Fact]
+    public async Task Closing_during_a_run_on_yes_cancels_and_waits_until_the_run_has_stopped()
+    {
+        using ManualResetEventSlim deleting = new(false);
+        _h.Generator.WaitForCancel = true;
+        _h.Generator.AfterCancelGate = deleting;
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+        Task generating = vm.GenerateCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        Task<bool> closing = vm.PrepareToCloseAsync();
+
+        _h.Dialogs.Questions.Should().ContainSingle();
+        SpinWait.SpinUntil(() => _h.Generator.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("yes cancels the run");
+        vm.Run.PhaseText.Should().Be(GenerateRunViewModel.CancellingText);
+        closing.IsCompleted.Should().BeFalse("the window stays open while the orchestrator deletes the partial notebook");
+
+        deleting.Set();
+        (await closing).Should().BeTrue();
+        vm.Run.IsRunning.Should().BeFalse();
+        vm.Run.ShowCancelled.Should().BeTrue();
+        await generating;
+    }
+
+    [Fact]
+    public async Task Closing_waits_for_a_preview_render_in_flight_and_no_render_starts_after()
+    {
+        using ManualResetEventSlim gate = new(false);
+        _h.Renderer.Gate = gate;
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await vm.PendingPdfCheck;
+        vm.Previews.IsBusy.Should().BeTrue("the PDF check started a preview render that waits at the gate");
+        vm.Month = 4;
+
+        Task<bool> closing = vm.PrepareToCloseAsync();
+
+        closing.IsCompleted.Should().BeFalse("a render is still inside the renderer the app disposes on exit");
+        gate.Set();
+        (await closing).Should().BeTrue();
+        vm.Previews.IsBusy.Should().BeFalse("both the superseded render and the newest one have left the renderer");
+        int renders = vm.Previews.RenderCount;
+        vm.Month = 7;
+        vm.Previews.RenderCount.Should().Be(renders, "nothing renders once the window is closing");
+        vm.Previews.IsBusy.Should().BeFalse();
+        _h.Dialogs.Questions.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Dropdown_contents_match_the_PRD_table()
     {
         using GenerateViewModel vm = _h.NewGenerate();

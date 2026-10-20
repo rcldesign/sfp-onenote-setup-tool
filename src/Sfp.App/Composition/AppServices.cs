@@ -114,7 +114,16 @@ public sealed class AppServices : IDisposable
 
     public void Dispose()
     {
+        // The window's close flow stops the preview render first (MainViewModel.PrepareToCloseAsync). Should a render
+        // still be inside the renderer here (the app ending some other way), its fonts and rasterizer are left to the
+        // process exit rather than disposed under it.
+        bool previewsIdle = !Main.Generate.Previews.IsBusy;
         Main.Dispose();
+        if (!previewsIdle)
+        {
+            return;
+        }
+
         foreach (IDisposable d in _owned)
         {
             d.Dispose();

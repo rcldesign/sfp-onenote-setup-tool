@@ -85,6 +85,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>The settings the current fields describe.</summary>
     public AppSettings Current() => Generate.ToSettings(_knownFolders.ToList());
 
+    /// <summary>
+    /// The window's Closing handler asks this first; true when the window may close. A Generate run is cancelled (after
+    /// the user agrees) and awaited so its partial notebook is deleted, and the preview render is stopped before the
+    /// renderer is disposed. See <see cref="GenerateViewModel.PrepareToCloseAsync"/>.
+    /// </summary>
+    public Task<bool> PrepareToCloseAsync() => Generate.PrepareToCloseAsync();
+
     public void Dispose()
     {
         Generate.InputChanged -= OnGenerateInputChanged;
