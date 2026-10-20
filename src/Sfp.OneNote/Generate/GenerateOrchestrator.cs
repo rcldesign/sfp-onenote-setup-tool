@@ -284,8 +284,12 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         _sidecars.Save(sidecarPath, sidecar);
         state.SidecarPath = sidecarPath;
         writer.Sync(nb);
-        PageSpec cover = plan.Pages.First();
-        writer.NavigateTo(pages[cover.Key]);
+        PageSpec? cover = plan.Pages.FirstOrDefault();
+        if (cover is not null)
+        {
+            writer.NavigateTo(pages[cover.Key]);
+        }
+
         state.Warnings.AddRange(writer.Warnings);
 
         state.Enter(GeneratePhase.Done);
