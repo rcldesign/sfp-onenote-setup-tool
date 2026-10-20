@@ -1,0 +1,1 @@
+"""Fake pythoncom (import only)."""
