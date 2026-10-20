@@ -33,6 +33,7 @@ public sealed class MemoryBudgetTests
     [InlineData(300)]
     public void A_full_render_only_run_peaks_under_the_PRD_memory_budget(int dpi)
     {
+        Skip.IfNot(OperatingSystem.IsLinux() || OperatingSystem.IsWindows(), "The peak working set of another process is read on Linux (VmHWM) and Windows only.");
         string cli = Path.Combine(AppContext.BaseDirectory, "sfp2onenote.dll");
         Skip.IfNot(File.Exists(cli), "The CLI assembly is not beside the tests: " + cli);
         string pdf = SfpPdf.Path ?? SyntheticTemplate.Build();
