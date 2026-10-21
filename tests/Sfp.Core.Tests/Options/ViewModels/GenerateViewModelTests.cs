@@ -250,10 +250,12 @@ public class GenerateViewModelTests
     {
         _h.PdfValidator.Result = ValidationResult.Fail("Expected 132 pages, found 130");
         using GenerateViewModel vm = _h.NewGenerate();
+        _h.PdfValidator.Hold();
 
         vm.PdfPath = Harness.Pdf;
-        vm.PdfPending.Should().Be("Checking the PDF against the template manifest...");
+        vm.PdfPending.Should().Be("Checking the PDF against the template manifest...", "the setter shows the pending row itself while the check runs");
         vm.CanGenerate.Should().BeFalse();
+        _h.PdfValidator.Release();
         await Settle(vm);
 
         vm.PdfPending.Should().BeNull();
@@ -274,9 +276,14 @@ public class GenerateViewModelTests
     public async Task A_missing_pdf_is_reported_at_once_and_the_check_still_settles()
     {
         using GenerateViewModel vm = _h.NewGenerate();
+        await Settle(vm);
+
+        // The validator is never reached for a missing file, so the check's result is held at the UI thread instead.
+        _h.Ui.Hold();
         vm.PdfPath = @"C:\nope.pdf";
 
-        vm.PdfError.Should().Be(@"PDF not found: C:\nope.pdf");
+        vm.PdfError.Should().Be(@"PDF not found: C:\nope.pdf", "the form's own rule reports it before the check's result arrives");
+        _h.Ui.Release();
         await Settle(vm);
         vm.PdfError.Should().Be(@"PDF not found: C:\nope.pdf");
         _h.PdfValidator.Calls.Should().Be(0, "the validator is not opened for a missing file");

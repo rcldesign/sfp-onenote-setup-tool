@@ -13,14 +13,65 @@ using Sfp.TestSupport;
 
 namespace Sfp.Core.Tests.Options.ViewModels;
 
-/// <summary>Runs posted actions inline, so a test sees every UI update as soon as the background work finishes.</summary>
+/// <summary>
+/// Runs posted actions inline, so a test sees every UI update as soon as the background work finishes. Inline means on
+/// the background thread, the moment the work ends: a test that looks at a state the result will replace holds the
+/// posts first (<see cref="Hold"/>), as a busy dispatcher would, and releases them after looking.
+/// </summary>
 public sealed class ImmediateUiThread : IUiThread
 {
-    public int Posted { get; private set; }
+    private readonly object _gate = new();
+    private List<Action>? _held;
+    private int _posted;
+
+    public int Posted
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _posted;
+            }
+        }
+    }
+
+    /// <summary>From now on posted actions wait until <see cref="Release"/>.</summary>
+    public void Hold()
+    {
+        lock (_gate)
+        {
+            _held ??= new List<Action>();
+        }
+    }
+
+    /// <summary>Runs the held actions on the calling thread, in the order they were posted, and posts inline again.</summary>
+    public void Release()
+    {
+        List<Action> held;
+        lock (_gate)
+        {
+            held = _held ?? new List<Action>();
+            _held = null;
+        }
+
+        foreach (Action action in held)
+        {
+            action();
+        }
+    }
 
     public void Post(Action action)
     {
-        Posted++;
+        lock (_gate)
+        {
+            _posted++;
+            if (_held is not null)
+            {
+                _held.Add(action);
+                return;
+            }
+        }
+
         action();
     }
 }
@@ -173,16 +224,33 @@ public sealed class FakeSettingsStore : ISettingsStore
 
 public sealed class ScriptedManifestValidator : IManifestValidator
 {
+    private TaskCompletionSource? _gate;
+
     public ValidationResult Result { get; set; } = ValidationResult.Ok;
 
     public int Calls { get; private set; }
 
     public string? LastPath { get; private set; }
 
+    /// <summary>
+    /// From now on every check waits in the validator until <see cref="Release"/>, so a test can look at the form while
+    /// the check is still running. A check that is not held can finish, and post its result inline through
+    /// <see cref="ImmediateUiThread"/>, before the test looks.
+    /// </summary>
+    public void Hold() => _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Lets the held check, and every later one, finish.</summary>
+    public void Release() => _gate?.TrySetResult();
+
     public ValidationResult Validate(Manifest m, string pdfPath)
     {
         Calls++;
         LastPath = pdfPath;
+        if (_gate is { } gate && !gate.Task.Wait(TimeSpan.FromSeconds(30)))
+        {
+            throw new TimeoutException("The test held the PDF check and never released it.");
+        }
+
         return Result;
     }
 }
