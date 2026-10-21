@@ -38,7 +38,9 @@ public interface IAnchorWriter
     /// <summary>
     /// Applies the writes to one page. Each Remove is one DeletePageContent call on the outline's object ID (OneNote's
     /// UpdatePageContent never deletes an object the XML leaves out); an outline already gone is reported removed without
-    /// a call. The Creates and Updates then go in one UpdatePageContent call: the page's current XML (as read with
+    /// a call, and an outline that holds anything but text (a picture, ink or a file the user put inside it) is never
+    /// deleted: the write stops with <see cref="InvalidOperationException"/>, a last guard behind the planner's check.
+    /// The Creates and Updates then go in one UpdatePageContent call: the page's current XML (as read with
     /// piBasic, so the background image travels as a callback ID and its bytes are not resent) with each Update's one:T
     /// content replaced and each Create's outline appended. Nothing else on the page is touched. After a Create the page
     /// is re-read to learn the new outline's object ID. Throws <see cref="OneNoteException"/> when OneNote rejects a call.
@@ -105,11 +107,17 @@ public sealed class AnchorWriter : IAnchorWriter
                 latest = Read(pageId);
             }
 
-            if (!latest.Outlines.Any(o => string.Equals(o.ObjectId, objectId, StringComparison.Ordinal)))
+            OutlineInfo? target = latest.Outlines.FirstOrDefault(o => string.Equals(o.ObjectId, objectId, StringComparison.Ordinal));
+            if (target is null)
             {
                 log.Information("Page {PageId}: the outline {ObjectId} of {Slot} is already gone", pageId, objectId, write.Change.SlotId);
                 removed.Add(write.Change.SlotId);
                 continue;
+            }
+
+            if (!SlotInspector.HasToolShape(target))
+            {
+                throw new InvalidOperationException($"The outline {objectId} of {write.Change.SlotId} on page {pageId} holds a picture, ink, a file, a table or a tag the user put inside it, so it is never deleted.");
             }
 
             try

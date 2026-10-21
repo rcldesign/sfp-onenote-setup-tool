@@ -1,6 +1,7 @@
 using Sfp.Core.Manifests;
 using Sfp.Core.Plan;
 using Sfp.OneNote;
+using Sfp.Refresh.Propagation;
 
 namespace Sfp.Refresh.Setup;
 
@@ -8,7 +9,9 @@ namespace Sfp.Refresh.Setup;
 /// Production <see cref="IAnnualFallback"/>: reads the "annualRow:{n}" rectangle (manifest slots.annualTitle) on the
 /// annual page that holds block n (page 1 for blocks 1 to 4, page 2 for 5 to 8) and returns the typed text of the
 /// outlines there that the tool does not own. Tool-owned outlines are excluded so a title the tool propagated earlier
-/// is never read back as if the user had typed it; ink is ignored because the PRD wording is "holds typed text".
+/// is never read back as if the user had typed it; ink is ignored because the PRD wording is "holds typed text". The
+/// rectangle is placed on the page with the sheet outline's origin and placed scale (<see cref="SlotInspector.ToPageRect"/>),
+/// so a notebook generated with a page scale other than 1 is read where its rows are.
 /// </summary>
 public sealed class AnnualPageFallback : IAnnualFallback
 {
@@ -62,9 +65,9 @@ public sealed class AnnualPageFallback : IAnnualFallback
         }
 
         IReadOnlyCollection<string> owned = ownedObjectIds(key);
-        RectPt rect = slot.Rect((n - 1) % perPage);
-        IEnumerable<string> typed = page.OutlinesIn(rect)
-            .Where(o => !owned.Contains(o.ObjectId))
+        RectPt rect = SlotInspector.ToPageRect(page, slot.Rect((n - 1) % perPage), manifest.PageWidthPt);
+        IEnumerable<string> typed = page.Outlines
+            .Where(o => !o.IsBackgroundImage && o.Rect.Overlaps(rect) && !owned.Contains(o.ObjectId))
             .Select(o => o.PlainText);
         return SetupReader.Normalize(string.Join(" ", typed));
     }

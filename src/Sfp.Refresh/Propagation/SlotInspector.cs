@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using Sfp.Core.Manifests;
 using Sfp.OneNote;
 using Sfp.OneNote.Xml;
@@ -12,7 +13,7 @@ public sealed record Intruder(string ObjectId, string Description);
 /// <summary>What a page holds at one slot rectangle.</summary>
 /// <param name="Owned">The tool-owned outline recorded for the slot, when it still exists on the page.</param>
 /// <param name="Moved">True when the owned outline exists but no longer overlaps the slot rectangle (the user moved it).</param>
-/// <param name="Intruders">Outlines and ink drawings the tool does not own that overlap the rectangle.</param>
+/// <param name="Intruders">Outlines, ink drawings, and pictures or files placed on the page, that the tool does not own and that overlap the rectangle.</param>
 public sealed record SlotState(OutlineInfo? Owned, bool Moved, IReadOnlyList<Intruder> Intruders)
 {
     /// <summary>The owned outline's plain text, or null when there is no owned outline.</summary>
@@ -26,13 +27,20 @@ public sealed record SlotState(OutlineInfo? Owned, bool Moved, IReadOnlyList<Int
 
 /// <summary>
 /// Reads the state of a slot on a page: the tool-owned outline by object ID, whether it was moved, and the user's
-/// objects overlapping the rectangle. Rectangles are sheet points; the sheet outline's origin and placed scale are
-/// applied so a hidden-title or scaled notebook is read correctly.
+/// objects overlapping the rectangle (outlines, page-level ink, and pictures, attached files or media files placed on
+/// the page outside any outline). Rectangles are sheet points; the sheet outline's origin and placed scale are applied
+/// so a hidden-title or scaled notebook is read correctly.
 /// </summary>
 public static class SlotInspector
 {
     /// <summary>Position tolerance for outlines whose size OneNote did not report.</summary>
     public const double PositionTolerancePt = 4.0;
+
+    /// <summary>The elements that put something other than text inside an outline: a picture, ink, an attached or media file, a table or a tag.</summary>
+    private static readonly HashSet<string> NonTextContent = new(StringComparer.Ordinal)
+    {
+        "Image", "InkWord", "InkParagraph", "InkDrawing", "InsertedFile", "MediaFile", "Table", "Tag",
+    };
 
     /// <param name="page">The page as read.</param>
     /// <param name="sheetRect">The slot rectangle in sheet points.</param>
@@ -65,6 +73,14 @@ public static class SlotInspector
             if (drawing.Bounds is RectPt bounds && drawing.OutlineObjectId is null && Overlaps(bounds, pageRect))
             {
                 intruders.Add(new Intruder(drawing.ObjectId, "ink"));
+            }
+        }
+
+        foreach (PageObjectInfo item in page.PageObjects)
+        {
+            if (!ownedIds.Contains(item.ObjectId) && Overlaps(item.Rect, pageRect))
+            {
+                intruders.Add(new Intruder(item.ObjectId, Describe(item)));
             }
         }
 
@@ -106,6 +122,18 @@ public static class SlotInspector
         return tolerant.Contains(objectRect.X, objectRect.Y);
     }
 
+    /// <summary>
+    /// True when the outline still holds text only, as the tool writes it: no picture, ink, attached or media file, table
+    /// or tag that the user put inside it (clicking at the end of a tool line puts the cursor inside its outline). Extra
+    /// lines of typed text do not change the shape; the text comparison in Propagator.IsEdited catches them.
+    /// </summary>
+    public static bool HasToolShape(OutlineInfo outline)
+    {
+        ArgumentNullException.ThrowIfNull(outline);
+        XNamespace one = outline.Element.Name.Namespace;
+        return !outline.Element.Descendants().Any(e => e.Name.Namespace == one && NonTextContent.Contains(e.Name.LocalName));
+    }
+
     private static string Describe(OutlineInfo outline)
     {
         string text = outline.PlainText;
@@ -123,4 +151,12 @@ public static class SlotInspector
         string shown = text.Length > max ? text[..max].TrimEnd() + LegendText.Ellipsis : text;
         return "text '" + shown.Replace('\n', ' ') + "'";
     }
+
+    private static string Describe(PageObjectInfo item) => item.Kind switch
+    {
+        "Image" => "a picture",
+        "InsertedFile" => "an attached file",
+        "MediaFile" => "a media file",
+        _ => "an object",
+    };
 }

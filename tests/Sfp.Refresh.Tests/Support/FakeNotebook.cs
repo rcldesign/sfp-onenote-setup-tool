@@ -197,6 +197,40 @@ public sealed class FakeNotebook
         App.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
     }
 
+    /// <summary>
+    /// Places a picture on a page outside any outline at a sheet rectangle (a page-level one:Image, as pasting a photo onto
+    /// the page in OneNote or on the iPad stores it) and returns its object ID.
+    /// </summary>
+    public string AddPagePicture(PageKey key, RectPt sheetRect)
+    {
+        PageXml page = Read(key);
+        System.Xml.Linq.XElement root = page.Document.Root!;
+        System.Xml.Linq.XNamespace one = root.Name.Namespace;
+        HashSet<string> before = page.PageObjects.Select(o => o.ObjectId).ToHashSet(StringComparer.Ordinal);
+        root.Add(new System.Xml.Linq.XElement(
+            one + "Image",
+            new System.Xml.Linq.XAttribute("format", "png"),
+            OneNoteXml.Position(one, sheetRect.X + (page.SheetOutline?.X ?? 0), sheetRect.Y + (page.SheetOutline?.Y ?? 0), 3),
+            OneNoteXml.Size(one, sheetRect.W, sheetRect.H, true),
+            new System.Xml.Linq.XElement(one + "Data", Convert.ToBase64String(Png))));
+        App.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
+        return Read(key).PageObjects.Single(o => !before.Contains(o.ObjectId)).ObjectId;
+    }
+
+    /// <summary>
+    /// Adds a paragraph (one:OE) holding <paramref name="content"/> to an outline already on a page, the way clicking at
+    /// the end of a line and pasting a picture, writing with the pen or attaching a file puts it inside that outline.
+    /// </summary>
+    public void AddInsideOutline(PageKey key, string objectId, Func<System.Xml.Linq.XNamespace, object> content)
+    {
+        PageXml page = Read(key);
+        System.Xml.Linq.XElement root = page.Document.Root!;
+        System.Xml.Linq.XNamespace one = root.Name.Namespace;
+        System.Xml.Linq.XElement outline = root.Elements(one + "Outline").Single(o => (string?)o.Attribute("objectID") == objectId);
+        outline.Element(one + "OEChildren")!.Add(new System.Xml.Linq.XElement(one + "OE", content(one)));
+        App.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
+    }
+
     private void AddUserOutline(PageKey key, RectPt sheetRect, Func<System.Xml.Linq.XNamespace, object> paragraphContent)
     {
         PageXml page = Read(key);

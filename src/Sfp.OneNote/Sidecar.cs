@@ -168,4 +168,12 @@ public sealed record SidecarPage
     /// recorded, and for link anchors, which Refresh never rewrites.
     /// </summary>
     public IReadOnlyDictionary<string, string> AnchorTexts { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Slot id to the text a Refresh run is writing in that slot's outline (plain text, lines joined by "\n"), saved in the
+    /// file before the run writes and dropped once the write is recorded. An entry left by a run that could not record its
+    /// write (the re-read failed, or the sidecar could not be saved) lets the next run take the outline back, or record its
+    /// new text, instead of treating it as the user's. Null (absent from the file) when nothing is pending.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? PendingTexts { get; init; }
 }
