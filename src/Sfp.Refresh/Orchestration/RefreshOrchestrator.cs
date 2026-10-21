@@ -54,6 +54,18 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     public const string ConflictReason = "The page changed while Refresh was writing it (twice in a row); nothing was written to it and it will be tried again on the next run.";
 
     /// <summary>
+    /// Error of a run whose end-of-run sidecar save failed on every attempt ({0}: the sidecar path, {1}: the attempts,
+    /// {2}: the last error); the run fails (exit 5) and the next run re-adopts the objects it wrote.
+    /// </summary>
+    public const string SidecarSaveFailedFormat ="The sidecar {0} could not be saved after {1} attempts ({2}). What this run wrote is on the pages; the next run re-adopts those objects.";
+
+    /// <summary>How many times the end-of-run sidecar save is tried before the run reports it failed.</summary>
+    public const int SidecarSaveAttempts = 3;
+
+    /// <summary>The waits before the second and the third save attempt.</summary>
+    private static readonly TimeSpan[] SidecarSaveWaits = { TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(1500) };
+
+    /// <summary>
     /// Error of a run in which at least one page write was made and OneNote refused every one as a conflict ({0}: how
     /// many pages); such a run fails (exit 5) and counts toward the failure streak.
     /// </summary>
@@ -213,7 +225,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             throw;
         }
 
-        sidecar = SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, Propagator.ConfirmedInked(values, sidecar, request.WriteInkedValues), afterFailure: false);
+        (sidecar, string? saveError) = SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, Propagator.ConfirmedInked(values, sidecar, request.WriteInkedValues), afterFailure: false);
 
         RefreshSummary summary = new()
         {
@@ -230,9 +242,10 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             FrozenThrough = sidecar.FrozenThrough,
         };
 
-        if (written.Error is not null)
+        if (written.Error is not null || saveError is not null)
         {
-            return new RefreshResult { Success = false, ExitCode = WriteFailureExitCode, Summary = summary, Error = written.Error, Elapsed = clock.Elapsed, LogPath = services.LogPath };
+            string error = string.Join(" ", new[] { written.Error, saveError }.OfType<string>());
+            return new RefreshResult { Success = false, ExitCode = WriteFailureExitCode, Summary = summary, Error = error, Elapsed = clock.Elapsed, LogPath = services.LogPath };
         }
 
         progress?.Report("Syncing");
@@ -289,10 +302,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
     /// <summary>
     /// The sidecar with what the write phase recorded (anchors and the texts written), LastRefresh, FrozenThrough and
-    /// the confirmed inked values, saved. After a failure part way through the save is best effort: a save error is
-    /// logged so the failure itself still reaches the result.
+    /// the confirmed inked values, saved: up to <see cref="SidecarSaveAttempts"/> times with short waits, since a sync
+    /// client or a virus scanner may hold the file for a moment. When every attempt fails the error to report is returned
+    /// (<see cref="SidecarSaveFailedFormat"/>, naming the path); after a failure part way through it is only logged, so the
+    /// failure itself still reaches the result.
     /// </summary>
-    private Sidecar SaveWritten(string path, Sidecar sidecar, WriteState state, CalendarOutcome? calendar, IReadOnlyDictionary<string, string> confirmedInked, bool afterFailure)
+    private (Sidecar Updated, string? Error) SaveWritten(string path, Sidecar sidecar, WriteState state, CalendarOutcome? calendar, IReadOnlyDictionary<string, string> confirmedInked, bool afterFailure)
     {
         Sidecar updated = sidecar with
         {
@@ -301,23 +316,42 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             FrozenThrough = calendar?.FrozenThrough ?? sidecar.FrozenThrough,
             ConfirmedInked = confirmedInked,
         };
-        if (!afterFailure)
+        Exception? failure = SaveWithRetry(path, updated);
+        if (failure is null)
         {
-            services.Sidecars.Save(path, updated);
-            return updated;
+            if (afterFailure)
+            {
+                services.Log.Information("The run stopped part way; the objects written so far were recorded in {Path}", path);
+            }
+
+            return (updated, null);
         }
 
-        try
-        {
-            services.Sidecars.Save(path, updated);
-            services.Log.Information("The run stopped part way; the objects written so far were recorded in {Path}", path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            services.Log.Error(ex, "The run stopped part way and the sidecar {Path} could not be saved", path);
-        }
+        services.Log.Error(failure, "The sidecar {Path} could not be saved after {Attempts} attempts; the next run re-adopts the objects this run wrote", path, SidecarSaveAttempts);
+        return (updated, string.Format(CultureInfo.InvariantCulture, SidecarSaveFailedFormat, path, SidecarSaveAttempts, failure.Message));
+    }
 
-        return updated;
+    /// <summary>Saves the sidecar, trying again after a short wait when the file cannot be written; returns the last error, or null once saved.</summary>
+    private Exception? SaveWithRetry(string path, Sidecar sidecar)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                services.Sidecars.Save(path, sidecar);
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= SidecarSaveAttempts)
+                {
+                    return ex;
+                }
+
+                services.Log.Warning(ex, "Saving the sidecar {Path} failed (attempt {Attempt} of {Attempts}); trying again", path, attempt, SidecarSaveAttempts);
+                (services.Sleep ?? Thread.Sleep)(SidecarSaveWaits[attempt - 1]);
+            }
+        }
     }
 
     /// <summary>
