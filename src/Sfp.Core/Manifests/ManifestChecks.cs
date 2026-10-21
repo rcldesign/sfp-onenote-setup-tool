@@ -5,9 +5,10 @@ namespace Sfp.Core.Manifests;
 /// <summary>
 /// Structural sanity and token validation run on every loaded manifest: no null where the record needs a value, page
 /// size and count, every color in the form #RRGGBB, the nine-page week run, PDF page numbers inside the document, known
-/// page names in every <c>appliesTo</c> list and page template, every erase rectangle containing the printed extent it
-/// removes, a stacked day inset that leaves room in the day box, the PRD token set in every section name and page title
-/// pattern, and a week token in the name of every section repeated per week. Each
+/// page names in every <c>appliesTo</c> list and page template, the three daily-page erases (date slash, weeks-remaining
+/// strip, time blocks) each containing the printed extent it removes with <see cref="EraseAllowancePt"/> to spare, a
+/// stacked day inset that leaves room in the day box, the PRD token set in every section name and page title pattern,
+/// and a week token in the name of every section repeated per week. Each
 /// failure is a <see cref="ManifestException"/> naming the manifest and the offending value.
 /// </summary>
 public static class ManifestChecks
@@ -17,6 +18,20 @@ public static class ManifestChecks
 
     /// <summary>OneNote supports page levels 1 to 3.</summary>
     public const int MaxPageLevel = 3;
+
+    /// <summary>
+    /// How far each daily-page erase must reach past the printed extent it removes, on every side, in points: one pixel at
+    /// 144 DPI, the lowest render DPI. The erase is painted without antialiasing (a pixel is painted when its center lies
+    /// inside the rectangle), and the rasterized printed art spreads antialiased ink up to half a point past its measured
+    /// extent, so an erase that only just contains the extent leaves slivers of that ink beside the overlays.
+    /// </summary>
+    public const double EraseAllowancePt = 0.5;
+
+    /// <summary>
+    /// Edges closer than this are equal, so an erase written to reach exactly <see cref="EraseAllowancePt"/> past its
+    /// printed extent passes although sums such as x + w carry binary rounding.
+    /// </summary>
+    private const double EdgeTolerancePt = 1e-6;
 
     /// <summary>
     /// Runs every check; <paramref name="sourceName"/> names the manifest in error messages. The null walk runs first
@@ -187,8 +202,9 @@ public static class ManifestChecks
     }
 
     /// <summary>
-    /// An erase rectangle must contain the measured extent of the printed art it removes, or a sliver of that art stays
-    /// beside the overlay drawn back into it. Names both keys, both rectangles and every side that falls short.
+    /// An erase rectangle must contain the measured extent of the printed art it removes with <see cref="EraseAllowancePt"/>
+    /// to spare on every side, or a sliver of that art stays beside the overlay drawn back into it. Names both keys, both
+    /// rectangles, the allowance and every side that falls short.
     /// </summary>
     private static void CheckEraseCovers(string source, string eraseKey, RectPt erase, string printedKey, RectPt printed)
     {
@@ -198,29 +214,33 @@ public static class ManifestChecks
         }
 
         List<string> misses = new();
-        if (erase.X > printed.X)
-        {
-            misses.Add($"its left edge {Pt(erase.X)} is right of {Pt(printed.X)}");
-        }
-
-        if (erase.Y > printed.Y)
-        {
-            misses.Add($"its top {Pt(erase.Y)} is below {Pt(printed.Y)}");
-        }
-
-        if (erase.Right < printed.Right)
-        {
-            misses.Add($"its right edge {Pt(erase.Right)} is left of {Pt(printed.Right)}");
-        }
-
-        if (erase.Bottom < printed.Bottom)
-        {
-            misses.Add($"its bottom {Pt(erase.Bottom)} is above {Pt(printed.Bottom)}");
-        }
+        AddShortSide(misses, "left edge", erase.X, printed.X, outward: -1, "right of", "left of");
+        AddShortSide(misses, "top", erase.Y, printed.Y, outward: -1, "below", "above");
+        AddShortSide(misses, "right edge", erase.Right, printed.Right, outward: 1, "left of", "right of");
+        AddShortSide(misses, "bottom", erase.Bottom, printed.Bottom, outward: 1, "above", "below");
 
         if (misses.Count > 0)
         {
-            Fail(source, $"{eraseKey} {Rect(erase)} must contain {printedKey} {Rect(printed)}, the printed art it erases: {string.Join("; ", misses)}.");
+            Fail(source, $"{eraseKey} {Rect(erase)} must contain {printedKey} {Rect(printed)}, the printed art it erases, with {Pt(EraseAllowancePt)} pt to spare on every side for the antialiased edge of that art (one pixel at 144 DPI): {string.Join("; ", misses)}.");
+        }
+    }
+
+    /// <summary>
+    /// Adds the phrase for one side of an erase that does not reach <see cref="EraseAllowancePt"/> past the printed edge:
+    /// "its left edge 903 is right of 899.7" when it cuts into the art, "its left edge 899.5 is less than 0.5 pt left of
+    /// 899.7" when it leaves too little room past it. <paramref name="outward"/> is -1 for the left and top sides, where
+    /// the erase edge must be the smaller value, and 1 for the right and bottom.
+    /// </summary>
+    private static void AddShortSide(List<string> misses, string side, double eraseEdge, double printedEdge, int outward, string inside, string outside)
+    {
+        double beyond = outward * (eraseEdge - printedEdge);
+        if (beyond < -EdgeTolerancePt)
+        {
+            misses.Add($"its {side} {Pt(eraseEdge)} is {inside} {Pt(printedEdge)}");
+        }
+        else if (beyond < EraseAllowancePt - EdgeTolerancePt)
+        {
+            misses.Add($"its {side} {Pt(eraseEdge)} is less than {Pt(EraseAllowancePt)} pt {outside} {Pt(printedEdge)}");
         }
     }
 

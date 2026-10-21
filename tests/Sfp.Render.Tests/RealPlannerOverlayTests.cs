@@ -14,11 +14,15 @@ namespace Sfp.Render.Tests;
 /// strip reads 14 down to 1 with the disc on 14. The erase checks of that page (the date slashes under the date link,
 /// the strip, the time-block column) look at the printed extents (slots.date.slashPrinted, slots.weeksRemaining.printed,
 /// slots.timeBlocks.printed: the ink bounds of the printed art, measured on the PDF), not at the erase rectangles, which
-/// the renderer paints whole: inside each extent no pixel that is ink on the raw rasterization of the same PDF page may
-/// be unchanged in the render outside the glyph, rule and disc boxes drawn back into it, so an erase rectangle shrunk by
-/// a few points leaves ink these checks see. Each check also runs with the raw page in place of the render to show it
-/// sees the printed art, and one test proves each extent bounds the art the PDF prints around it. Inside each erase
-/// rectangle nothing may be inked but the overlays drawn back into it.
+/// the renderer paints whole: inside each extent grown by <see cref="PrintedSpread"/>, how far antialiasing carries the
+/// printed ink past it, no pixel that is ink on the raw rasterization of the same PDF page may be unchanged in the render
+/// outside the glyph, rule and disc boxes drawn back into it. These checks see any printed ink, its antialiased edge
+/// included, that an erase leaves on this page at this DPI: the strip erase shrunk onto its printed extent fails them,
+/// while the slash and time-block erases shrunk the same way happen to cover every inked pixel here (not at 144 DPI).
+/// The manifest checks reject all three before anything renders (<see cref="ManifestChecks.EraseAllowancePt"/>). Each
+/// check also runs with the raw page in place of the render to show it sees the printed art, and one test proves each
+/// extent bounds the art the PDF prints around it. Inside each erase rectangle nothing may be inked but the overlays
+/// drawn back into it.
 /// </summary>
 [Collection(RenderCollection.Name)]
 public sealed class RealPlannerOverlayTests
@@ -90,10 +94,11 @@ public sealed class RealPlannerOverlayTests
         using SKBitmap sheet = RenderFixture.Decode(page);
         using SKBitmap raw = Raw(pdf, FriJan1);
         DateSlot d = M.Slots.Date;
+        RectPt slashes = Grown(d.SlashPrinted, PrintedSpread);
 
-        Pixels.SurvivingPrint(raw, raw, d.SlashPrinted, Array.Empty<RectPt>(), Dpi, f.Background).Count.Should().BePositive("the planner prints the date slashes there");
-        (int count, IReadOnlyList<(double XPt, double YPt)> samples) = Pixels.SurvivingPrint(raw, sheet, d.SlashPrinted, Array.Empty<RectPt>(), Dpi, f.Background);
-        count.Should().Be(0, "no printed slash survives anywhere in slots.date.slashPrinted: " + Format(samples));
+        Pixels.SurvivingPrint(raw, raw, slashes, Array.Empty<RectPt>(), Dpi, f.Background).Count.Should().BePositive("the planner prints the date slashes there");
+        (int count, IReadOnlyList<(double XPt, double YPt)> samples) = Pixels.SurvivingPrint(raw, sheet, slashes, Array.Empty<RectPt>(), Dpi, f.Background);
+        count.Should().Be(0, "no printed slash survives anywhere in slots.date.slashPrinted or its antialiased edge: " + Format(samples));
         (int stray, IReadOnlyList<(double XPt, double YPt)> strays) = Pixels.StrayInk(sheet, d.SlashErase, Array.Empty<RectPt>(), Dpi, f.Background);
         stray.Should().Be(0, "nothing is drawn under the date link: " + Format(strays));
     }
@@ -106,10 +111,11 @@ public sealed class RealPlannerOverlayTests
         using SKBitmap raw = Raw(pdf, FriJan1);
         WeeksRemainingSlot strip = M.Slots.WeeksRemaining;
         IReadOnlyList<RectPt> drawn = StripBoxes(strip, count: 14, circledIndex: 0);
+        RectPt printed = Grown(strip.Printed, PrintedSpread);
 
-        Pixels.SurvivingPrint(raw, raw, strip.Printed, drawn, Dpi, f.Background).Count.Should().BePositive("the 13 printed numbers and their disc sit elsewhere, so an unerased strip would show");
-        (int count, IReadOnlyList<(double XPt, double YPt)> samples) = Pixels.SurvivingPrint(raw, sheet, strip.Printed, drawn, Dpi, f.Background);
-        count.Should().Be(0, "no printed number or disc survives anywhere in slots.weeksRemaining.printed: " + Format(samples));
+        Pixels.SurvivingPrint(raw, raw, printed, drawn, Dpi, f.Background).Count.Should().BePositive("the 13 printed numbers and their disc sit elsewhere, so an unerased strip would show");
+        (int count, IReadOnlyList<(double XPt, double YPt)> samples) = Pixels.SurvivingPrint(raw, sheet, printed, drawn, Dpi, f.Background);
+        count.Should().Be(0, "no printed number or disc survives anywhere in slots.weeksRemaining.printed or its antialiased edge: " + Format(samples));
         (int stray, IReadOnlyList<(double XPt, double YPt)> strays) = Pixels.StrayInk(sheet, strip.Erase, drawn, Dpi, f.Background);
         stray.Should().Be(0, "inside the erase only the redrawn numbers and the disc are inked: " + Format(strays));
     }
@@ -135,9 +141,10 @@ public sealed class RealPlannerOverlayTests
             drawn.Add(GlyphBox(t.LabelRightX - w, y + (cap / 2), w, cap));
         }
 
-        Pixels.SurvivingPrint(raw, raw, t.Printed, drawn, Dpi, f.Background).Count.Should().BePositive("the planner's 24 printed rows and 7 pt labels sit elsewhere");
-        (int count, IReadOnlyList<(double XPt, double YPt)> samples) = Pixels.SurvivingPrint(raw, sheet, t.Printed, drawn, Dpi, f.Background);
-        count.Should().Be(0, "no printed rule or label survives anywhere in slots.timeBlocks.printed: " + Format(samples));
+        RectPt printed = Grown(t.Printed, PrintedSpread);
+        Pixels.SurvivingPrint(raw, raw, printed, drawn, Dpi, f.Background).Count.Should().BePositive("the planner's 24 printed rows and 7 pt labels sit elsewhere");
+        (int count, IReadOnlyList<(double XPt, double YPt)> samples) = Pixels.SurvivingPrint(raw, sheet, printed, drawn, Dpi, f.Background);
+        count.Should().Be(0, "no printed rule or label survives anywhere in slots.timeBlocks.printed or its antialiased edge: " + Format(samples));
         (int stray, IReadOnlyList<(double XPt, double YPt)> strays) = Pixels.StrayInk(sheet, t.Erase, drawn, Dpi, f.Background);
         stray.Should().Be(0, "only the rebuilt rules and labels are inside the erased column: " + Format(strays));
     }
@@ -193,6 +200,9 @@ public sealed class RealPlannerOverlayTests
         boxes.Add(new RectPt(cx - r - 1 - Margin, strip.CircleCenterY - r - Margin, (2 * r) + 2 + (2 * Margin), (2 * r) + (2 * Margin)));
         return boxes;
     }
+
+    /// <summary>A rectangle grown by <paramref name="by"/> points on every side.</summary>
+    private static RectPt Grown(RectPt r, double by) => new(r.X - by, r.Y - by, r.W + (2 * by), r.H + (2 * by));
 
     /// <summary>The smallest rectangle holding all the given ones.</summary>
     private static RectPt Union(IEnumerable<RectPt> rects)
