@@ -63,10 +63,10 @@ public sealed class GenerateFormValidator
         CheckPdfRow(input.PdfPath, pdfResult, messages);
         CheckStart(input.Year, input.Month, messages);
         bool nameOk = CheckName(input.NotebookName, messages);
-        bool folderOk = CheckOutputFolder(input.OutputFolder, messages);
-        if (nameOk && folderOk)
+        string? folder = CheckOutputFolder(input.OutputFolder, messages);
+        if (nameOk && folder is not null)
         {
-            CheckNameCollision(input.NotebookName!, input.OutputFolder!, messages);
+            CheckNameCollision(input.NotebookName!, folder, messages);
         }
 
         if (!GenerateOptions.AllowedDpis.Contains(input.Dpi))
@@ -129,6 +129,10 @@ public sealed class GenerateFormValidator
         return full.Split('/')
             .Any(segment => segment.StartsWith("OneDrive", StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>The note under a relative output folder: where the notebook is really created.</summary>
+    public static string RelativeFolderNote(string resolved) =>
+        $"The folder is relative to the folder the app started in; the notebook is created in {resolved}.";
 
     /// <summary>Forward slashes only, no trailing slash, whitespace trimmed.</summary>
     private static string NormalizePath(string path) => path.Trim().Replace('\\', '/').TrimEnd('/');
@@ -203,33 +207,51 @@ public sealed class GenerateFormValidator
         return true;
     }
 
-    private bool CheckOutputFolder(string? folder, List<FormMessage> messages)
+    /// <summary>
+    /// The folder row; returns the folder the run will use (<see cref="FolderPaths.Resolve"/>), or null when the row has
+    /// an error. A relative folder is checked, and named in the messages, as the absolute folder it resolves to, with a
+    /// note saying so.
+    /// </summary>
+    private string? CheckOutputFolder(string? folder, List<FormMessage> messages)
     {
         if (string.IsNullOrWhiteSpace(folder))
         {
             messages.Add(Error(GenerateFormFields.OutputFolder, "Choose an output folder."));
-            return false;
+            return null;
         }
 
         if (folder.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
         {
             messages.Add(Error(GenerateFormFields.OutputFolder, "Output folder is not a valid path."));
-            return false;
+            return null;
         }
 
-        if (!_paths.CanWrite(folder))
+        string typed = folder.Trim();
+        string resolved = FolderPaths.Resolve(typed);
+        if (!_paths.CanWrite(resolved))
         {
-            messages.Add(Error(GenerateFormFields.OutputFolder, $"Output folder is not writable: {folder}"));
-            return false;
+            messages.Add(Error(GenerateFormFields.OutputFolder, $"Output folder is not writable: {resolved}"));
+            return null;
         }
 
-        if (IsUnderOneDrive(folder))
+        List<string> warnings = new();
+        if (!string.Equals(resolved, typed, StringComparison.Ordinal))
+        {
+            warnings.Add(RelativeFolderNote(resolved));
+        }
+
+        if (IsUnderOneDrive(resolved))
         {
             // The same sentence the run's preflight reports (GenerateText.OneDriveWarning delegates here).
-            messages.Add(Warning(GenerateFormFields.OutputFolder, GenerateMessages.OneDriveWarning(folder.Trim())));
+            warnings.Add(GenerateMessages.OneDriveWarning(resolved));
         }
 
-        return true;
+        if (warnings.Count > 0)
+        {
+            messages.Add(Warning(GenerateFormFields.OutputFolder, string.Join("\n", warnings)));
+        }
+
+        return resolved;
     }
 
     private void CheckNameCollision(string name, string folder, List<FormMessage> messages)

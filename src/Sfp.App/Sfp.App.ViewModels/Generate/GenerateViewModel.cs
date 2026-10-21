@@ -290,14 +290,16 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// The options the fields describe, using the last valid start when the year box does not parse and the last finite
-    /// page scale when the scale box holds no finite number (NaN or Infinity would make the settings unsaveable).
+    /// page scale when the scale box holds no finite number (NaN or Infinity would make the settings unsaveable). The
+    /// output folder and the previous notebook are made absolute (<see cref="FolderPaths.Resolve"/>): OneNote runs in
+    /// its own process and would resolve a relative folder against its own working folder.
     /// </summary>
     public GenerateOptions ToOptions() => new()
     {
         Start = Start ?? _lastValidStart,
         PdfPath = PdfPath.Trim(),
         NotebookName = NotebookName.Trim(),
-        OutputFolder = OutputFolder.Trim(),
+        OutputFolder = FolderPaths.Resolve(OutputFolder),
         DateOrder = DateFormat.Order,
         PadDateFields = DateFormat.Padded,
         WeeksRemaining = WeeksRemaining,
@@ -312,7 +314,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         ReflectionDateIsWeekStart = ReflectionDateIsWeekStart,
         IncludeOutOfQuarterDays = IncludeOutOfQuarterDays,
         TimeBlocks = new TimeBlockWindow(TimeBlockStart, TimeBlockEnd),
-        PreviousNotebook = string.IsNullOrWhiteSpace(PreviousNotebook) ? null : PreviousNotebook.Trim(),
+        PreviousNotebook = string.IsNullOrWhiteSpace(PreviousNotebook) ? null : FolderPaths.Resolve(PreviousNotebook),
     };
 
     /// <summary>The settings to save for the current fields.</summary>
