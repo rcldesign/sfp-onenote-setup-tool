@@ -451,7 +451,7 @@ public static class GenerateCommand
         string elapsed = Elapsed(result.Elapsed);
         if (request.RenderOnly)
         {
-            stdout.WriteLine(string.Format(CultureInfo.InvariantCulture, "Rendered {0} pages to {1} in {2}; {3} written.", result.PagesRendered, result.OutputPath, elapsed, RenderOnlyOutput.IndexFileName));
+            stdout.WriteLine(string.Format(CultureInfo.InvariantCulture, "Rendered {0} pages to {1} in {2}; {3} written.", result.PagesRendered, result.OutputPath, elapsed, RenderOnlyRunner.IndexFileName));
         }
         else
         {

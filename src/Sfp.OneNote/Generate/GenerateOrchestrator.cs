@@ -27,8 +27,8 @@ public sealed record GenerateOrchestratorOptions
     /// <summary>This run's log file; rejected page XML is saved beside it.</summary>
     public string? LogPath { get; init; }
 
-    /// <summary>The most render workers the default asks for.</summary>
-    public const int MaxDefaultParallelism = 4;
+    /// <summary>The most render workers the default asks for (shared with Sfp.Render).</summary>
+    public const int MaxDefaultParallelism = RenderParallelism.MaxDefault;
 
     /// <summary>Render workers for the notebook pipeline and for render-only; <see cref="DefaultParallelism"/> unless set.</summary>
     public int MaxDegreeOfParallelism { get; init; } = DefaultParallelism;
@@ -39,10 +39,10 @@ public sealed record GenerateOrchestratorOptions
     /// (4) pages at once, so more workers would only wait for a slot, the rasterizer serializes PDFium anyway, and every
     /// worker holds sheet bitmaps of about 32 MB at 220 DPI.
     /// </summary>
-    public static int DefaultParallelism => DefaultParallelismFor(Environment.ProcessorCount);
+    public static int DefaultParallelism => RenderParallelism.Default;
 
     /// <summary>The default worker count on a machine with <paramref name="processorCount"/> processors: 1 to <see cref="MaxDefaultParallelism"/>.</summary>
-    public static int DefaultParallelismFor(int processorCount) => Math.Clamp(processorCount, 1, MaxDefaultParallelism);
+    public static int DefaultParallelismFor(int processorCount) => RenderParallelism.For(processorCount);
 
     /// <summary>Rendered pages held at once.</summary>
     public int RenderBufferCapacity { get; init; } = RenderPipeline.DefaultCapacity;
@@ -302,6 +302,8 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
                 }
 
                 written++;
+                state.PagesWritten = written;
+                state.PagesRendered = pipeline.RenderedCount;
                 _log.Information("Wrote page {Key} ({Title}) with {Anchors} anchors", spec.Key.Value, spec.Title, anchors.Count);
                 state.Report(GeneratePhase.WritingPages, written, renderable.Count, spec.Title);
                 ct.ThrowIfCancellationRequested();
@@ -455,6 +457,8 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             Phase = GeneratePhase.Cancelled,
             Error = "Cancelled",
             NotebookName = state.Notebook?.Name,
+            PagesRendered = state.PagesRendered,
+            PagesWritten = state.PagesWritten,
             Elapsed = state.Clock.Elapsed,
             LogPath = _options.LogPath,
             Warnings = state.Warnings,
@@ -489,7 +493,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            string note = string.Format(CultureInfo.InvariantCulture, "The partial notebook at {0} could not be deleted: {1}", nb.Path, ex.Message);
+            string note = GenerateMessages.PartialNotebookNotDeleted(nb.Path, ex.Message);
             _log.Warning(ex, "Partial notebook {Path} could not be deleted", nb.Path);
             state.Warnings.Add(note);
         }
@@ -723,6 +727,12 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
 
         /// <summary>The preflight found no open notebook (half of the PRD's not-signed-in test).</summary>
         public bool NoOpenNotebooks { get; set; }
+
+        /// <summary>Pages rendered so far (the pipeline's count), for the cancelled summary.</summary>
+        public int PagesRendered { get; set; }
+
+        /// <summary>Pages written so far, for the cancelled summary.</summary>
+        public int PagesWritten { get; set; }
 
         /// <summary>Pages in the plan once it is built (for the disk-full estimate), else null.</summary>
         public int? PlanPages { get; set; }

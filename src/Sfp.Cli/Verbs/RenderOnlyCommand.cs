@@ -176,10 +176,22 @@ public static class RenderOnlyCommand
             Say(request, stdout, "Warning: " + warning);
         }
 
+        DateEngine engine = new();
+        NotebookPlan plan;
         try
         {
-            DateEngine engine = new();
-            NotebookPlan plan = new PlanBuilder(engine).Build(manifest, engine.Build(options.Start), options);
+            plan = new PlanBuilder(engine).Build(manifest, engine.Build(options.Start), options);
+        }
+        catch (Exception ex) when (ex is ManifestException or ArgumentException or InvalidOperationException)
+        {
+            // A plan that cannot be built (blank or colliding Notes names, a token with no value) is a validation error.
+            logger.Warning(ex, "The plan could not be built");
+            stderr.WriteLine(ex.Message);
+            return ExitCodes.ValidationError;
+        }
+
+        try
+        {
             using FontService fonts = FontService.Load(manifest.Font, templatesDir);
             foreach (string warning in fonts.Warnings)
             {
