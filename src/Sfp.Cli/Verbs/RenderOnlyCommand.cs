@@ -169,7 +169,7 @@ public static class RenderOnlyCommand
         }
 
         // As generate --render-only does: a log folder that cannot be used moves the log to the temp folder with a notice.
-        RunLog? started = RunLog.StartWithFallback(Verb, quiet: true, stderr, request.LogDirectory);
+        RunLog? started = RunLog.StartWithFallback(Verb, quiet: true, stderr, request.LogDirectory, printsOwnProgress: true);
         if (started is null)
         {
             return ExitCodes.ValidationError;
