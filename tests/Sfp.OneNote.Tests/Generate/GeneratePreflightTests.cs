@@ -95,11 +95,36 @@ public class GeneratePreflightTests
     public void A_hierarchy_call_that_fails_for_another_reason_is_reported_with_its_message()
     {
         Harness h = new();
-        h.App.GetHierarchyFailure = () => new OneNoteBusyException("GetHierarchy", OneNoteHResults.RpcCallRejected, null);
+        h.App.GetHierarchyFailure = () => new OneNoteException("GetHierarchy", OneNoteHResults.NotYetSynchronized, "OneNote call GetHierarchy failed: hrNotYetSynchronized (0x8004201D)", null);
 
         PreflightResult result = h.Build().Check(Harness.Request());
 
         result.Errors.Should().ContainSingle(e => e.ExitCode == 3 && e.Message.StartsWith("OneNote could not be reached", StringComparison.Ordinal));
+        result.Errors[0].Message.Should().NotContain(GenerateText.DialogOrSignInMessage);
+    }
+
+    public static TheoryData<string, OneNoteException> DialogRefusals() => new()
+    {
+        { "busy twice", new OneNoteBusyException("GetHierarchy", OneNoteHResults.RpcCallRejected, null) },
+        { "a modal dialog twice", new OneNoteBusyException("GetHierarchy", OneNoteHResults.AppInModalUI, null) },
+        { "hrAppInModalUI", new OneNoteException("GetHierarchy", OneNoteHResults.AppInModalUI, "OneNote call GetHierarchy failed: hrAppInModalUI (0x80042030)", null) },
+    };
+
+    [Theory]
+    [MemberData(nameof(DialogRefusals))]
+    public void A_dialog_holding_onenote_at_the_first_call_says_to_close_it_or_sign_in_with_exit_3(string why, OneNoteException refusal)
+    {
+        Harness h = new();
+        h.App.PreexistingNotebooks.Clear();
+        h.App.GetHierarchyFailure = () => refusal;
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        (string message, int exitCode) = result.Errors.Should().ContainSingle(why).Subject;
+        exitCode.Should().Be(3);
+        message.Should().StartWith(GenerateText.DialogOrSignInMessage + " ").And.Contain(OneNoteHResults.Hex(refusal.HResult));
+        message.Should().NotContain("could not be reached");
+        GenerateText.DialogOrSignInMessage.Should().Contain("sign in once, then retry");
     }
 
     [Fact]
