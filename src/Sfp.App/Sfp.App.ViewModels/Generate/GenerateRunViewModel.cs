@@ -152,6 +152,12 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     /// <summary>True while a result of any kind is shown.</summary>
     public bool HasResult => ShowSuccess || ShowFailure || ShowCancelled;
 
+    /// <summary>
+    /// The notebook folder the run in progress creates (its output folder and name), named when the window is closed
+    /// while a cancelled run does not stop; null when no run is on or the request names no folder.
+    /// </summary>
+    public string? RunningNotebookPath { get; private set; }
+
     /// <summary>The phase name for the progress bar: "Rendering pages", "Writing pages", and so on.</summary>
     public static string PhaseName(GeneratePhase phase) => phase switch
     {
@@ -229,6 +235,10 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         // tab locked. It falls back to the temp folder, then to no log file with a one-line notice.
         using IRunLog log = _logs.StartOrFallBack("generate", out string? logNotice);
         LogNotice = logNotice;
+        GenerateOptions options = request.Options;
+        RunningNotebookPath = string.IsNullOrWhiteSpace(options.OutputFolder) || string.IsNullOrWhiteSpace(options.NotebookName)
+            ? null
+            : System.IO.Path.Combine(options.OutputFolder, options.NotebookName);
         IsRunning = true;
         IsIndeterminate = true;
         PhaseText = "Starting";
@@ -261,6 +271,7 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            RunningNotebookPath = null;
             IsRunning = false;
         }
 

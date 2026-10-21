@@ -16,10 +16,24 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     public const string WindowTitle = "SFP to OneNote";
 
+    /// <summary>The title of the question asked when a cancelled run does not stop while the window waits to close.</summary>
+    public const string CloseAnywayTitle = "The run has not stopped";
+
     private readonly ISettingsStore _settings;
+    private readonly IDialogService? _dialogs;
     private readonly List<string> _knownFolders = new();
+    private readonly object _closeRequestsGate = new();
     private string? _lastSavedJson;
     private bool _initialized;
+
+    /// <summary>True while a close waits for cancelled runs; close requests are counted only then.</summary>
+    private bool _closeWaiting;
+
+    /// <summary>Close requests not yet answered with the close-anyway question.</summary>
+    private int _closeRequests;
+
+    /// <summary>Completed by the next close request while the wait has none counted.</summary>
+    private TaskCompletionSource? _closeRequestArmed;
 
     [ObservableProperty]
     private int _selectedTabIndex;
@@ -28,12 +42,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string? _notice;
 
-    public MainViewModel(GenerateViewModel generate, RefreshViewModel refresh, ISettingsStore settings)
+    /// <param name="generate">The Generate tab.</param>
+    /// <param name="refresh">The Refresh tab.</param>
+    /// <param name="settings">Where the last-used values are kept.</param>
+    /// <param name="dialogs">
+    /// Asks whether to close anyway when a cancelled run does not stop (<see cref="CloseAnywayDelay"/>,
+    /// <see cref="RequestCloseAgain"/>). Without it the close keeps waiting for the runs.
+    /// </param>
+    public MainViewModel(GenerateViewModel generate, RefreshViewModel refresh, ISettingsStore settings, IDialogService? dialogs = null)
     {
         Generate = generate;
         Refresh = refresh;
         _settings = settings;
+        _dialogs = dialogs;
     }
+
+    /// <summary>How long a close waits for cancelled runs before it asks whether to close anyway (30 seconds).</summary>
+    public TimeSpan CloseAnywayDelay { get; init; } = TimeSpan.FromSeconds(30);
 
     public GenerateViewModel Generate { get; }
 
@@ -98,7 +123,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// nothing), the Refresh one first, so a No to either keeps the window open and every run going. Once the close is
     /// accepted and has to wait, both tabs are closing (<see cref="GenerateViewModel.BeginClosing"/>,
     /// <see cref="RefreshViewModel.BeginClosing"/>): nothing new starts, and the runs are checked again after the wait
-    /// until both tabs are idle. Completes at once when nothing runs.
+    /// until both tabs are idle. A cancelled run that never returns (a OneNote call that hangs) would keep the window
+    /// open for good, so on a second close request (<see cref="RequestCloseAgain"/>) or once
+    /// <see cref="CloseAnywayDelay"/> has passed the user is asked whether to close anyway; yes closes now, leaving the
+    /// run cut off, and no keeps waiting (the delay asks once, every later close request asks again). Completes at once
+    /// when nothing runs.
     /// </summary>
     public async Task<bool> PrepareToCloseAsync()
     {
@@ -108,14 +137,64 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
 
         Task stopped = StopRunsAsync();
-        if (!stopped.IsCompleted)
+        if (stopped.IsCompleted)
         {
-            Generate.BeginClosing();
-            Refresh.BeginClosing();
+            await stopped;
+            return true;
         }
 
-        await stopped;
-        return true;
+        Generate.BeginClosing();
+        Refresh.BeginClosing();
+        return await WaitForRunsAsync(stopped);
+    }
+
+    /// <summary>The window's close button was pressed again while the close waits for runs: ask whether to close anyway.</summary>
+    public void RequestCloseAgain()
+    {
+        TaskCompletionSource? wake;
+        lock (_closeRequestsGate)
+        {
+            if (!_closeWaiting)
+            {
+                return;
+            }
+
+            _closeRequests++;
+            wake = _closeRequestArmed;
+        }
+
+        wake?.TrySetResult();
+    }
+
+    /// <summary>
+    /// The close-anyway question, naming what is left behind: the partial notebook of a Generate run and a refresh cut
+    /// off in the middle of a page.
+    /// </summary>
+    /// <param name="generateRunning">A cancelled Generate run has not stopped.</param>
+    /// <param name="partialNotebook">The notebook folder that run creates, or null when it is not known.</param>
+    /// <param name="refreshRunning">A cancelled refresh has not stopped.</param>
+    public static string CloseAnywayQuestion(bool generateRunning, string? partialNotebook, bool refreshRunning)
+    {
+        string text = (generateRunning, refreshRunning) switch
+        {
+            (true, true) => "The cancelled Generate run and refresh have not stopped yet.",
+            (true, false) => "The cancelled Generate run has not stopped yet.",
+            _ => "The cancelled refresh has not stopped yet.",
+        };
+        text += " Close the window anyway?";
+        if (generateRunning)
+        {
+            text += string.IsNullOrEmpty(partialNotebook)
+                ? " The partial notebook is left behind; delete it before you generate that notebook again."
+                : " The partial notebook at " + partialNotebook + " is left behind; delete it before you generate that notebook again.";
+        }
+
+        if (refreshRunning)
+        {
+            text += " The refresh is cut off in the middle of a page; run Refresh again afterwards.";
+        }
+
+        return text;
     }
 
     /// <summary>
@@ -173,6 +252,98 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
 
         return parts.Count == 0 ? null : string.Join(" ", parts);
+    }
+
+    /// <summary>
+    /// Waits for <paramref name="stopped"/>; true once it completed, or earlier when the user agreed to close anyway after
+    /// a close request or <see cref="CloseAnywayDelay"/>.
+    /// </summary>
+    private async Task<bool> WaitForRunsAsync(Task stopped)
+    {
+        using CancellationTokenSource waitEnds = new();
+        lock (_closeRequestsGate)
+        {
+            _closeWaiting = true;
+            _closeRequests = 0;
+        }
+
+        try
+        {
+            Task request = NextCloseRequestAsync();
+            Task delay = Task.Delay(_dialogs is null ? Timeout.InfiniteTimeSpan : CloseAnywayDelay, waitEnds.Token);
+            while (true)
+            {
+                Task woke = await Task.WhenAny(stopped, request, delay);
+                if (stopped.IsCompleted)
+                {
+                    break;
+                }
+
+                if (woke == delay)
+                {
+                    // The delay asks once; after a no, only another close request asks again.
+                    delay = Task.Delay(Timeout.InfiniteTimeSpan, waitEnds.Token);
+                }
+                else
+                {
+                    request = NextCloseRequestAsync();
+                }
+
+                if (ConfirmCloseAnyway())
+                {
+                    return true;
+                }
+            }
+        }
+        finally
+        {
+            lock (_closeRequestsGate)
+            {
+                _closeWaiting = false;
+                _closeRequests = 0;
+                _closeRequestArmed = null;
+            }
+
+            waitEnds.Cancel();
+        }
+
+        await stopped;
+        return true;
+    }
+
+    /// <summary>Completes on the next close request, taking one counted request if there is one.</summary>
+    private async Task NextCloseRequestAsync()
+    {
+        while (true)
+        {
+            TaskCompletionSource armed;
+            lock (_closeRequestsGate)
+            {
+                if (_closeRequests > 0)
+                {
+                    _closeRequests--;
+                    return;
+                }
+
+                armed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _closeRequestArmed = armed;
+            }
+
+            await armed.Task;
+        }
+    }
+
+    /// <summary>Asks whether to close anyway while a run still has not stopped; false without a dialog service or once both are idle.</summary>
+    private bool ConfirmCloseAnyway()
+    {
+        bool generating = Generate.Run.IsRunning;
+        bool refreshing = Refresh.IsBusy;
+        if (_dialogs is null || (!generating && !refreshing))
+        {
+            return false;
+        }
+
+        return _dialogs.Confirm(CloseAnywayTitle, CloseAnywayQuestion(generating, Generate.Run.RunningNotebookPath, refreshing));
     }
 
     /// <summary>Cancels both tabs' runs and waits for them, then looks again, until neither tab runs anything.</summary>

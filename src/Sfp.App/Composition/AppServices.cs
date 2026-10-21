@@ -95,7 +95,7 @@ public sealed class AppServices : IDisposable
             dialogs,
             ui,
             env);
-        MainViewModel main = new(generate, refresh, settings);
+        MainViewModel main = new(generate, refresh, settings, dialogs);
         return new AppServices(main, env, manifest, owned);
     }
 

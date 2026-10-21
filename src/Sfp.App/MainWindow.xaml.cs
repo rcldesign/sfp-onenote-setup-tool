@@ -35,8 +35,10 @@ public partial class MainWindow : System.Windows.Window
 
         if (_pendingClose is { IsCompleted: false })
         {
-            // A second click while the run is stopping: the first close is already waiting for it.
+            // A second click while the run is stopping: the first close is already waiting for it, and now asks whether
+            // to close anyway, in case the run never returns.
             e.Cancel = true;
+            _viewModel.RequestCloseAgain();
             return;
         }
 
