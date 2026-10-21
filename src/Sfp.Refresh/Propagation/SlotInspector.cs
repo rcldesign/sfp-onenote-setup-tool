@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using Sfp.Core.Manifests;
 using Sfp.OneNote;
 using Sfp.OneNote.Xml;
@@ -34,6 +35,12 @@ public static class SlotInspector
 {
     /// <summary>Position tolerance for outlines whose size OneNote did not report.</summary>
     public const double PositionTolerancePt = 4.0;
+
+    /// <summary>The elements that put something other than text inside an outline: a picture, ink, an attached or media file, a table or a tag.</summary>
+    private static readonly HashSet<string> NonTextContent = new(StringComparer.Ordinal)
+    {
+        "Image", "InkWord", "InkParagraph", "InkDrawing", "InsertedFile", "MediaFile", "Table", "Tag",
+    };
 
     /// <param name="page">The page as read.</param>
     /// <param name="sheetRect">The slot rectangle in sheet points.</param>
@@ -113,6 +120,18 @@ public static class SlotInspector
             slotPageRect.W + (2 * PositionTolerancePt),
             slotPageRect.H + (2 * PositionTolerancePt));
         return tolerant.Contains(objectRect.X, objectRect.Y);
+    }
+
+    /// <summary>
+    /// True when the outline still holds text only, as the tool writes it: no picture, ink, attached or media file, table
+    /// or tag that the user put inside it (clicking at the end of a tool line puts the cursor inside its outline). Extra
+    /// lines of typed text do not change the shape; the text comparison in Propagator.IsEdited catches them.
+    /// </summary>
+    public static bool HasToolShape(OutlineInfo outline)
+    {
+        ArgumentNullException.ThrowIfNull(outline);
+        XNamespace one = outline.Element.Name.Namespace;
+        return !outline.Element.Descendants().Any(e => e.Name.Namespace == one && NonTextContent.Contains(e.Name.LocalName));
     }
 
     private static string Describe(OutlineInfo outline)
