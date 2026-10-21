@@ -1,3 +1,4 @@
+using System.Globalization;
 using Sfp.OneNote;
 using Sfp.OneNote.Com;
 using Sfp.Refresh.Orchestration;
@@ -55,13 +56,19 @@ public class PendingWritesTests
     public void A_run_whose_final_save_failed_leaves_its_creates_and_updates_to_the_next_run()
     {
         RunHarness h = new();
-        FlakyStore store = new(h.Store) { FailSave = 2 };
+        FlakySidecarStore store = new(h.Store);
+        store.FailNext(3, FlakySidecarStore.Final);
         h.Services = h.Services with { Sidecars = store };
         h.Type(h.Setup.Objectives[0], "Ship the connector");
 
-        h.Run().ExitCode.Should().Be(5, "the journal is saved, every page is written, then the final save fails");
+        RefreshResult first = h.Run();
+
+        first.ExitCode.Should().Be(5, "the journal is saved, every page is written, then every attempt at the final save fails");
+        first.Error.Should().Be(FinalSaveFailed(h));
         h.OutlinesWithText(RunHarness.MonJan4, "O1 Ship the connector").Should().ContainSingle();
-        h.Saved().Pages[RunHarness.MonJan4.Value].Anchors.Should().NotContainKey("objectiveLegend");
+        SidecarPage left = h.Saved().Pages[RunHarness.MonJan4.Value];
+        left.Anchors.Should().NotContainKey("objectiveLegend");
+        left.PendingTexts.Should().Contain("objectiveLegend", "O1 Ship the connector", "the journal is left in the sidecar");
 
         RefreshResult next = h.Run();
 
@@ -70,8 +77,11 @@ public class PendingWritesTests
         h.Saved().Pages[RunHarness.MonJan4.Value].Anchors.Should().ContainKey("objectiveLegend");
 
         h.RetypeSetup("Ship the connector", "Ship the API");
-        store.FailSave = store.Saves + 2;
-        h.Run().ExitCode.Should().Be(5, "the updates are written, then the final save fails again");
+        store.FailNext(3, FlakySidecarStore.Final);
+        RefreshResult updated = h.Run();
+        updated.ExitCode.Should().Be(5, "the updates are written, then every attempt at the final save fails again");
+        updated.Error.Should().Be(FinalSaveFailed(h));
+        h.Saved().Pages[RunHarness.MonJan4.Value].PendingTexts.Should().Contain("objectiveLegend", "O1 Ship the API");
         h.RetypeSetup("Ship the API", "Ship the docs");
 
         RefreshResult after = h.Run();
@@ -101,33 +111,11 @@ public class PendingWritesTests
         settled.Pages[RunHarness.MonJan4.Value].PendingTexts.Should().BeNull("the page was read, so its journal is settled");
     }
 
-    /// <summary>A sidecar store whose n-th save (counted from 1) fails the way a file held by a sync client or a scanner does.</summary>
-    private sealed class FlakyStore : ISidecarStore
-    {
-        private readonly ISidecarStore inner;
-
-        public FlakyStore(ISidecarStore inner)
-        {
-            this.inner = inner;
-        }
-
-        public int Saves { get; private set; }
-
-        public int FailSave { get; set; }
-
-        public string PathFor(string notebookFolder) => inner.PathFor(notebookFolder);
-
-        public Sidecar? Load(string path) => inner.Load(path);
-
-        public void Save(string path, Sidecar sidecar)
-        {
-            Saves++;
-            if (Saves == FailSave)
-            {
-                throw new IOException("The process cannot access the file because it is being used by another process.");
-            }
-
-            inner.Save(path, sidecar);
-        }
-    }
+    /// <summary>The error of a run whose final save failed on every attempt with the store's injected failure.</summary>
+    private static string FinalSaveFailed(RunHarness h) => string.Format(
+        CultureInfo.InvariantCulture,
+        RefreshOrchestrator.SidecarSaveFailedFormat,
+        h.SidecarPath,
+        RefreshOrchestrator.SidecarSaveAttempts,
+        FlakySidecarStore.Message);
 }

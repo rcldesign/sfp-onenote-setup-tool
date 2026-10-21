@@ -34,7 +34,8 @@ public enum TimeBlockWindowSource
 /// diff with the sidecar's FrozenThrough), then either lists every change (dry run, nothing written) or writes them
 /// page by page through the anchor writer, updates the sidecar (anchors, LastRefresh, FrozenThrough), syncs and fills
 /// the summary. The Creates and Updates are journaled in the sidecar before the first write, and an earlier run's journal
-/// is settled before planning (<see cref="PendingWrites"/>). Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every Setup
+/// is settled before planning (<see cref="PendingWrites"/>). Every sidecar save of a run goes through one retrying save
+/// (<see cref="SaveWithRetry"/>). Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every Setup
 /// calendar source failed. Every real run then updates the failure streak beside the sidecar (see <see cref="TrackStreak"/>).
 /// </summary>
 public sealed class RefreshOrchestrator : IRefreshOrchestrator
@@ -66,7 +67,14 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// </summary>
     public const string SidecarSaveFailedFormat = "The sidecar {0} could not be saved after {1} attempts ({2}). What this run wrote is on the pages; the next run re-adopts those objects.";
 
-    /// <summary>How many times the end-of-run sidecar save is tried before the run reports it failed.</summary>
+    /// <summary>
+    /// Error of a run whose sidecar save before the first page write (the rebuilt sidecar, or the journal of the writes
+    /// to come) failed on every attempt ({0}: the sidecar path, {1}: the attempts, {2}: the last error); the run fails
+    /// (exit 5) and nothing is written.
+    /// </summary>
+    public const string SidecarSaveBeforeWritingFailedFormat = "The sidecar {0} could not be saved before writing after {1} attempts ({2}). Nothing was written to the pages; the next run tries again.";
+
+    /// <summary>How many times each sidecar save of a run is tried before it counts as failed.</summary>
     public const int SidecarSaveAttempts = 3;
 
     /// <summary>The waits before the second and the third save attempt.</summary>
@@ -164,9 +172,9 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         RecoveryResult recovered = recovery.Recover(opened.Notebook, opened.Sidecar, services.ToolVersion);
         Sidecar sidecar = recovered.Sidecar;
         warnings.AddRange(recovered.Warnings);
-        if (recovered.Rebuilt)
+        if (recovered.Rebuilt && SaveBeforeWriting(opened.SidecarPath, sidecar) is string rebuiltError)
         {
-            services.Sidecars.Save(opened.SidecarPath, sidecar);
+            return Fail(WriteFailureExitCode, rebuiltError, clock);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -236,10 +244,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         progress?.Report("Writing changes");
         (sidecar, bool journaled) = PendingWrites.Journal(sidecar, changes.Where(c => !c.Blocked && (!c.Inked || request.WriteInkedValues)));
-        if (journaled)
+
+        // Saved before the first write, so a run that cannot record what it wrote leaves the next run the way back; a
+        // journal that cannot be saved ends the run before anything is written.
+        if (journaled && SaveBeforeWriting(opened.SidecarPath, sidecar) is string journalError)
         {
-            // Saved before the first write, so a run that cannot record what it wrote leaves the next run the way back.
-            services.Sidecars.Save(opened.SidecarPath, sidecar);
+            return Fail(WriteFailureExitCode, journalError, clock);
         }
 
         WriteState writeState = new(sidecar);
@@ -333,11 +343,27 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     }
 
     /// <summary>
+    /// Saves the sidecar before the first page write (the rebuilt sidecar, the journal of the writes to come) through
+    /// <see cref="SaveWithRetry"/>. When every attempt fails, returns the error that ends the run before anything is
+    /// written (<see cref="SidecarSaveBeforeWritingFailedFormat"/>, naming the path and the reason); null once saved.
+    /// </summary>
+    private string? SaveBeforeWriting(string path, Sidecar sidecar)
+    {
+        Exception? failure = SaveWithRetry(path, sidecar);
+        if (failure is null)
+        {
+            return null;
+        }
+
+        services.Log.Error(failure, "The sidecar {Path} could not be saved before writing after {Attempts} attempts; nothing was written", path, SidecarSaveAttempts);
+        return string.Format(CultureInfo.InvariantCulture, SidecarSaveBeforeWritingFailedFormat, path, SidecarSaveAttempts, failure.Message);
+    }
+
+    /// <summary>
     /// The sidecar with what the write phase recorded (anchors and the texts written), LastRefresh, FrozenThrough and
-    /// the confirmed inked values, saved: up to <see cref="SidecarSaveAttempts"/> times with short waits, since a sync
-    /// client or a virus scanner may hold the file for a moment. When every attempt fails the error to report is returned
-    /// (<see cref="SidecarSaveFailedFormat"/>, naming the path); after a failure part way through it is only logged, so the
-    /// failure itself still reaches the result.
+    /// the confirmed inked values, saved through <see cref="SaveWithRetry"/>. When every attempt fails the error to
+    /// report is returned (<see cref="SidecarSaveFailedFormat"/>, naming the path); after a failure part way through it
+    /// is only logged, so the failure itself still reaches the result.
     /// </summary>
     private (Sidecar Updated, string? Error) SaveWritten(string path, Sidecar sidecar, WriteState state, CalendarOutcome? calendar, IReadOnlyDictionary<string, string> confirmedInked, bool afterFailure)
     {
@@ -363,7 +389,11 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         return (updated, string.Format(CultureInfo.InvariantCulture, SidecarSaveFailedFormat, path, SidecarSaveAttempts, failure.Message));
     }
 
-    /// <summary>Saves the sidecar, trying again after a short wait when the file cannot be written; returns the last error, or null once saved.</summary>
+    /// <summary>
+    /// The one way a run saves its sidecar: up to <see cref="SidecarSaveAttempts"/> times, waiting a moment (through
+    /// <see cref="RefreshServices.Sleep"/>) before each retry, since a sync client or a virus scanner may hold the file;
+    /// returns the last error, or null once saved.
+    /// </summary>
     private Exception? SaveWithRetry(string path, Sidecar sidecar)
     {
         for (int attempt = 1; ; attempt++)
