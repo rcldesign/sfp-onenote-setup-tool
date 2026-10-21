@@ -326,6 +326,24 @@ public sealed class FakeRefreshOrchestrator : IRefreshOrchestrator
 
     public int Runs { get; private set; }
 
+    /// <summary>When true the run reports <see cref="ProgressToReport"/>, waits for cancellation and then returns <see cref="CancelledResult"/>.</summary>
+    public bool WaitForCancel { get; set; }
+
+    /// <summary>What a cancelled run returns: like the production orchestrator's, exit 5, "Cancelled." and no summary.</summary>
+    public RefreshResult CancelledResult { get; set; } = new() { Success = false, ExitCode = 5, Error = "Cancelled.", Elapsed = TimeSpan.FromSeconds(4) };
+
+    /// <summary>Reported after the cancel was seen: the page that was already being written when Cancel was pressed.</summary>
+    public List<string> ProgressAfterCancel { get; } = new();
+
+    /// <summary>When set, a cancelled run waits here before returning, as the real one does while it finishes the page in flight.</summary>
+    public ManualResetEventSlim? AfterCancelGate { get; set; }
+
+    /// <summary>True once the run has reported <see cref="ProgressToReport"/> and waits for the cancel.</summary>
+    public bool WaitingForCancel { get; private set; }
+
+    /// <summary>True once the run saw the cancellation and reported <see cref="ProgressAfterCancel"/>.</summary>
+    public bool SawCancel { get; private set; }
+
     public RefreshResult Run(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken)
     {
         Runs++;
@@ -338,6 +356,25 @@ public sealed class FakeRefreshOrchestrator : IRefreshOrchestrator
         foreach (string p in ProgressToReport)
         {
             progress?.Report(p);
+        }
+
+        if (WaitForCancel)
+        {
+            WaitingForCancel = true;
+            if (!cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(15)))
+            {
+                // A token that never cancels (the run was not given the one Cancel cancels) fails the test instead of hanging it.
+                throw new TimeoutException("The refresh was never cancelled.");
+            }
+
+            foreach (string p in ProgressAfterCancel)
+            {
+                progress?.Report(p);
+            }
+
+            SawCancel = true;
+            AfterCancelGate?.Wait();
+            return CancelledResult;
         }
 
         return Result;
@@ -469,7 +506,7 @@ public sealed class Harness
     public GenerateViewModel NewGenerate(TimeSpan? debounce = null) =>
         new(Manifest, Dates, Validator, NewPreviews(debounce), NewRun(), Dialogs, Ui, Env);
 
-    public RefreshViewModel NewRefresh() => new(Registry, Tasks, Logs, (_, _) => Refresher, Ui, Env);
+    public RefreshViewModel NewRefresh() => new(Registry, Tasks, Logs, (_, _) => Refresher, Dialogs, Ui, Env);
 
     public MainViewModel NewMain() => new(NewGenerate(), NewRefresh(), Settings);
 }

@@ -4,6 +4,7 @@ using Sfp.App.ViewModels.Refresh;
 using Sfp.Core.Dates;
 using Sfp.Core.Options;
 using Sfp.OneNote.Generate;
+using Sfp.Refresh;
 using Sfp.TestSupport;
 
 namespace Sfp.Core.Tests.Options.ViewModels;
@@ -186,6 +187,79 @@ public class MainViewModelTests
         (await main.PrepareToCloseAsync()).Should().BeTrue();
         main.Generate.Run.ShowCancelled.Should().BeTrue();
         await generating;
+    }
+
+    [Fact]
+    public async Task Closing_during_a_refresh_asks_no_keeps_it_running_and_yes_closes_once_the_cancelled_run_returns()
+    {
+        using ManualResetEventSlim finishing = new(false);
+        _h.Refresher.WaitForCancel = true;
+        _h.Refresher.AfterCancelGate = finishing;
+        using MainViewModel main = await InitializedWithANotebook();
+        Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        _h.Dialogs.ConfirmAnswer = false;
+        (await main.PrepareToCloseAsync()).Should().BeFalse("the user kept the refresh going");
+        _h.Dialogs.Titles.Should().Equal(RefreshViewModel.CloseWhileRunningTitle);
+        _h.Dialogs.Questions.Should().Equal(RefreshViewModel.CloseWhileRunningQuestion);
+        main.Refresh.IsBusy.Should().BeTrue();
+        _h.Refresher.SawCancel.Should().BeFalse("No cancels nothing");
+
+        _h.Dialogs.ConfirmAnswer = true;
+        Task<bool> closing = main.PrepareToCloseAsync();
+        SpinWait.SpinUntil(() => _h.Refresher.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("yes cancels the run");
+        main.Refresh.ProgressText.Should().Be(RefreshViewModel.CancellingText);
+        closing.IsCompleted.Should().BeFalse("the window stays open until the run returns");
+
+        finishing.Set();
+        (await closing).Should().BeTrue();
+        main.Refresh.IsBusy.Should().BeFalse();
+        main.Refresh.CancelledText.Should().StartWith("Refresh cancelled");
+        _h.Dialogs.Questions.Should().Equal(RefreshViewModel.CloseWhileRunningQuestion, RefreshViewModel.CloseWhileRunningQuestion);
+        await refreshing;
+    }
+
+    [Fact]
+    public async Task Closing_with_both_tabs_running_asks_about_the_refresh_first_and_closes_after_both_runs_stopped()
+    {
+        _h.Refresher.WaitForCancel = true;
+        _h.Generator.WaitForCancel = true;
+        using MainViewModel main = await InitializedWithANotebook();
+        main.Generate.PdfPath = Harness.Pdf;
+        await main.Generate.PendingPdfCheck;
+        await main.Generate.Previews.Pending;
+        Task generating = main.Generate.GenerateCommand.ExecuteAsync(null);
+        Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Generator.Runs == 1 && _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        _h.Dialogs.ConfirmAnswer = false;
+        (await main.PrepareToCloseAsync()).Should().BeFalse();
+        _h.Dialogs.Questions.Should().Equal(new[] { RefreshViewModel.CloseWhileRunningQuestion }, "a No to the first question ends the close attempt");
+        main.Generate.Run.IsRunning.Should().BeTrue();
+        main.Refresh.IsBusy.Should().BeTrue();
+
+        _h.Dialogs.ConfirmAnswer = true;
+        (await main.PrepareToCloseAsync()).Should().BeTrue();
+        _h.Dialogs.Questions.Skip(1).Should().Equal(RefreshViewModel.CloseWhileRunningQuestion, GenerateViewModel.CloseWhileRunningQuestion);
+        main.Generate.Run.ShowCancelled.Should().BeTrue();
+        main.Refresh.IsBusy.Should().BeFalse();
+        main.Refresh.CancelledText.Should().StartWith("Refresh cancelled");
+        await generating;
+        await refreshing;
+    }
+
+    /// <summary>A window over one notebook built by the tool, listed and selected on the Refresh tab.</summary>
+    private async Task<MainViewModel> InitializedWithANotebook()
+    {
+        const string folder = Harness.DefaultFolder + @"\SFP Q1 2027";
+        _h.Registry.Notebooks.Add(new KnownNotebook("SFP Q1 2027", folder, new QuarterSpec(2027, 1), null, null, folder + ".sfp-state.json"));
+        MainViewModel main = _h.NewMain();
+        main.Initialize();
+        await main.Generate.PendingPdfCheck;
+        await main.Refresh.PendingReload;
+        main.Refresh.SelectedNotebook.Should().NotBeNull();
+        return main;
     }
 
     [Fact]

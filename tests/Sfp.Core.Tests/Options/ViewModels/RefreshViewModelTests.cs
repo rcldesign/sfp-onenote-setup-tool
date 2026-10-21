@@ -219,6 +219,7 @@ public class RefreshViewModelTests
                 _h.Refresher.Result = new RefreshResult { Success = false, ExitCode = 5, Error = "Writing page 'Mon Jan 4' failed", LogPath = logPath };
                 return _h.Refresher;
             },
+            _h.Dialogs,
             _h.Ui,
             _h.Env);
         vm.SetKnownFolders(Array.Empty<string>());
@@ -349,5 +350,109 @@ public class RefreshViewModelTests
 
         vm.InkNotice.Should().Be("Some Setup values came from handwriting recognition; check the values read from Setup above.");
         vm.Changes.Should().AllSatisfy(c => c.IsInked.Should().BeFalse());
+    }
+
+    [Fact]
+    public async Task Cancel_is_enabled_only_while_a_run_is_on()
+    {
+        _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() };
+        using RefreshViewModel vm = await Loaded();
+        int notified = 0;
+        vm.CancelCommand.CanExecuteChanged += (_, _) => notified++;
+        vm.CancelCommand.CanExecute(null).Should().BeFalse("nothing runs");
+
+        await vm.PreviewChangesCommand.ExecuteAsync(null);
+
+        vm.CancelCommand.CanExecute(null).Should().BeFalse("the run is over");
+        notified.Should().BeGreaterThanOrEqualTo(2, "the button is told when the run starts and when it ends");
+        vm.CancelledText.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Cancel_mid_refresh_says_cancelling_until_the_current_page_is_done_then_shows_the_cancelled_line()
+    {
+        using ManualResetEventSlim finishing = new(false);
+        _h.Refresher.WaitForCancel = true;
+        _h.Refresher.AfterCancelGate = finishing;
+        _h.Refresher.ProgressToReport.AddRange(new[] { "Opening notebook SFP Q1 2027", "Planning propagation", "Writing changes", "Writing Annual Objectives" });
+        _h.Refresher.ProgressAfterCancel.Add("Writing Objective 1");
+        using RefreshViewModel vm = await Loaded();
+
+        Task refreshing = vm.RefreshNowCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        vm.IsBusy.Should().BeTrue();
+        vm.ProgressText.Should().Be("Writing Annual Objectives");
+        vm.CancelCommand.CanExecute(null).Should().BeTrue();
+
+        vm.CancelCommand.Execute(null);
+
+        vm.ProgressText.Should().Be(RefreshViewModel.CancellingText);
+        SpinWait.SpinUntil(() => _h.Refresher.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("the run was given the token Cancel cancels");
+        vm.ProgressText.Should().Be("Cancelling after the current page", "the page in flight reporting does not replace the cancelling line");
+        vm.IsBusy.Should().BeTrue("the run is still finishing that page");
+        vm.CancelledText.Should().BeNull();
+
+        finishing.Set();
+        await refreshing;
+
+        vm.IsBusy.Should().BeFalse();
+        vm.CancelCommand.CanExecute(null).Should().BeFalse();
+        vm.ProgressText.Should().Be("Refresh cancelled.");
+        vm.CancelledText.Should().Be("Refresh cancelled after the current page; 2 pages were written. The next refresh continues where this one stopped.");
+        vm.ErrorText.Should().BeNull("a cancel is not a failure");
+        vm.Summary.Should().BeNull("the cancelled result carries no summary");
+        _h.Refresher.LastRequest!.DryRun.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_cancelled_preview_says_nothing_was_written()
+    {
+        _h.Refresher.WaitForCancel = true;
+        _h.Refresher.ProgressToReport.Add("Checking the sidecar");
+        using RefreshViewModel vm = await Loaded();
+
+        Task previewing = vm.PreviewChangesCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        await vm.CancelAndWaitAsync();
+
+        vm.IsBusy.Should().BeFalse("CancelAndWaitAsync completes once the run has stopped");
+        vm.ProgressText.Should().Be("Preview cancelled.");
+        vm.CancelledText.Should().Be("Preview cancelled; nothing was written.");
+        vm.ErrorText.Should().BeNull();
+        vm.CancelAndWaitAsync().IsCompleted.Should().BeTrue("with no run on it completes at once");
+        await previewing;
+    }
+
+    [Fact]
+    public async Task A_run_that_fails_after_cancel_was_pressed_shows_its_error_not_the_cancelled_line()
+    {
+        _h.Refresher.WaitForCancel = true;
+        _h.Refresher.CancelledResult = new RefreshResult
+        {
+            Success = false,
+            ExitCode = 3,
+            Error = "OneNote stopped responding or was closed during the run. UpdatePageContent failed with RPC_S_CALL_FAILED (0x800706BE).",
+            LogPath = @"C:\logs\refresh.log",
+        };
+        using RefreshViewModel vm = await Loaded();
+
+        Task refreshing = vm.RefreshNowCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        vm.CancelCommand.Execute(null);
+        await refreshing;
+
+        vm.CancelledText.Should().BeNull("the run did not stop because of the cancel");
+        vm.ErrorText.Should().Be(@"OneNote stopped responding or was closed during the run. UpdatePageContent failed with RPC_S_CALL_FAILED (0x800706BE). Log: C:\logs\refresh.log");
+        vm.ProgressText.Should().Be("Refresh failed.");
+    }
+
+    [Fact]
+    public void The_cancelled_line_counts_the_pages_written_and_says_the_next_refresh_continues()
+    {
+        RefreshViewModel.CancelledTextFor(dryRun: false, pagesWritten: 0).Should().Be("Refresh cancelled before any page was written. The next refresh continues where this one stopped.");
+        RefreshViewModel.CancelledTextFor(dryRun: false, pagesWritten: 1).Should().Be("Refresh cancelled after the current page; 1 page was written. The next refresh continues where this one stopped.");
+        RefreshViewModel.CancelledTextFor(dryRun: false, pagesWritten: 12).Should().Be("Refresh cancelled after the current page; 12 pages were written. The next refresh continues where this one stopped.");
+        RefreshViewModel.CancelledTextFor(dryRun: true, pagesWritten: 3).Should().Be("Preview cancelled; nothing was written.");
     }
 }

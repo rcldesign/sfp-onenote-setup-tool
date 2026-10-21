@@ -22,6 +22,8 @@
         <Button Content="Re_load list" Command="{Binding ReloadNotebooksCommand}" AutomationProperties.Name="Reload the notebook list" />
         <Button Content="_Preview changes" Command="{Binding PreviewChangesCommand}" AutomationProperties.Name="Preview changes (dry run)" />
         <Button Content="Refresh _now" Command="{Binding RefreshNowCommand}" AutomationProperties.Name="Refresh now" />
+        <Button Content="_Cancel" Command="{Binding CancelCommand}" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}"
+                AutomationProperties.Name="Cancel refresh" />
       </StackPanel>
 
       <StackPanel Orientation="Horizontal" Margin="0,4">
@@ -42,6 +44,7 @@
       <TextBlock Style="{StaticResource MessageText}" Text="{Binding ProgressText}" FontWeight="SemiBold" Margin="0,8,0,0"
                  AutomationProperties.Name="Refresh progress" />
       <TextBlock Style="{StaticResource ErrorText}" Text="{Binding ErrorText}" />
+      <TextBlock Style="{StaticResource MessageText}" Text="{Binding CancelledText}" AutomationProperties.Name="Cancelled refresh" />
 
       <!-- Values read from Setup -->
       <TextBlock Style="{StaticResource SectionHeading}" Text="Values read from Setup" />
