@@ -24,10 +24,14 @@ public sealed class RunHarness
 
     public static readonly DateTimeOffset Now = new(2027, 1, 4, 5, 0, 0, TimeSpan.Zero);
 
-    public RunHarness(bool saveSidecar = true, ICalendarSourceFactory? calendars = null, TimeBlockWindow? window = null)
+    /// <param name="saveSidecar">Save the generated sidecar beside the notebook.</param>
+    /// <param name="calendars">The calendar sources, or null for no calendar import.</param>
+    /// <param name="window">The Time Blocks window the notebook is generated with.</param>
+    /// <param name="app">A fake OneNote that already holds other notebooks, or null for a fresh one.</param>
+    public RunHarness(bool saveSidecar = true, ICalendarSourceFactory? calendars = null, TimeBlockWindow? window = null, FakeOneNoteApp? app = null)
     {
         Folder = TestPaths.NewTempDir("refresh-run");
-        Notebook = FakeNotebook.Generate(folder: Folder, window: window);
+        Notebook = FakeNotebook.Generate(folder: Folder, app: app, window: window);
         Store = new SidecarStore();
         SidecarPath = Store.PathFor(Notebook.NotebookPath);
         if (saveSidecar)

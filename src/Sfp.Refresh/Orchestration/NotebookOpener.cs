@@ -9,8 +9,10 @@ public sealed record OpenedNotebook(NotebookHandle Notebook, Sidecar? Sidecar, s
 
 /// <summary>
 /// Finds and opens the notebook a Refresh run names. The sidecar is looked for first (in the given folder, else in the
-/// search folders); then OneNote's open notebooks are matched by name; when the notebook is not open, OpenHierarchy is
-/// called on the folder path from the sidecar or the given folder. When the folders held no sidecar and the notebook
+/// search folders); then OneNote's open notebooks of that name are matched to it by notebook ID, then by path, and by
+/// name alone only when one is open and the sidecar's folder is not another notebook still on disk (two notebooks of one
+/// name are never confused, and a sidecar is never rebuilt from the other one); when the notebook is not open,
+/// OpenHierarchy is called on the folder path from the sidecar or the given folder. When the folders held no sidecar and the notebook
 /// OneNote resolved has a local folder path, the sidecar beside that folder is loaded, so a notebook generated outside
 /// the search folders keeps its sidecar instead of having it rebuilt and overwritten every run. The scheduled task may
 /// run while OneNote is still starting, so after OpenHierarchy the opener waits up to <see cref="DefaultOpenTimeout"/>
@@ -69,14 +71,17 @@ public sealed class NotebookOpener
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(searchFolders);
+        Problem = null;
         (Sidecar? sidecar, string? sidecarPath) = found;
         if (sidecar is not null)
         {
             log.Information("Sidecar for {Name} found at {Path}", name, sidecarPath);
         }
 
-        HierarchyNotebook? open = HierarchyXmlReader.Notebooks(app.GetHierarchy(null, HierarchyScope.Notebooks))
-            .FirstOrDefault(n => string.Equals(n.Name, name, StringComparison.OrdinalIgnoreCase));
+        List<HierarchyNotebook> named = HierarchyXmlReader.Notebooks(app.GetHierarchy(null, HierarchyScope.Notebooks))
+            .Where(n => string.Equals(n.Name, name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        HierarchyNotebook? open = Choose(named, sidecar, folder, name);
         if (open is null)
         {
             string? path = sidecar?.NotebookPath;
@@ -87,18 +92,41 @@ public sealed class NotebookOpener
 
             if (string.IsNullOrWhiteSpace(path))
             {
-                log.Warning("Notebook {Name} is not open in OneNote and no sidecar or folder names its path", name);
+                if (named.Count > 1)
+                {
+                    Problem = $"Several notebooks named '{name}' are open in OneNote ({Paths(named)}); pass --folder with the folder of the one to refresh.";
+                    log.Warning("{Problem}", Problem);
+                }
+                else
+                {
+                    log.Warning("Notebook {Name} is not open in OneNote and no sidecar or folder names its path", name);
+                }
+
                 return null;
             }
 
             open = TryOpen(path, name);
             if (open is null)
             {
+                if (named.Count > 0)
+                {
+                    Problem = $"The notebook '{name}' at {path} could not be opened, and {Paths(named)} {(named.Count == 1 ? "is another notebook" : "are other notebooks")} of that name. Open the right notebook in OneNote, or close the other, and run Refresh again.";
+                    log.Warning("{Problem}", Problem);
+                }
+
                 return null;
             }
         }
 
         NotebookHandle handle = new(open.Id, string.IsNullOrWhiteSpace(open.Path) ? sidecar?.NotebookPath ?? "" : open.Path, open.Name);
+        if (sidecar is not null && !string.Equals(sidecar.NotebookId, handle.Id, StringComparison.Ordinal) && DescribesAnotherNotebook(sidecar, handle.Path))
+        {
+            // The save guard: a sidecar is never rebuilt from, or saved over by, another notebook of the same name.
+            Problem = $"The sidecar at {sidecarPath} describes the notebook at {sidecar.NotebookPath}, not the open notebook '{name}' at {handle.Path}, and was left as it is. Open the notebook it describes and run Refresh again.";
+            log.Warning("{Problem}", Problem);
+            return null;
+        }
+
         if (sidecar is null && IsLocalPath(handle.Path))
         {
             string beside = sidecars.PathFor(handle.Path);
@@ -115,8 +143,57 @@ public sealed class NotebookOpener
         return new OpenedNotebook(handle, sidecar, file);
     }
 
+    /// <summary>
+    /// Why the last Open returned null when the notebook could not be told apart from another open notebook of the same
+    /// name, or the sidecar found describes another notebook; null after any other outcome.
+    /// </summary>
+    public string? Problem { get; private set; }
+
     /// <summary>True for a folder path on disk, false for a URL (a notebook moved to OneDrive reports one) or nothing.</summary>
     private static bool IsLocalPath(string path) => !string.IsNullOrWhiteSpace(path) && !path.Contains("://", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The open notebook to use among those named like the request: with a sidecar, the one with its notebook ID, else the
+    /// one at its path, else the only one of that name unless the sidecar's own folder still exists elsewhere on disk
+    /// (that one is another notebook, so the sidecar's path is opened instead); without a sidecar, the only one of that
+    /// name, or the one in <paramref name="folder"/> when several are open. Null when a path has to be opened instead.
+    /// </summary>
+    private static HierarchyNotebook? Choose(List<HierarchyNotebook> named, Sidecar? sidecar, string? folder, string name)
+    {
+        if (sidecar is not null)
+        {
+            HierarchyNotebook? match = named.FirstOrDefault(n => string.Equals(n.Id, sidecar.NotebookId, StringComparison.Ordinal))
+                ?? named.FirstOrDefault(n => SamePath(n.Path, sidecar.NotebookPath));
+            if (match is not null)
+            {
+                return match;
+            }
+
+            return named.Count == 1 && !DescribesAnotherNotebook(sidecar, named[0].Path) ? named[0] : null;
+        }
+
+        if (named.Count == 1)
+        {
+            return named[0];
+        }
+
+        return folder is null ? null : named.FirstOrDefault(n => SamePath(n.Path, Path.Combine(folder, name)));
+    }
+
+    /// <summary>
+    /// True when the sidecar describes a notebook folder on disk other than <paramref name="path"/> that still exists: a
+    /// different notebook of the same name. A notebook that moved (to OneDrive, or to another folder) leaves no folder at
+    /// its old path, so its sidecar is still its own.
+    /// </summary>
+    private static bool DescribesAnotherNotebook(Sidecar sidecar, string? path) =>
+        IsLocalPath(sidecar.NotebookPath) && IsLocalPath(path ?? "") && !SamePath(sidecar.NotebookPath, path) && Directory.Exists(sidecar.NotebookPath);
+
+    private static bool SamePath(string? a, string? b) =>
+        !string.IsNullOrWhiteSpace(a) && !string.IsNullOrWhiteSpace(b)
+        && string.Equals(Path.TrimEndingDirectorySeparator(a.Trim()), Path.TrimEndingDirectorySeparator(b.Trim()), StringComparison.OrdinalIgnoreCase);
+
+    private static string Paths(IEnumerable<HierarchyNotebook> notebooks) =>
+        string.Join("; ", notebooks.Select(n => string.IsNullOrWhiteSpace(n.Path) ? n.Id : n.Path));
 
     /// <summary>The sidecar for a notebook name in the given folder, else the first match in the search folders.</summary>
     public (Sidecar? Sidecar, string? Path) FindSidecar(string name, string? folder, IReadOnlyList<string> searchFolders)

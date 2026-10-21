@@ -114,7 +114,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         OpenedNotebook? opened = opener.Open(request.NotebookName, request.NotebooksFolder, services.SearchFolders, found);
         if (opened is null)
         {
-            return Fail(NotFoundExitCode, $"Notebook '{request.NotebookName}' was not found: no sidecar names it, OneNote does not list it and no folder holds it. Generate it first, or pass --folder with the folder that holds it.", clock);
+            return Fail(NotFoundExitCode, opener.Problem ?? $"Notebook '{request.NotebookName}' was not found: no sidecar names it, OneNote does not list it and no folder holds it. Generate it first, or pass --folder with the folder that holds it.", clock);
         }
 
         state.SidecarPath = opened.SidecarPath;
