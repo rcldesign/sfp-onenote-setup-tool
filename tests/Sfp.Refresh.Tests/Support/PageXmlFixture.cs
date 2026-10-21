@@ -78,6 +78,41 @@ public sealed class PageXmlFixture
         return this;
     }
 
+    /// <summary>A typed outline at an exact sheet rectangle with one paragraph (one:OE) per line, the way pressing Enter between lines types them.</summary>
+    public PageXmlFixture Paragraphs(RectPt sheetRect, params string[] lines)
+    {
+        string id = ObjectId(nextObject += 10);
+        int n = 0;
+        XElement[] oes = lines.Select(line => new XElement(one + "OE", new XAttribute("objectID", ObjectId(nextObject + 1 + n++)), new XElement(one + "T", new XCData(line)))).ToArray();
+        root.Add(new XElement(
+            one + "Outline",
+            new XAttribute("objectID", id),
+            OneNoteXml.Position(one, sheetRect.X + sheetX, sheetRect.Y + sheetY, 1),
+            OneNoteXml.Size(one, sheetRect.W, sheetRect.H, false),
+            new XElement(one + "OEChildren", oes)));
+        LastObjectId = id;
+        return this;
+    }
+
+    /// <summary>An inked outline at an exact sheet rectangle with one paragraph per handwritten line, each holding its recognized words.</summary>
+    public PageXmlFixture InkedParagraphs(RectPt sheetRect, params string[][] lines)
+    {
+        string id = ObjectId(nextObject += 10);
+        int n = 0;
+        XElement[] oes = lines.Select(words => new XElement(
+            one + "OE",
+            new XAttribute("objectID", ObjectId(nextObject + 1 + n++)),
+            words.Select(w => new XElement(one + "InkWord", new XAttribute("objectID", ObjectId(nextObject + 1 + n++)), new XAttribute("recognizedText", w))))).ToArray();
+        root.Add(new XElement(
+            one + "Outline",
+            new XAttribute("objectID", id),
+            OneNoteXml.Position(one, sheetRect.X + sheetX, sheetRect.Y + sheetY, 2),
+            OneNoteXml.Size(one, sheetRect.W, sheetRect.H, false),
+            new XElement(one + "OEChildren", oes)));
+        LastObjectId = id;
+        return this;
+    }
+
     /// <summary>An inked outline inside a sheet rectangle holding one one:InkWord per recognized word.</summary>
     public PageXmlFixture Inked(RectPt sheetRect, params string[] words)
     {

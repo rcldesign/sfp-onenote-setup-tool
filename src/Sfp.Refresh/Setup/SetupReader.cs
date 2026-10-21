@@ -1,8 +1,11 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Sfp.Core.Manifests;
 using Sfp.OneNote;
+using Sfp.OneNote.Xml;
 using Sfp.Refresh.Calendar;
+using Sfp.Refresh.Propagation;
 
 namespace Sfp.Refresh.Setup;
 
@@ -48,12 +51,15 @@ public interface IAnnualFallback
 }
 
 /// <summary>
-/// Production <see cref="ISetupReader"/>: maps the manifest's Setup slot rectangles (generated.setup) to values. A slot's
-/// value is the plain text of every outline overlapping its rectangle (sheet coordinates, the sheet outline's origin
-/// subtracted), joined and trimmed; when no typed text is present the recognized text of the ink words in those
-/// outlines is used and the slot is marked inked. Calendar source lines go through <see cref="CalendarSourceLineParser"/>;
-/// the time-block window is set when both boxes hold integers. An optional <see cref="IAnnualFallback"/> fills empty
-/// objective slots from the Annual Objectives pages.
+/// Production <see cref="ISetupReader"/>: maps the manifest's Setup slot rectangles (generated.setup) to values. Every
+/// outline on the page belongs to one slot: the slot whose rectangle holds the outline's position (sheet coordinates,
+/// the sheet outline's origin and placed scale applied), else the slot it overlaps most. An outline of several
+/// paragraphs that reaches into the next slot of its list (the user typed one objective per line in one outline) hands
+/// its paragraphs to that slot and the ones after it, in order. A slot's value is the plain text it was given, joined
+/// and whitespace-collapsed; when no typed text is present the recognized text of the ink words is used and the slot is
+/// marked inked. Calendar source lines go through <see cref="CalendarSourceLineParser"/>; the time-block window is set
+/// when both boxes hold integers. An optional <see cref="IAnnualFallback"/> fills empty objective slots from the Annual
+/// Objectives pages.
 /// </summary>
 public sealed partial class SetupReader : ISetupReader
 {
@@ -73,17 +79,21 @@ public sealed partial class SetupReader : ISetupReader
         SetupPageSpec spec = m.Generated.Setup;
         List<string> inked = new();
 
-        string?[] objectives = ReadList(setupPage, spec.Objectives, SetupSlots.Objective, inked);
-        string?[] goals = ReadList(setupPage, spec.StandingGoals, SetupSlots.StandingGoal, inked);
-        string?[] metrics = ReadList(setupPage, spec.MetricNames, SetupSlots.MetricName, inked);
-        string?[] habits = ReadList(setupPage, spec.Habits, SetupSlots.Habit, inked);
-        string?[] sourceLines = ReadList(setupPage, spec.CalendarSources, SetupSlots.CalendarSource, inked);
+        SlotReading[][] read = Assign(
+            setupPage,
+            new[] { spec.Objectives, spec.StandingGoals, spec.MetricNames, spec.Habits, spec.CalendarSources, new[] { spec.TimeBlockStart }, new[] { spec.TimeBlockEnd } },
+            m.PageWidthPt);
+        string?[] objectives = Values(read[0], SetupSlots.Objective, inked);
+        string?[] goals = Values(read[1], SetupSlots.StandingGoal, inked);
+        string?[] metrics = Values(read[2], SetupSlots.MetricName, inked);
+        string?[] habits = Values(read[3], SetupSlots.Habit, inked);
+        string?[] sourceLines = Values(read[4], SetupSlots.CalendarSource, inked);
 
         List<string> problems = new();
         IReadOnlyList<CalendarSource> sources = CalendarSourceLineParser.ParseAll(sourceLines, problems);
 
-        SlotReading start = ReadSlot(setupPage, spec.TimeBlockStart);
-        SlotReading end = ReadSlot(setupPage, spec.TimeBlockEnd);
+        SlotReading start = read[5][0];
+        SlotReading end = read[6][0];
         (int, int)? window = null;
         if (TryHour(start.Text, out int startHour) && TryHour(end.Text, out int endHour))
         {
@@ -126,19 +136,41 @@ public sealed partial class SetupReader : ISetupReader
         return changed ? values with { Objectives = objectives } : values;
     }
 
-    /// <summary>Reads one slot rectangle (sheet coordinates): typed text wins over ink.</summary>
-    public static SlotReading ReadSlot(PageXml page, RectPt sheetRect)
+    /// <summary>
+    /// What every slot of the given lists holds (sheet rectangles; a list of one is a single slot). Each outline on the
+    /// page goes to one slot: the one whose rectangle holds the outline's position, else the one it overlaps most (an
+    /// outline overlapping none is not a value). An outline of several paragraphs that also reaches into the next slot
+    /// of its list hands its paragraphs to that slot and the ones after it in order, the list's last slot taking any
+    /// paragraphs left over; otherwise all its text goes to its one slot. In each slot typed text wins over ink.
+    /// </summary>
+    public static SlotReading[][] Assign(PageXml page, IReadOnlyList<IReadOnlyList<RectPt>> lists, double sheetWidthPt)
     {
         ArgumentNullException.ThrowIfNull(page);
-        List<OutlineInfo> outlines = page.OutlinesIn(sheetRect).ToList();
-        string? typed = Normalize(string.Join(" ", outlines.Select(o => o.PlainText)));
-        if (typed is not null)
+        ArgumentNullException.ThrowIfNull(lists);
+        RectPt[][] rects = lists.Select(list => list.Select(r => SlotInspector.ToPageRect(page, r, sheetWidthPt)).ToArray()).ToArray();
+        List<(string Typed, string Ink)>[][] given = rects.Select(list => list.Select(_ => new List<(string Typed, string Ink)>()).ToArray()).ToArray();
+        foreach (OutlineInfo outline in page.Outlines.Where(o => !o.IsBackgroundImage))
         {
-            return new SlotReading(typed, false);
+            if (Home(outline, rects) is not (int list, int slot))
+            {
+                continue;
+            }
+
+            List<(string Typed, string Ink)> paragraphs = Paragraphs(outline);
+            bool reachesNext = slot + 1 < rects[list].Length && outline.Rect.Overlaps(rects[list][slot + 1]);
+            if (paragraphs.Count < 2 || !reachesNext)
+            {
+                given[list][slot].Add((outline.PlainText, outline.InkText));
+                continue;
+            }
+
+            for (int p = 0; p < paragraphs.Count; p++)
+            {
+                given[list][Math.Min(slot + p, rects[list].Length - 1)].Add(paragraphs[p]);
+            }
         }
 
-        string? ink = Normalize(string.Join(" ", outlines.Select(o => o.InkText)));
-        return ink is null ? SlotReading.Empty : new SlotReading(ink, true);
+        return given.Select(list => list.Select(Reading).ToArray()).ToArray();
     }
 
     /// <summary>Whitespace runs (line breaks included) collapsed to one space and the ends trimmed; null when nothing remains.</summary>
@@ -153,17 +185,85 @@ public sealed partial class SetupReader : ISetupReader
         return collapsed.Length == 0 ? null : collapsed;
     }
 
-    private static string?[] ReadList(PageXml page, IReadOnlyList<RectPt> rects, Func<int, string> slotId, List<string> inked)
+    private static string?[] Values(SlotReading[] readings, Func<int, string> slotId, List<string> inked)
     {
-        string?[] values = new string?[rects.Count];
-        for (int i = 0; i < rects.Count; i++)
+        string?[] values = new string?[readings.Length];
+        for (int i = 0; i < readings.Length; i++)
         {
-            SlotReading reading = ReadSlot(page, rects[i]);
-            values[i] = reading.Text;
-            MarkInked(inked, slotId(i + 1), reading);
+            values[i] = readings[i].Text;
+            MarkInked(inked, slotId(i + 1), readings[i]);
         }
 
         return values;
+    }
+
+    /// <summary>The slot holding the outline's position, else the one it overlaps most, as (list, slot); null when it overlaps none.</summary>
+    private static (int List, int Slot)? Home(OutlineInfo outline, RectPt[][] rects)
+    {
+        for (int list = 0; list < rects.Length; list++)
+        {
+            for (int slot = 0; slot < rects[list].Length; slot++)
+            {
+                if (rects[list][slot].Contains(outline.X, outline.Y))
+                {
+                    return (list, slot);
+                }
+            }
+        }
+
+        (int List, int Slot)? best = null;
+        double bestArea = 0;
+        for (int list = 0; list < rects.Length; list++)
+        {
+            for (int slot = 0; slot < rects[list].Length; slot++)
+            {
+                double area = OverlapArea(outline.Rect, rects[list][slot]);
+                if (area > bestArea)
+                {
+                    best = (list, slot);
+                    bestArea = area;
+                }
+            }
+        }
+
+        return best;
+    }
+
+    private static double OverlapArea(RectPt a, RectPt b) =>
+        Math.Max(0, Math.Min(a.Right, b.Right) - Math.Max(a.X, b.X)) * Math.Max(0, Math.Min(a.Bottom, b.Bottom) - Math.Max(a.Y, b.Y));
+
+    /// <summary>The outline's paragraphs (one:OE in document order) that hold text: each one's typed runs and the recognized text of its own ink words.</summary>
+    private static List<(string Typed, string Ink)> Paragraphs(OutlineInfo outline)
+    {
+        XNamespace one = outline.Element.Name.Namespace;
+        List<(string Typed, string Ink)> paragraphs = new();
+        foreach (XElement oe in outline.Element.Descendants(one + "OE"))
+        {
+            string typed = string.Join(" ", oe.Elements(one + "T").Select(t => PageXmlParser.PlainText(t.Value)).Where(t => t.Length > 0));
+            string ink = string.Join(" ", oe.Descendants(one + "InkWord")
+                .Where(w => w.Ancestors(one + "OE").First() == oe)
+                .Select(w => (string?)w.Attribute("recognizedText") ?? "")
+                .Where(t => !string.IsNullOrWhiteSpace(t)));
+            if (typed.Length > 0 || ink.Length > 0)
+            {
+                paragraphs.Add((typed, ink));
+            }
+        }
+
+        return paragraphs;
+    }
+
+    /// <summary>A slot's value from what it was given: typed text wins over ink.</summary>
+    private static SlotReading Reading(List<(string Typed, string Ink)> given)
+    {
+        string? typed = Normalize(string.Join(" ", given.Select(g => g.Typed)));
+        if (typed is not null)
+        {
+            return new SlotReading(typed, false);
+        }
+
+        string? ink = Normalize(string.Join(" ", given.Select(g => g.Ink)));
+        return ink is null ? SlotReading.Empty : new SlotReading(ink, true);
     }
 
     private static void MarkInked(List<string> inked, string slotId, SlotReading reading)

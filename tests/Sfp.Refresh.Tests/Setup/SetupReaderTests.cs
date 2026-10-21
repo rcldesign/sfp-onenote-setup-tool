@@ -152,6 +152,78 @@ public class SetupReaderTests
     }
 
     [Fact]
+    public void One_two_paragraph_outline_over_objective_rows_1_and_2_reads_as_two_objectives()
+    {
+        RectPt rows1And2 = new(S.Objectives[0].X + 2, S.Objectives[0].Y + 2, S.Objectives[0].W - 4, S.Objectives[1].Bottom - S.Objectives[0].Y - 6);
+        PageXmlFixture page = Page().Paragraphs(rows1And2, "Ship the connector", "Hire two PMs");
+
+        SetupValues v = Read(page);
+
+        v.Objectives[0].Should().Be("Ship the connector");
+        v.Objectives[1].Should().Be("Hire two PMs", "each paragraph goes to its own row, not the whole outline to every row it overlaps");
+        v.Objectives.Skip(2).Should().AllSatisfy(o => o.Should().BeNull());
+        v.AnyInked.Should().BeFalse();
+    }
+
+    [Fact]
+    public void An_outline_belongs_to_the_slot_holding_its_position_even_when_it_reaches_the_next_row()
+    {
+        RectPt tall = new(S.Objectives[0].X + 2, S.Objectives[0].Y + 2, S.Objectives[0].W - 4, 40);
+        PageXmlFixture page = Page().Paragraphs(tall, "A long objective that wrapped onto a second line");
+
+        SetupValues v = Read(page);
+
+        v.Objectives[0].Should().Be("A long objective that wrapped onto a second line");
+        v.Objectives[1].Should().BeNull("one paragraph is one value, read into the row where the outline starts");
+    }
+
+    [Fact]
+    public void Lines_typed_in_one_outline_fill_the_rows_after_it_in_order_and_the_last_row_takes_any_left_over()
+    {
+        RectPt threeLines = new(S.Objectives[0].X + 2, S.Objectives[0].Y + 2, S.Objectives[0].W - 4, 44);
+        RectPt fromGoal2 = new(S.StandingGoals[1].X + 2, S.StandingGoals[1].Y + 2, S.StandingGoals[1].W - 4, 50);
+        PageXmlFixture page = Page()
+            .Paragraphs(threeLines, "Ship the connector", "Hire two PMs", "Launch v2")
+            .Paragraphs(fromGoal2, "Walk", "Read", "Stretch", "Sleep early");
+
+        SetupValues v = Read(page);
+
+        v.Objectives.Take(4).Should().Equal("Ship the connector", "Hire two PMs", "Launch v2", null);
+        v.StandingGoals.Should().Equal(null, "Walk", "Read Stretch Sleep early");
+    }
+
+    [Fact]
+    public void An_outline_whose_position_is_in_no_slot_goes_to_the_slot_it_overlaps_most()
+    {
+        RectPt mostlyRow2 = new(S.Objectives[0].X - 5, S.Objectives[1].Y - 8, 400, 20);
+        PageXmlFixture page = Page().TypedAt(mostlyRow2, "Hire two PMs");
+
+        SetupValues v = Read(page);
+
+        v.Objectives[0].Should().BeNull();
+        v.Objectives[1].Should().Be("Hire two PMs");
+    }
+
+    [Fact]
+    public void Inked_lines_and_source_lines_are_handed_out_the_same_way_and_lines_inside_one_row_stay_together()
+    {
+        RectPt rows1And2 = new(S.Objectives[0].X + 2, S.Objectives[0].Y + 2, S.Objectives[0].W - 4, S.Objectives[1].Bottom - S.Objectives[0].Y - 6);
+        RectPt sources1And2 = new(S.CalendarSources[0].X + 2, S.CalendarSources[0].Y + 2, S.CalendarSources[0].W - 4, S.CalendarSources[1].Bottom - S.CalendarSources[0].Y - 6);
+        RectPt insideMetric1 = new(S.MetricNames[0].X + 2, S.MetricNames[0].Y + 2, S.MetricNames[0].W - 4, S.MetricNames[0].H - 4);
+        PageXmlFixture page = Page()
+            .InkedParagraphs(rows1And2, new[] { "Ship", "it" }, new[] { "Hire" })
+            .Paragraphs(sources1And2, "Work | https://example.com/work.ics", "Home | https://example.com/home.ics")
+            .Paragraphs(insideMetric1, "Calls", "made");
+
+        SetupValues v = Read(page);
+
+        v.Objectives.Take(3).Should().Equal("Ship it", "Hire", null);
+        v.InkedSlots.Should().Equal("objective:1", "objective:2");
+        v.Sources.Select(s => s.Label).Should().Equal("Work", "Home");
+        v.MetricNames.Should().Equal("Calls made", null, null);
+    }
+
+    [Fact]
     public void Bad_source_lines_are_reported_and_skipped_and_the_window_needs_two_integers()
     {
         PageXmlFixture page = Page()
