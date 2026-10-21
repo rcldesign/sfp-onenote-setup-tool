@@ -115,7 +115,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
     /// <summary>What a link outline an earlier run wrote holds now.</summary>
     private enum LinkShape
     {
-        /// <summary>One paragraph holding only the tool's onenote: link with the link text: updated in place.</summary>
+        /// <summary>One paragraph holding only one onenote: link and no text outside it, whatever the link says: updated in place.</summary>
         Tool,
 
         /// <summary>No text and nothing else (the link's text was deleted): filled in place again.</summary>
@@ -254,7 +254,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         IEnumerable<string> ownedIds = review.Anchors.Values;
         if (existing is not null)
         {
-            if (Shape(existing, one, anchor.Placement.Text) != LinkShape.Edited)
+            if (Shape(existing, one) != LinkShape.Edited)
             {
                 NextQuarterLinkResult updated = UpdateOwned(review.PageId, one, existing, html, name, existingId!);
                 return recordedId is not null ? updated : Record(updated, review, sidecarPath, name, existingId!);
@@ -331,11 +331,12 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
 
     /// <summary>
     /// What the link outline an earlier run wrote holds now. It has the tool's shape when it holds only the elements a
-    /// link outline holds (<see cref="ToolShapeElements"/>) and one paragraph whose only run is one onenote: link with
-    /// the link text and no text around it; it is empty when it holds no text and nothing else; anything else is the
-    /// user's edit.
+    /// link outline holds (<see cref="ToolShapeElements"/>) and one paragraph whose only run is exactly one onenote: link
+    /// with no text outside it (the run's plain text is the link's). The link's text is not compared with this run's: a
+    /// textFormat that names the notebook ("{title} ›") changes it with every new notebook name, and the tool's own
+    /// outline is still the tool's. It is empty when it holds no text and nothing else; anything else is the user's edit.
     /// </summary>
-    private static LinkShape Shape(XElement outline, XNamespace one, string linkText)
+    private static LinkShape Shape(XElement outline, XNamespace one)
     {
         if (outline.Descendants().Any(e => e.Name.Namespace != one || !ToolShapeElements.Contains(e.Name.LocalName))
             || outline.Descendants(one + "OE").Skip(1).Any())
@@ -355,12 +356,10 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         }
 
         string html = runs[0].Value;
-        string text = linkText.Trim();
         MatchCollection links = LinkElement().Matches(html);
         return links.Count == 1
             && WebUtility.HtmlDecode(links[0].Groups["href"].Value).Trim().StartsWith("onenote:", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(PageXmlParser.PlainText(links[0].Groups["inner"].Value), text, StringComparison.Ordinal)
-            && string.Equals(PageXmlParser.PlainText(html), text, StringComparison.Ordinal)
+            && string.Equals(PageXmlParser.PlainText(links[0].Groups["inner"].Value), PageXmlParser.PlainText(html), StringComparison.Ordinal)
             ? LinkShape.Tool
             : LinkShape.Edited;
     }

@@ -117,6 +117,38 @@ public class NextQuarterLinkWriterTests
         LinkOutlines(previous.Read(app)).Should().ContainSingle();
     }
 
+    /// <summary>
+    /// Round 4 onenote-1: with a textFormat that names the notebook ("{title} ›"), the link text changes with the next
+    /// notebook's name. The tool's own outline, untouched in OneNote, is judged by its shape (one paragraph, one onenote:
+    /// link, no text outside it), not by the text this run would write, so it is updated in place rather than kept as an
+    /// edit with a second link added below it.
+    /// </summary>
+    [Fact]
+    public void A_link_whose_text_names_the_notebook_is_updated_in_place_when_the_next_notebook_has_another_name()
+    {
+        Manifest titled = M with { Links = M.Links with { NextQuarter = M.Links.NextQuarter with { TextFormat = "{title} ›" } } };
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        NextQuarterLinkWriter writer = new(app, new SidecarStore(), titled, MonJan4.Options(titled), new CapturingSink().CreateLogger());
+        NextQuarterLinkResult first = writer.Link(previous.Folder, Next with { Name = "SFP Q1 2027 trial" }, CoverHref);
+        first.Outcome.Should().Be(NextQuarterLinkOutcome.Added, first.Warning);
+        previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId).PlainText.Should().Be("SFP Q1 2027 trial ›");
+        int outlines = previous.Read(app).Outlines.Count;
+
+        NextQuarterLinkResult second = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+
+        second.Outcome.Should().Be(NextQuarterLinkOutcome.Updated, second.Warning);
+        second.Warning.Should().BeNull("the outline holds only the tool's link, so it is not reported as edited");
+        second.ObjectId.Should().Be(first.ObjectId);
+        PageXml page = previous.Read(app);
+        page.Outlines.Should().HaveCount(outlines, "the link is updated in place, not joined by a second one");
+        OutlineInfo link = page.Outlines.Single(o => o.ObjectId == first.ObjectId);
+        link.PlainText.Should().Be("SFP Q1 2027 ›");
+        link.TextRuns.Single().Html.Should().Contain(WebUtility.HtmlEncode(OtherCoverHref)).And.NotContain(WebUtility.HtmlEncode(CoverHref));
+        page.Outlines.Should().NotContain(o => o.PlainText.Contains("trial", StringComparison.Ordinal), "the link to the trial notebook is gone");
+        previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId].Should().Be(first.ObjectId);
+    }
+
     [Fact]
     public void An_edit_the_user_makes_between_the_read_and_the_write_survives_the_add_and_the_update()
     {
