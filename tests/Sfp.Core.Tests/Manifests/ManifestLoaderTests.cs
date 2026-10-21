@@ -361,6 +361,58 @@ public class ManifestLoaderTests : IDisposable
     }
 
     [Fact]
+    public void Weekly_run_bound_is_computed_without_int_overflow()
+    {
+        // 16 + 2^30 * 2 + 8 wraps negative in int arithmetic and used to pass the bound.
+        string path = WriteModified(root =>
+        {
+            root["pageTypes"]!["weekly"]!["stride"] = 1 << 30;
+            root["pageTypes"]!["weekly"]!["count"] = 3;
+        });
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage("*pageTypes.weekly ends on page 2147483672, beyond pageCount 132.");
+    }
+
+    [Fact]
+    public void Weekly_runs_must_not_overlap()
+    {
+        string path = WriteModified(root => root["pageTypes"]!["weekly"]!["stride"] = 1);
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage("*pageTypes.weekly.stride must be at least 9, the pages of one week run, so the runs do not overlap; found 1.");
+    }
+
+    [Theory]
+    [InlineData("overview,mon,tue,wed,thu,fri,sat,cover,reflection")]
+    [InlineData("reflection,mon,tue,wed,thu,fri,sat,sun,overview")]
+    public void Weekly_pages_must_be_overview_mon_to_sun_and_reflection_in_that_order(string pages)
+    {
+        string path = WriteModified(root =>
+        {
+            JsonNode weekly = root["pageTypes"]!["weekly"]!;
+            weekly["pages"] = new JsonArray(pages.Split(',').Select(p => (JsonNode?)JsonValue.Create(p)).ToArray());
+            weekly["probes"]!.AsObject()["cover"] = "Quarterly Planner";
+        });
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage(
+            $"*pageTypes.weekly.pages must be overview, mon, tue, wed, thu, fri, sat, sun, reflection in that order, found {pages.Replace(",", ", ", StringComparison.Ordinal)}.");
+    }
+
+    [Fact]
+    public void Pdf_page_for_a_weekly_spec_built_in_code_throws_on_overflow_instead_of_wrapping()
+    {
+        WeeklyPagesSpec weekly = _loader.Load(TestPaths.ManifestPath).PageTypes.Weekly with { Stride = 1 << 30, Count = 3 };
+
+        weekly.PdfPageFor(2, PageNames.Overview).Should().Be(weekly.FirstPdfPage + (1 << 30));
+        weekly.Invoking(w => w.PdfPageFor(3, PageNames.Overview)).Should().Throw<OverflowException>();
+    }
+
+    [Fact]
     public void Slot_applies_to_must_name_known_pages()
     {
         string path = WriteModified(root => root["slots"]!["weeksRemaining"]!["appliesTo"]!.AsArray().Add("monday"));

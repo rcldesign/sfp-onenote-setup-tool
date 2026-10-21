@@ -141,7 +141,11 @@ public sealed record WeeklyPagesSpec
     /// <summary>Probe text per page name.</summary>
     public required IReadOnlyDictionary<string, string> Probes { get; init; }
 
-    /// <summary>1-based PDF page for a page name in week run <paramref name="run1"/> (1-based, clamped to <see cref="Count"/>).</summary>
+    /// <summary>
+    /// 1-based PDF page for a page name in week run <paramref name="run1"/> (1-based, clamped to <see cref="Count"/>).
+    /// Checked arithmetic: a spec the loader did not check (built in code) throws <see cref="OverflowException"/> instead
+    /// of wrapping to a negative page.
+    /// </summary>
     public int PdfPageFor(int run1, string pageName)
     {
         int run = Math.Clamp(run1, 1, Count);
@@ -151,7 +155,7 @@ public sealed record WeeklyPagesSpec
             throw new ArgumentException($"Unknown weekly page name '{pageName}'.", nameof(pageName));
         }
 
-        return FirstPdfPage + (Stride * (run - 1)) + offset;
+        return checked(FirstPdfPage + (Stride * (run - 1)) + offset);
     }
 }
 

@@ -79,18 +79,13 @@ public static class ManifestChecks
             Fail(source, $"pageTypes.weekly.pages must list {Int(WeeklyRunLength)} names (overview, mon to sun, reflection), found {Int(weekly.Pages.Count)}.");
         }
 
-        if (weekly.Pages.Distinct(StringComparer.Ordinal).Count() != weekly.Pages.Count)
+        if (!weekly.Pages.SequenceEqual(WeeklyRunPages, StringComparer.Ordinal))
         {
-            Fail(source, "pageTypes.weekly.pages holds a duplicate name.");
+            Fail(source, $"pageTypes.weekly.pages must be {string.Join(", ", WeeklyRunPages)} in that order, found {string.Join(", ", weekly.Pages)}.");
         }
 
         foreach (string page in weekly.Pages)
         {
-            if (!PageNames.IsKnown(page))
-            {
-                Fail(source, $"pageTypes.weekly.pages holds unknown page name '{page}'.");
-            }
-
             if (!weekly.Probes.ContainsKey(page))
             {
                 Fail(source, $"pageTypes.weekly.probes has no probe text for '{page}'.");
@@ -102,12 +97,25 @@ public static class ManifestChecks
             Fail(source, "pageTypes.weekly needs firstPdfPage >= 1, stride > 0 and count > 0.");
         }
 
-        int lastPage = weekly.FirstPdfPage + (weekly.Stride * (weekly.Count - 1)) + weekly.Pages.Count - 1;
+        if (weekly.Stride < weekly.Pages.Count)
+        {
+            Fail(source, $"pageTypes.weekly.stride must be at least {Int(weekly.Pages.Count)}, the pages of one week run, so the runs do not overlap; found {Int(weekly.Stride)}.");
+        }
+
+        // In long: stride * (count - 1) can pass int.MaxValue, and a wrapped (negative) last page would pass the bound.
+        long lastPage = weekly.FirstPdfPage + ((long)weekly.Stride * (weekly.Count - 1)) + weekly.Pages.Count - 1;
         if (lastPage > m.PageCount)
         {
-            Fail(source, $"pageTypes.weekly ends on page {Int(lastPage)}, beyond pageCount {Int(m.PageCount)}.");
+            Fail(source, $"pageTypes.weekly ends on page {lastPage.ToString(CultureInfo.InvariantCulture)}, beyond pageCount {Int(m.PageCount)}.");
         }
     }
+
+    /// <summary>The page names of a week run in PDF order: overview, mon to sun, reflection.</summary>
+    private static readonly string[] WeeklyRunPages =
+    {
+        PageNames.Overview, PageNames.Mon, PageNames.Tue, PageNames.Wed, PageNames.Thu, PageNames.Fri, PageNames.Sat, PageNames.Sun,
+        PageNames.Reflection,
+    };
 
     private static void CheckSlots(Manifest m, string source)
     {
