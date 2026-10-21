@@ -448,14 +448,22 @@ public static class GenerateCommand
             return;
         }
 
-        string elapsed = Elapsed(result.Elapsed);
         if (request.RenderOnly)
         {
-            stdout.WriteLine(string.Format(CultureInfo.InvariantCulture, "Rendered {0} pages to {1} in {2}; {3} written.", result.PagesRendered, result.OutputPath, elapsed, RenderOnlyRunner.IndexFileName));
+            // The render-only verb's own sentence: pages counts every page of the plan, PNG files only those with an image.
+            stdout.WriteLine(string.Format(
+                CultureInfo.InvariantCulture,
+                "Rendered {0} pages of {1}: {2} PNG files and {3} written to {4} in {5:0.0} s.",
+                result.PagesRendered,
+                result.NotebookName,
+                result.PngFiles,
+                RenderOnlyRunner.IndexFileName,
+                result.OutputPath,
+                result.Elapsed.TotalSeconds));
         }
         else
         {
-            stdout.WriteLine(string.Format(CultureInfo.InvariantCulture, "Generated {0}: {1} pages written in {2}.", result.NotebookName, result.PagesWritten, elapsed));
+            stdout.WriteLine(string.Format(CultureInfo.InvariantCulture, "Generated {0}: {1} pages written in {2}.", result.NotebookName, result.PagesWritten, Elapsed(result.Elapsed)));
             stdout.WriteLine("Notebook folder: " + result.OutputPath + (result.OutputBytes is long bytes ? string.Format(CultureInfo.InvariantCulture, " ({0:0.0} MB)", bytes / 1048576.0) : ""));
             if (!string.IsNullOrEmpty(result.SidecarPath))
             {
@@ -489,17 +497,15 @@ public static class GenerateCommand
         string.Format(CultureInfo.InvariantCulture, "{0}:{1:00}", (int)elapsed.TotalMinutes, elapsed.Seconds);
 
     /// <summary>
-    /// Prints one line per progress report, synchronously (reports arrive from render workers too). A page count is
-    /// printed once per phase and only moving forward: render-only reports each page from its render worker and again
-    /// from the loop that writes the file, and workers finish out of order.
+    /// Prints one line per progress report, in the order the reports arrive, synchronously (reports arrive from render
+    /// workers too). The orchestrator reports each page once, from the worker that finished it, so page counts can
+    /// arrive out of order; none is dropped.
     /// </summary>
     private sealed class ProgressPrinter : IProgress<GenerateProgress>
     {
         private readonly TextWriter _out;
         private readonly bool _quiet;
         private readonly object _gate = new();
-        private readonly Dictionary<GeneratePhase, int> _lastCount = new();
-        private GeneratePhase? _lastPhase;
 
         public ProgressPrinter(TextWriter output, bool quiet)
         {
@@ -514,22 +520,13 @@ public static class GenerateCommand
                 return;
             }
 
+            string detail = string.IsNullOrEmpty(value.Detail) ? "" : ": " + value.Detail;
+            string line = value.Total > 0
+                ? string.Format(CultureInfo.InvariantCulture, "{0} ({1} of {2}){3}", GenerateOrchestrator.PhaseLabel(value.Phase), value.Current, value.Total, detail)
+                : GenerateOrchestrator.PhaseLabel(value.Phase) + detail;
             lock (_gate)
             {
-                if (value.Total > 0)
-                {
-                    if (!_lastCount.TryGetValue(value.Phase, out int last) || value.Current > last)
-                    {
-                        _lastCount[value.Phase] = value.Current;
-                        _out.WriteLine(string.Format(CultureInfo.InvariantCulture, "{0} ({1} of {2}){3}", GenerateOrchestrator.PhaseLabel(value.Phase), value.Current, value.Total, string.IsNullOrEmpty(value.Detail) ? "" : ": " + value.Detail));
-                    }
-                }
-                else if (value.Phase != _lastPhase || !string.IsNullOrEmpty(value.Detail))
-                {
-                    _out.WriteLine(GenerateOrchestrator.PhaseLabel(value.Phase) + (string.IsNullOrEmpty(value.Detail) ? "" : ": " + value.Detail));
-                }
-
-                _lastPhase = value.Phase;
+                _out.WriteLine(line);
             }
         }
     }

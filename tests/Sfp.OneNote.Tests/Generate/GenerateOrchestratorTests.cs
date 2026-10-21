@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Xml.Linq;
 using Sfp.Core.Dates;
@@ -530,6 +531,7 @@ public class GenerateOrchestratorTests
         result.ExitCode.Should().Be(0);
         result.OutputPath.Should().Be(dir);
         result.PagesRendered.Should().Be(7, "every page of the plan is listed, the native Contents page included");
+        result.PngFiles.Should().Be(6, "the native Contents page has no image and gets no file");
         result.PagesWritten.Should().Be(0);
         result.OutputBytes.Should().BeGreaterThan(0);
         Directory.GetFiles(dir, "*.png").Select(Path.GetFileName).Should().BeEquivalentTo(
@@ -573,6 +575,10 @@ public class GenerateOrchestratorTests
 
         result.Success.Should().BeTrue(result.Error);
         result.PagesRendered.Should().Be(verb.PagesRendered).And.Be(144);
+        result.PngFiles.Should().Be(verb.PngFiles).And.Be(142, "Contents and the blank Objective Details parent have no image");
+        List<GenerateProgress> pageReports = h.Progress.Reports.Where(r => r.Phase == GeneratePhase.Rendering && r.Current > 0).ToList();
+        pageReports.Select(r => r.Current).Order().Should().Equal(Enumerable.Range(1, 144), "each page is reported once, by the worker that rendered it");
+        pageReports.Select(r => r.Detail).Should().BeEquivalentTo(plan.Pages.Select(p => p.Title), "every page of the plan, none twice");
         static List<string> Files(string dir) => Directory.GetFiles(dir).Select(f => Path.GetFileName(f)).Order(StringComparer.Ordinal).ToList();
         Files(viaGenerate).Should().Equal(Files(viaVerb));
         File.ReadAllText(Path.Combine(viaGenerate, RenderOnlyRunner.IndexFileName)).Should().Be(File.ReadAllText(Path.Combine(viaVerb, RenderOnlyRunner.IndexFileName)), "both verbs share one pages.json schema");
@@ -598,6 +604,7 @@ public class GenerateOrchestratorTests
         result.Phase.Should().Be(GeneratePhase.Rendering);
         result.FailedPage.Should().Be("Mon Jan 4");
         result.Error.Should().Contain("Rendering pages").And.Contain("Day page 'Mon Jan 4' (PDF page 26)").And.Contain("PDFium could not decode the page");
+        result.Error.Should().EndWith(GenerateText.RenderFailed(TestPlans.Small().Page(TestPlans.Monday), "PDFium could not decode the page"), "the render-only verb's sentence, from its one copy");
         result.OutputPath.Should().Be(dir);
         File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse();
     }
@@ -861,7 +868,7 @@ public class GenerateOrchestratorTests
 
         result.ExitCode.Should().Be(5);
         result.FailedPage.Should().Be("Setup");
-        result.Error.Should().EndWith(DiskSpace.Message(h.OutputFolder, 7, 220));
+        result.Error.Should().EndWith("Not enough disk space in " + h.OutputFolder + ": about 2 MB is needed for 7 pages at 220 DPI.");
     }
 
     [Fact]
@@ -875,8 +882,25 @@ public class GenerateOrchestratorTests
         result.ExitCode.Should().Be(4);
         result.Phase.Should().Be(GeneratePhase.Rendering);
         result.FailedPage.Should().Be("Cover");
-        result.Error.Should().Be("Rendering pages, page Cover: " + DiskSpace.Message(h.OutputFolder, 7, 300));
+        result.Error.Should().Be("Rendering pages, page Cover: Not enough disk space in " + h.OutputFolder + ": about 4 MB is needed for 7 pages at 300 DPI.", "7 pages of 520 KB");
         h.Writer.Written.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(144, 20)]
+    [InlineData(220, 42)]
+    [InlineData(300, 73)]
+    public void A_full_disk_for_a_full_quarter_names_the_size_the_app_shows_for_it(int dpi, int megabytes)
+    {
+        Harness h = new() { Plans = new PlanBuilder(new DateEngine()), Parallelism = 1 };
+        string dir = Path.Combine(h.Root, "png");
+        h.Renderer.Failure = page => page.Key == PageKey.Cover ? new IOException("No space left on device", DiskSpace.Enospc) : null;
+
+        GenerateResult result = h.Run(h.Request(h.Options() with { Dpi = dpi }, dir));
+
+        result.ExitCode.Should().Be(4);
+        result.Error.Should().EndWith(string.Format(CultureInfo.InvariantCulture, "Not enough disk space in {0}: about {1} MB is needed for 144 pages at {2} DPI.", dir, megabytes, dpi));
+        NotebookSizeEstimate.Describe(dpi, 144).Should().StartWith(string.Format(CultureInfo.InvariantCulture, "About {0} MB for 144 pages at {1} DPI", megabytes, dpi), "the Generate tab's size line names the same size");
     }
 
     [Fact]
@@ -890,7 +914,7 @@ public class GenerateOrchestratorTests
 
         result.ExitCode.Should().Be(4);
         result.Phase.Should().Be(GeneratePhase.Rendering);
-        result.Error.Should().EndWith("Not enough disk space in " + dir + ": about 1 MB is needed for 7 pages at 144 DPI.");
+        result.Error.Should().EndWith("Not enough disk space in " + dir + ": about 1 MB is needed for 7 pages at 144 DPI.", "7 pages of 140 KB");
     }
 
     [SkippableFact]

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Sfp.Core.Options;
 using Sfp.OneNote.Com;
 
 namespace Sfp.OneNote.Generate;
@@ -8,7 +9,8 @@ namespace Sfp.OneNote.Generate;
 /// out-of-space failure from any other and estimates the space a run needs. Windows reports a full disk as an
 /// IOException whose HResult is ERROR_DISK_FULL or ERROR_HANDLE_DISK_FULL as an HRESULT (0x80070070, 0x80070027);
 /// Linux and macOS report ENOSPC, whose errno (28) .NET puts in IOException.HResult. A OneNote call that fails because
-/// its disk is full carries the same Win32 HRESULTs.
+/// its disk is full carries the same Win32 HRESULTs. The estimate per page is the app's size line figure
+/// (<see cref="NotebookSizeEstimate.BytesPerPage"/>), so the message and the size line never disagree.
 /// </summary>
 public static class DiskSpace
 {
@@ -20,12 +22,6 @@ public static class DiskSpace
 
     /// <summary>ENOSPC ("No space left on device"), the errno .NET puts in IOException.HResult on Linux and macOS.</summary>
     public const int Enospc = 28;
-
-    /// <summary>The DPI the per-page estimate is for.</summary>
-    public const int ReferenceDpi = 220;
-
-    /// <summary>Estimated bytes of one page image at <see cref="ReferenceDpi"/> (the PRD's 144 pages near 45 MB).</summary>
-    public const long BytesPerPageAtReferenceDpi = 300L * 1024;
 
     /// <summary>True when <paramref name="error"/>, or an exception it wraps, says the disk is full.</summary>
     public static bool IsDiskFull(Exception? error)
@@ -45,13 +41,32 @@ public static class DiskSpace
         return false;
     }
 
-    /// <summary>The bytes a run of <paramref name="pages"/> pages needs: 300 KB per page at 220 DPI, scaled by (dpi / 220) squared.</summary>
+    /// <summary>
+    /// Estimated bytes of one page at <paramref name="dpi"/>: the figure of <see cref="NotebookSizeEstimate.BytesPerPage"/>
+    /// for that DPI. The CLI and the app accept only the DPIs of that table, but <see cref="GenerateOptions.Dpi"/> does not
+    /// enforce them and a caller of the orchestrator can pass any DPI (the end-to-end tests render at 72). Such a DPI falls
+    /// back to the nearest table entry (the lower one on a tie) scaled by the square of the DPI ratio, since a page image's
+    /// pixel count grows with the DPI squared.
+    /// </summary>
+    public static long BytesPerPage(int dpi)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(dpi, 1);
+        IReadOnlyDictionary<int, long> table = NotebookSizeEstimate.BytesPerPage;
+        if (table.TryGetValue(dpi, out long perPage))
+        {
+            return perPage;
+        }
+
+        int nearest = table.Keys.OrderBy(d => Math.Abs(d - dpi)).ThenBy(d => d).First();
+        double scale = (double)dpi / nearest;
+        return (long)Math.Ceiling(table[nearest] * scale * scale);
+    }
+
+    /// <summary>The bytes a run of <paramref name="pages"/> pages needs: <paramref name="pages"/> times <see cref="BytesPerPage"/>.</summary>
     public static long EstimatedBytes(int pages, int dpi)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(pages);
-        ArgumentOutOfRangeException.ThrowIfLessThan(dpi, 1);
-        double scale = (double)dpi / ReferenceDpi;
-        return (long)Math.Ceiling(pages * BytesPerPageAtReferenceDpi * scale * scale);
+        return pages * BytesPerPage(dpi);
     }
 
     /// <summary>The estimate in whole megabytes (1,048,576 bytes), rounded, at least 1.</summary>

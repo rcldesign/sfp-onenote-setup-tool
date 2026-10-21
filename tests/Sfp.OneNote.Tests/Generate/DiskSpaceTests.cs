@@ -1,3 +1,4 @@
+using Sfp.Core.Options;
 using Sfp.OneNote.Com;
 using Sfp.OneNote.Generate;
 
@@ -40,22 +41,59 @@ public class DiskSpaceTests
 
     [Theory]
     [InlineData(144, 220, 44236800L, 42L)]
-    [InlineData(144, 300, 82258513L, 78L)]
-    [InlineData(144, 144, 18952362L, 18L)]
+    [InlineData(144, 300, 76677120L, 73L)]
+    [InlineData(144, 144, 20643840L, 20L)]
     [InlineData(7, 220, 2150400L, 2L)]
     [InlineData(1, 220, 307200L, 1L)]
     [InlineData(0, 220, 0L, 1L)]
-    public void The_estimate_is_300_kb_per_page_at_220_dpi_scaled_by_the_dpi_squared(int pages, int dpi, long bytes, long megabytes)
+    public void The_estimate_is_140_300_or_520_kb_per_page_at_144_220_or_300_dpi(int pages, int dpi, long bytes, long megabytes)
     {
         DiskSpace.EstimatedBytes(pages, dpi).Should().Be(bytes);
         DiskSpace.EstimatedMegabytes(pages, dpi).Should().Be(megabytes, "whole megabytes, rounded, never 0");
     }
 
     [Fact]
+    public void The_estimate_agrees_with_the_app_size_line_at_every_allowed_dpi()
+    {
+        NotebookSizeEstimate.BytesPerPage.Keys.Should().BeEquivalentTo(GenerateOptions.AllowedDpis, "every DPI the CLI and the app accept has its figure in the one table");
+        foreach (int dpi in GenerateOptions.AllowedDpis)
+        {
+            DiskSpace.BytesPerPage(dpi).Should().Be(NotebookSizeEstimate.BytesPerPage[dpi], "at {0} DPI", dpi);
+            foreach (int pages in new[] { 0, 1, 7, 132, 144, 152 })
+            {
+                DiskSpace.EstimatedBytes(pages, dpi).Should().Be(NotebookSizeEstimate.Bytes(dpi, pages), "{0} pages at {1} DPI", pages, dpi);
+            }
+
+            foreach (int pages in new[] { 132, 144, 152 })
+            {
+                long megabytes = DiskSpace.EstimatedMegabytes(pages, dpi);
+                DiskSpace.Message("/x", pages, dpi).Should().Contain(" about " + megabytes + " MB is needed for " + pages + " pages at " + dpi + " DPI.");
+                NotebookSizeEstimate.Describe(dpi, pages).Should().StartWith("About " + megabytes + " MB for " + pages + " pages at " + dpi + " DPI", "the disk-full message and the size line name the same size");
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(72, 35840L)]
+    [InlineData(150, 155556L)]
+    [InlineData(182, 229006L)]
+    [InlineData(200, 253885L)]
+    [InlineData(260, 429065L)]
+    [InlineData(400, 946632L)]
+    public void A_dpi_outside_the_table_scales_the_nearest_entry_by_the_dpi_squared(int dpi, long bytes)
+    {
+        // 72 is a quarter of 140 KB (144 DPI); 182 and 260 sit halfway between two entries and take the lower one;
+        // 400 scales 520 KB (300 DPI) by 16/9.
+        DiskSpace.BytesPerPage(dpi).Should().Be(bytes);
+        DiskSpace.EstimatedBytes(3, dpi).Should().Be(3 * bytes);
+    }
+
+    [Fact]
     public void The_message_names_the_folder_the_space_the_pages_and_the_dpi()
     {
         DiskSpace.Message(@"D:\Notebooks", 144, 220).Should().Be(@"Not enough disk space in D:\Notebooks: about 42 MB is needed for 144 pages at 220 DPI.");
-        DiskSpace.Message("/png", 144, 300).Should().Be("Not enough disk space in /png: about 78 MB is needed for 144 pages at 300 DPI.");
+        DiskSpace.Message("/png", 144, 300).Should().Be("Not enough disk space in /png: about 73 MB is needed for 144 pages at 300 DPI.");
+        DiskSpace.Message("/png", 144, 144).Should().Be("Not enough disk space in /png: about 20 MB is needed for 144 pages at 144 DPI.");
     }
 
     [Fact]
@@ -63,8 +101,10 @@ public class DiskSpaceTests
     {
         Action pages = () => DiskSpace.EstimatedBytes(-1, 220);
         Action dpi = () => DiskSpace.EstimatedBytes(144, 0);
+        Action perPage = () => DiskSpace.BytesPerPage(-220);
 
         pages.Should().Throw<ArgumentOutOfRangeException>();
         dpi.Should().Throw<ArgumentOutOfRangeException>();
+        perPage.Should().Throw<ArgumentOutOfRangeException>();
     }
 }
