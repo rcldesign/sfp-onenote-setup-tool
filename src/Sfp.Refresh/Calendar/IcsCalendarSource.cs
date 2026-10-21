@@ -181,6 +181,12 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
             return http.GetStringAsync(NormalizeUrl(location)).GetAwaiter().GetResult();
         }
 
+        string? problem = LocalPath.Problem(location);
+        if (problem is not null)
+        {
+            throw new IOException(problem);
+        }
+
         return File.ReadAllText(location);
     }
 

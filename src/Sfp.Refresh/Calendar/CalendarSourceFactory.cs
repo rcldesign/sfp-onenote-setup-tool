@@ -44,13 +44,23 @@ public sealed class CalendarSourceFactory : ICalendarSourceFactory
         };
     }
 
-    /// <summary>The holiday list file for a Holidays source: its Location is a list id ("us") or a path to a .json file.</summary>
+    /// <summary>
+    /// The holiday list file for a Holidays source: its Location is a list id ("us") or a path to a .json file, taken
+    /// under the templates folder when relative. A rooted path must be a full local path (<see cref="LocalPath"/>), else
+    /// <see cref="IOException"/> says why, so the source fails with that reason.
+    /// </summary>
     public string HolidayFilePath(CalendarSource source)
     {
         string location = (source.Location ?? "").Trim();
         if (location.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
         {
-            return Path.IsPathRooted(location) ? location : Path.Combine(templatesDir, location);
+            if (!LocalPath.IsRooted(location))
+            {
+                return Path.Combine(templatesDir, location);
+            }
+
+            string? problem = LocalPath.Problem(location);
+            return problem is null ? location : throw new IOException(problem);
         }
 
         string id = location.Length == 0 ? HolidayCalendarSource.DefaultListId : location.ToLowerInvariant();
