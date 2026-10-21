@@ -433,34 +433,31 @@ public class GenerateCommandTests
     }
 
     [Fact]
-    public void Each_page_count_is_printed_once_and_only_moving_forward()
+    public void Every_progress_report_is_printed_once_in_the_order_it_arrives()
     {
-        // The render workers' reports can arrive out of order; repeated counts are dropped as well.
+        // The orchestrator reports each page once, from the render worker that finished it, so counts can arrive out of
+        // order (3 before 2 here); every page still gets its line.
         GenerateProgress[] reports =
         {
             new(GeneratePhase.Rendering, 0, 0, null),
             new(GeneratePhase.Rendering, 0, 3, null),
             new(GeneratePhase.Rendering, 1, 3, "Cover"),
-            new(GeneratePhase.Rendering, 1, 3, "Cover"),
             new(GeneratePhase.Rendering, 3, 3, "Mon Jan 4"),
             new(GeneratePhase.Rendering, 2, 3, "Fri Jan 1"),
-            new(GeneratePhase.Rendering, 2, 3, "Fri Jan 1"),
-            new(GeneratePhase.Rendering, 3, 3, "Mon Jan 4"),
             new(GeneratePhase.Finishing, 0, 0, null),
         };
-        GenerateResult ok = new() { Success = true, ExitCode = 0, Phase = GeneratePhase.Done, OutputPath = Path.Combine(Root, "png-dedupe"), NotebookName = "n", PagesRendered = 3 };
+        GenerateResult ok = new() { Success = true, ExitCode = 0, Phase = GeneratePhase.Done, OutputPath = Path.Combine(Root, "png-order"), NotebookName = "n", PagesRendered = 3, PngFiles = 3 };
         StringWriter stdout = new();
 
-        int code = GenerateCommand.Run(Args() with { RenderOnly = Path.Combine(Root, "png-dedupe") }, stdout, new StringWriter(), (_, _, _) => new CannedOrchestrator(ok, reports), Path.Combine(Root, "logs"));
+        int code = GenerateCommand.Run(Args() with { RenderOnly = Path.Combine(Root, "png-order") }, stdout, new StringWriter(), (_, _, _) => new CannedOrchestrator(ok, reports), Path.Combine(Root, "logs"));
 
         code.Should().Be(0);
-        string[] lines = stdout.ToString().Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
-        lines.TakeWhile(l => !l.StartsWith("Rendered ", StringComparison.Ordinal)).Should().Equal(
-            "Rendering pages",
-            "Rendering pages (0 of 3)",
-            "Rendering pages (1 of 3): Cover",
-            "Rendering pages (3 of 3): Mon Jan 4",
-            "Finishing");
+        List<string> progress = stdout.ToString().Split('\n').Select(l => l.TrimEnd('\r')).TakeWhile(l => !l.StartsWith("Rendered ", StringComparison.Ordinal)).ToList();
+        progress.Should().HaveCount(reports.Length, "one line per report");
+        progress.Where(l => l.Contains(" of 3): ", StringComparison.Ordinal)).Should().BeEquivalentTo(
+            new[] { "Rendering pages (1 of 3): Cover", "Rendering pages (2 of 3): Fri Jan 1", "Rendering pages (3 of 3): Mon Jan 4" },
+            "every page once, in whatever order the workers finished");
+        progress.Should().StartWith(new[] { "Rendering pages", "Rendering pages (0 of 3)" }).And.EndWith("Finishing");
     }
 
     [Fact]
