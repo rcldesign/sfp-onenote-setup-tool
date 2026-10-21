@@ -107,7 +107,7 @@ public class GenerateRunViewModelTests
             ExitCode = 5,
             Phase = GeneratePhase.WritingPages,
             FailedPage = "Mon Jan 4",
-            Error = "0x80042001 invalid XML",
+            Error = "Writing pages, page Mon Jan 4: 0x80042001 invalid XML",
             OutputPath = @"D:\Notebooks\SFP Q1 2027",
             LogPath = @"C:\logs\run.log",
             Warnings = new[] { "Fallback font in use" },
@@ -119,7 +119,7 @@ public class GenerateRunViewModelTests
         run.ShowFailure.Should().BeTrue();
         run.ShowSuccess.Should().BeFalse();
         run.PhaseText.Should().Be("Failed");
-        run.FailureText.Should().Be("Failed during writing pages, page Mon Jan 4: 0x80042001 invalid XML. The partial notebook at D:\\Notebooks\\SFP Q1 2027 is left in place for inspection.");
+        run.FailureText.Should().Be("Generate failed: Writing pages, page Mon Jan 4: 0x80042001 invalid XML. The partial notebook at D:\\Notebooks\\SFP Q1 2027 is left in place for inspection.");
         run.WarningsText.Should().Be("Fallback font in use");
         run.LogPath.Should().Be(@"C:\logs\run.log");
         run.SaveLogCommand.CanExecute(null).Should().BeTrue();
@@ -321,7 +321,7 @@ public class GenerateRunViewModelTests
 
         run.ShowFailure.Should().BeTrue();
         run.Result!.ExitCode.Should().Be(5);
-        run.FailureText.Should().StartWith("Failed during failed: COM is gone.");
+        run.FailureText.Should().StartWith("Generate failed: COM is gone.");
         run.IsRunning.Should().BeFalse();
     }
 
@@ -381,7 +381,7 @@ public class GenerateRunViewModelTests
         GenerateRunViewModel.ElapsedTextFor(TimeSpan.FromSeconds(12)).Should().Be("12 s");
         GenerateRunViewModel.ElapsedTextFor(TimeSpan.FromSeconds(125)).Should().Be("2 min 5 s");
         GenerateRunViewModel.FailureTextFor(new GenerateResult { Success = false, ExitCode = 3, Phase = GeneratePhase.CheckingOneNote })
-            .Should().Be("Failed during checking onenote: no details were reported.");
+            .Should().Be("Generate failed: no details were reported.");
     }
 
     [Fact]

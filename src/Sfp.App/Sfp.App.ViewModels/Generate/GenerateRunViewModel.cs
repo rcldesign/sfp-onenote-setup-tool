@@ -35,6 +35,9 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     /// <summary>The phase line from the moment Cancel is pressed until the run has stopped.</summary>
     public const string CancellingText = "Cancelling after the current page";
 
+    /// <summary>The start of the failure line, before the error as reported.</summary>
+    public const string FailurePrefix = "Generate failed: ";
+
     /// <summary>Exit code reported when the orchestrator throws instead of returning a result (the contract says it never does).</summary>
     private const int UnexpectedErrorExitCode = 5;
 
@@ -453,18 +456,22 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         return after + "; the partial notebook was deleted.";
     }
 
-    /// <summary>"Failed while writing pages, page Mon Jan 4: 0x80042001 invalid XML. The partial notebook at ... is left in place for inspection."</summary>
+    /// <summary>
+    /// "Generate failed: Writing pages, page Mon Jan 4: OneNote rejected the XML for page 'Mon Jan 4' (0x80042001). The
+    /// partial notebook at ... is left in place for inspection." The orchestrator's error already names the phase and the
+    /// page, so the line shows it as it is behind a neutral prefix, and so does an exception the view model caught itself.
+    /// One trailing period of the error is dropped, so the sentence ends with exactly one.
+    /// </summary>
     public static string FailureTextFor(GenerateResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        string phase = PhaseName(result.Phase);
-        string text = "Failed during " + phase.ToLowerInvariant();
-        if (!string.IsNullOrEmpty(result.FailedPage))
+        string error = string.IsNullOrWhiteSpace(result.Error) ? "no details were reported" : result.Error.TrimEnd();
+        if (error.EndsWith('.'))
         {
-            text += ", page " + result.FailedPage;
+            error = error[..^1];
         }
 
-        text += ": " + (result.Error ?? "no details were reported") + ".";
+        string text = FailurePrefix + error + ".";
         if (!string.IsNullOrEmpty(result.OutputPath))
         {
             text += " The partial notebook at " + result.OutputPath + " is left in place for inspection.";
