@@ -16,6 +16,9 @@ namespace Sfp.OneNote.Tests.Xml;
 internal static class MonJan4
 {
     public const string PageId = "{5D9E1B2C-3A4F-4C6D-8E7F-0A1B2C3D4E5F}{1}{E19512345678901234567890123456789012345678}";
+
+    /// <summary>The Contents page's ID in the same notebook, for the Contents page tests.</summary>
+    public const string ContentsPageId = "{3E5A7C9B-2D4F-4B6A-8C0E-1F3A5B7C9D2E}{1}{E19531234567890123456789012345678901234567}";
     public const string OverviewHref = "onenote:#Weekly%20Overview&section-id={7A0B1C2D-3E4F-4A5B-8C6D-9E0F1A2B3C4D}{1}{B0}&page-id={8B1C2D3E-4F5A-4B6C-9D7E-0F1A2B3C4D5E}{1}{B0}&end";
     public const string PrevHref = "onenote:#Sun%20Jan%203&section-id={6A9B0C1D-2E3F-4A4B-8C5D-9E0F1A2B3C4C}{1}{B0}&page-id={9C2D3E4F-5A6B-4C7D-8E8F-1A2B3C4D5E6F}{1}{B0}&end";
     public const string NextHref = "onenote:#Tue%20Jan%205&section-id={7A0B1C2D-3E4F-4A5B-8C6D-9E0F1A2B3C4D}{1}{B0}&page-id={0D3E4F5A-6B7C-4D8E-9F9A-2B3C4D5E6F7A}{1}{B0}&end";

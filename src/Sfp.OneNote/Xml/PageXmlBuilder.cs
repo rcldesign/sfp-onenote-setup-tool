@@ -167,9 +167,9 @@ public static class PageXmlBuilder
 
     /// <summary>
     /// one:PageSettings with the page color, no rule lines, and the page size: Automatic by default; for a custom size the
-    /// 2013 schema's shape, an Orientation element (landscape when the sheet is wider than tall) followed by an empty
-    /// Dimensions element whose width and height attributes are the unscaled sheet size in inches (15.44 x 10.69 for the
-    /// 1112 x 770 pt planner page), as the John Guin post on page width and height that the PRD cites shows.
+    /// official 2013 schema's sequence, all three required: Orientation (landscape when the sheet is wider than tall),
+    /// Dimensions with the unscaled sheet size in points (1112 x 770 for the planner page; the schema's own defaults,
+    /// 612 x 792, are Letter in points), then Margins of 0 on every side so the page is the sheet.
     /// </summary>
     private static XElement PageSettings(XNamespace one, PageXmlOptions options)
     {
@@ -180,8 +180,14 @@ public static class PageXmlBuilder
                 new XElement(one + "Orientation", new XAttribute("landscape", OneNoteXml.Bool(options.SheetWidthPt > options.SheetHeightPt))),
                 new XElement(
                     one + "Dimensions",
-                    new XAttribute("width", OneNoteXml.Inches(options.SheetWidthPt)),
-                    new XAttribute("height", OneNoteXml.Inches(options.SheetHeightPt))));
+                    new XAttribute("width", OneNoteXml.Pt(options.SheetWidthPt)),
+                    new XAttribute("height", OneNoteXml.Pt(options.SheetHeightPt))),
+                new XElement(
+                    one + "Margins",
+                    new XAttribute("top", "0"),
+                    new XAttribute("bottom", "0"),
+                    new XAttribute("left", "0"),
+                    new XAttribute("right", "0")));
         }
         else
         {

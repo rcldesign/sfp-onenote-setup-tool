@@ -68,7 +68,7 @@ public class ContentsPageWriterTests
         (IReadOnlyDictionary<string, string> sectionHrefs, IReadOnlyDictionary<PageKey, string> pageHrefs) = Hrefs(plan);
         IReadOnlyList<ContentsSectionEntry> entries = ContentsPageWriter.Entries(plan, sectionHrefs, pageHrefs);
 
-        string xml = ContentsXmlBuilder.Page("{contents}", plan.Page(PageKey.Contents), entries, MonJan4.Options(M));
+        string xml = ContentsXmlBuilder.Page(MonJan4.ContentsPageId, plan.Page(PageKey.Contents), entries, MonJan4.Options(M));
 
         SchemaValidator.AssertValid(xml);
         XElement outline = XElement.Parse(xml).Element(One + "Outline")!;
