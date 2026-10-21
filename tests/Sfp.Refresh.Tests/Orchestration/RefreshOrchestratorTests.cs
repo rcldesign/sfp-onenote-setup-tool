@@ -716,7 +716,7 @@ public class RefreshOrchestratorTests
         result.Success.Should().BeTrue(result.Error);
         result.Summary!.Changes.Should().NotContain(c => c.Blocked);
         h.App.UpdateCount(pageId).Should().Be(updates + 3, "the refused write, the user's edit inside it and the write after reading the page again");
-        h.Log.Messages(LogEventLevel.Warning).Should().Contain(m => m.Contains("Mon Jan 4", StringComparison.Ordinal) && m.Contains("changed while it was being written; reading it again", StringComparison.Ordinal));
+        h.Log.Messages(LogEventLevel.Information).Should().Contain(m => m.Contains("Mon Jan 4", StringComparison.Ordinal) && m.Contains("changed while it was being written; reading it again", StringComparison.Ordinal));
         PageXml monday = h.Notebook.Read(MonJan4);
         monday.Outlines.Should().Contain(o => o.PlainText == "typed meanwhile");
         monday.Outlines.Should().Contain(o => o.PlainText == "O1 Ship the connector");

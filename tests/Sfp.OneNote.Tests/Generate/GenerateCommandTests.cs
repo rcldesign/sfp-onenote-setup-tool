@@ -647,6 +647,26 @@ public class GenerateCommandTests
     }
 
     [Fact]
+    public void The_next_quarter_link_warning_the_verb_prints_is_logged_below_what_its_console_shows()
+    {
+        // Fix round 3 app-4: the warning travels in the run's warnings, which the verb prints as a "Warning: ..." line. The
+        // writer logged it at Warning too, which the console sink shows for this verb, so it appeared twice; it is logged at
+        // Information now (as the font fallback is), and the log file still keeps it.
+        Support.CapturingSink sink = new();
+        using FakeOneNoteApp app = new();
+        Sfp.Core.Manifests.Manifest manifest = Support.TestManifest.Load();
+        string missing = Path.Combine(TestPaths.NewTempDir("previous-missing"), "SFP Q4 2026");
+        Sfp.OneNote.Writer.NextQuarterLinkWriter writer = new(app, new SidecarStore(), manifest, Xml.MonJan4.Options(manifest), sink.CreateLogger());
+
+        Sfp.OneNote.Writer.NextQuarterLinkResult result = writer.Link(missing, new NotebookHandle("{nb:next}{1}{B0}", "/out/SFP Q1 2027", "SFP Q1 2027"), "onenote:#Cover&end");
+
+        result.Warning.Should().NotBeNullOrEmpty("the verb prints it as a Warning line");
+        LogEvent logged = sink.Events.Should().ContainSingle(e => e.MessageTemplate.Text.StartsWith("Next quarter link not written", StringComparison.Ordinal)).Subject;
+        logged.Level.Should().Be(LogEventLevel.Information);
+        RunLog.ConsoleShows(logged.Level, quiet: false, printsOwnProgress: true).Should().BeFalse("the verb's own Warning line is the one the user sees");
+    }
+
+    [Fact]
     public void A_log_folder_that_cannot_be_created_moves_the_log_to_the_temp_folder_and_the_run_goes_on()
     {
         // SFP2ONENOTE_LOGDIR under a file: the folder can never be created. The verbs used to stop with exit 1 and an
