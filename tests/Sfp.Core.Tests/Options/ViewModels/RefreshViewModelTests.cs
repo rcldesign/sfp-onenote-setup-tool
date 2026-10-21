@@ -172,6 +172,7 @@ public class RefreshViewModelTests
         vm.IncludeCalendar = false;
 
         await vm.RefreshNowCommand.ExecuteAsync(null);
+        await _h.Settle(vm.PendingReload);
 
         _h.Refresher.LastRequest!.DryRun.Should().BeFalse();
         _h.Refresher.LastRequest.WriteInkedValues.Should().BeTrue();

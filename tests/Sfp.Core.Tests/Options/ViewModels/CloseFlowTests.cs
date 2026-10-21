@@ -141,6 +141,36 @@ public class CloseFlowTests
     }
 
     [UiFact]
+    public async Task A_refresh_that_succeeds_while_the_close_waits_shows_its_result_and_does_not_reload_the_list()
+    {
+        // Fix round 3 app-3: Cancel came after the last page, so the run returns success while the close waits for it. The
+        // result is shown, and the closing window lists no folders: that reload is not part of the run the close awaits.
+        using ManualResetEventSlim finishing = new(false);
+        _h.Refresher.WaitForCancel = true;
+        _h.Refresher.AfterCancelGate = finishing;
+        _h.Refresher.CancelledResult = new RefreshResult
+        {
+            Success = true,
+            ExitCode = 0,
+            Summary = new RefreshSummary { Values = SetupValues.Empty, Changes = Array.Empty<PlannedChange>() },
+        };
+        using MainViewModel main = await ReadyWindow();
+        Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
+        await _h.WaitUntilAsync(() => _h.Refresher.WaitingForCancel);
+
+        Task<bool> closing = main.PrepareToCloseAsync();
+        await _h.WaitUntilAsync(() => _h.Refresher.SawCancel);
+        main.Refresh.IsClosing.Should().BeTrue();
+        finishing.Set();
+
+        (await closing).Should().BeTrue();
+        await refreshing;
+        await _h.Settle(main.Refresh.PendingReload);
+        main.Refresh.Summary!.Headline.Should().Be("Refreshed SFP Q1 2027.", "the run's result is shown");
+        _h.Registry.Listings.Should().Be(1, "a closing window does not list the folders again");
+    }
+
+    [UiFact]
     public async Task A_close_with_nothing_running_completes_at_once_and_leaves_the_tabs_as_they_are()
     {
         using MainViewModel main = await ReadyWindow();

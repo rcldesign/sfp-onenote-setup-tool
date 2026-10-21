@@ -72,6 +72,7 @@ public class RefreshReloadTests
         vm.SelectedNotebook!.LastRefreshText.Should().Be("never");
 
         await vm.RefreshNowCommand.ExecuteAsync(null);
+        await _h.Settle(vm.PendingReload);
 
         _h.Registry.Queries.Should().HaveCount(2, "the run reloads the list");
         vm.Notebooks.Should().ContainSingle().Which.LastRefreshText.Should().Be("2026-10-21 05:00");
@@ -104,7 +105,9 @@ public class RefreshReloadTests
         };
 
         await vm.RefreshNowCommand.ExecuteAsync(null);
+        await _h.Settle(vm.PendingReload);
 
+        _h.Registry.Listings.Should().Be(2, "the run reloaded the list");
         vm.SelectedNotebook!.Name.Should().Be("SFP Q1 2027");
         vm.Summary.Should().NotBeNull();
         vm.SetupLines.Should().NotBeEmpty();

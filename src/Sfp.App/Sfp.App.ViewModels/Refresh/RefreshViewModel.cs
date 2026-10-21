@@ -60,7 +60,10 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     private bool _syncingSchedule;
     private CancellationTokenSource? _cts;
 
-    /// <summary>The run in progress, or the last one (completed); a window close awaits it after cancelling.</summary>
+    /// <summary>
+    /// The run in progress, or the last one (completed); a window close awaits it after cancelling. It ends once the
+    /// result is shown: the list reload a successful Refresh now starts is <see cref="PendingReload"/>, not part of it.
+    /// </summary>
     private Task _running = Task.CompletedTask;
 
     /// <summary>Cancel was pressed: the progress line keeps saying so until the run stops.</summary>
@@ -171,7 +174,10 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToList();
 
-    /// <summary>The last reload started, for tests.</summary>
+    /// <summary>
+    /// The last reload started (by <see cref="SetKnownFolders"/> or after a successful Refresh now), for tests. A window
+    /// close never waits for it: listing a folder on an unreachable drive can take as long as the network timeout.
+    /// </summary>
     public Task PendingReload { get; private set; }
 
     /// <summary>Sets the known output folders (from settings or after a Generate) and reloads the list.</summary>
@@ -271,7 +277,8 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Runs a dry run or a real refresh of the selected notebook and fills the listing and the summary. The notebook is
     /// captured when the run starts: the request and the summary's headline are about it, whatever is selected later. A
-    /// call while a run is on, or while the window is closing, does nothing.
+    /// call while a run is on, or while the window is closing, does nothing. The task completes once the result is shown;
+    /// a successful Refresh now then reloads the list on its own (<see cref="PendingReload"/>).
     /// </summary>
     public Task RunAsync(bool dryRun)
     {
@@ -311,7 +318,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Cancels the run in progress and completes once it has stopped and the cancelled line is shown: the orchestrator
     /// stops after the current page and saves the sidecar with what it wrote before it returns. Completes at once when
-    /// no run is on.
+    /// no run is on, also while the list reload after a run still lists the folders (that reload only reads).
     /// </summary>
     public Task CancelAndWaitAsync()
     {
@@ -404,9 +411,12 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         // pressed (the page in flight hit an error, or Cancel came after the last page) is reported as what it was.
         bool cancelled = _cancelRequested && !result.Success && string.Equals(result.Error, CancelledError, StringComparison.Ordinal);
         Apply(result, dryRun, result.LogPath ?? log.Path, cancelled, notebook);
-        if (!dryRun && result.Success)
+        if (!dryRun && result.Success && !IsClosing)
         {
-            await ReloadAsync();
+            // The list shows the new Last refreshed. The reload is its own task, not part of the run a window close waits
+            // for: listing a folder on an unreachable network drive can hang until the network timeout. A closing window
+            // lists nothing.
+            PendingReload = ReloadAsync();
         }
     }
 

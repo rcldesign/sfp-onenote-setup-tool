@@ -147,6 +147,35 @@ public class CloseAnywayTests
         _closeDialogs.Asked.Should().BeEmpty();
     }
 
+    [UiFact]
+    public async Task A_close_right_after_a_refresh_does_not_wait_for_the_list_reload()
+    {
+        // Fix round 3 app-3: the reload after Refresh now lists the folders once the run has ended. A folder that hangs (an
+        // unreachable network drive) used to hold the close, and since no run was on, neither the delay nor another close
+        // request asked whether to close anyway.
+        using MainViewModel main = await Window(TimeSpan.FromMilliseconds(200));
+        using ManualResetEventSlim listing = new(false);
+        _h.Registry.Gate = listing;
+        Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
+        try
+        {
+            await _h.WaitUntilAsync(() => _h.Registry.Listings == 2 && !main.Refresh.IsBusy, "the run ended and the reload lists the folders");
+
+            Task<bool> closing = main.PrepareToCloseAsync();
+
+            closing.IsCompleted.Should().BeTrue("the close waits for runs, never for the list reload");
+            (await closing).Should().BeTrue();
+            _closeDialogs.Asked.Should().BeEmpty("nothing was running, so nothing is asked");
+            main.Refresh.PendingReload.IsCompleted.Should().BeFalse("the folder listing still hangs");
+        }
+        finally
+        {
+            listing.Set();
+        }
+
+        await _h.Settle(refreshing, main.Refresh.PendingReload);
+    }
+
     /// <summary>Answers the close-anyway questions in order (no once the answers run out) and records them.</summary>
     private sealed class CloseAnywayDialogs : IDialogService
     {
