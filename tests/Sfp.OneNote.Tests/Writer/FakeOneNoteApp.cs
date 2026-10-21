@@ -193,7 +193,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
             case CreateFileType.Section when relativeToId is not null && _groups.TryGetValue(relativeToId, out SectionGroup? group):
             {
-                if (!string.Equals(Path.GetDirectoryName(path), group.Path, StringComparison.Ordinal))
+                // Full paths on both sides: on Windows GetDirectoryName turns a leading "/" into "\", so a root-relative
+                // test path such as /out would otherwise never match the group folder it was built from.
+                if (!string.Equals(Path.GetFullPath(Path.GetDirectoryName(path) ?? ""), Path.GetFullPath(group.Path), StringComparison.Ordinal))
                 {
                     throw new OneNoteException("OpenHierarchy", OneNoteHResults.CreatingSection, "Section " + path + " is not inside the section group folder " + group.Path, null);
                 }

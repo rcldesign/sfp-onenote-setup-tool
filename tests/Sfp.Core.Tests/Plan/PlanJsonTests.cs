@@ -33,7 +33,7 @@ public class PlanJsonTests
     {
         string json = PlanJson.From(Build(Q1_2027)).Serialize();
 
-        json.Should().StartWith("{\n  \"name\": \"SFP Q1 2027\",\n  \"quarter\": {\n    \"start\": \"2027-01-01\",\n    \"end\": \"2027-03-31\",\n    \"weekCount\": 14,\n    \"length\": 90,\n    \"label\": \"Q1 2027\"\n  },");
+        json.Replace("\r\n", "\n", StringComparison.Ordinal).Should().StartWith("{\n  \"name\": \"SFP Q1 2027\",\n  \"quarter\": {\n    \"start\": \"2027-01-01\",\n    \"end\": \"2027-03-31\",\n    \"weekCount\": 14,\n    \"length\": 90,\n    \"label\": \"Q1 2027\"\n  },");
         json.Should().Contain("\"type\": \"weeklyOverview\"");
         json.Should().Contain("\"key\": \"day:2027-01-04\"");
         json.Should().Contain("\"section\": \"Week 02 (Jan 4 to Jan 10)\"");
