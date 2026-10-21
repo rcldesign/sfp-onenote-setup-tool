@@ -13,7 +13,7 @@ public sealed record Intruder(string ObjectId, string Description);
 /// <summary>What a page holds at one slot rectangle.</summary>
 /// <param name="Owned">The tool-owned outline recorded for the slot, when it still exists on the page.</param>
 /// <param name="Moved">True when the owned outline exists but no longer overlaps the slot rectangle (the user moved it).</param>
-/// <param name="Intruders">Outlines, ink drawings, and pictures or files placed on the page, that the tool does not own and that overlap the rectangle.</param>
+/// <param name="Intruders">Outlines, ink drawings, and pictures, files or later-version content placed on the page, that the tool does not own and that overlap the rectangle.</param>
 public sealed record SlotState(OutlineInfo? Owned, bool Moved, IReadOnlyList<Intruder> Intruders)
 {
     /// <summary>The owned outline's plain text, or null when there is no owned outline.</summary>
@@ -27,8 +27,8 @@ public sealed record SlotState(OutlineInfo? Owned, bool Moved, IReadOnlyList<Int
 
 /// <summary>
 /// Reads the state of a slot on a page: the tool-owned outline by object ID, whether it was moved, and the user's
-/// objects overlapping the rectangle (outlines, page-level ink, and pictures, attached files or media files placed on
-/// the page outside any outline). Rectangles are sheet points; the sheet outline's origin and placed scale are applied
+/// objects overlapping the rectangle (outlines, page-level ink, and pictures, attached files, media files or content from
+/// a later OneNote version placed on the page outside any outline). Rectangles are sheet points; the sheet outline's origin and placed scale are applied
 /// so a hidden-title or scaled notebook is read correctly.
 /// </summary>
 public static class SlotInspector
@@ -36,10 +36,15 @@ public static class SlotInspector
     /// <summary>Position tolerance for outlines whose size OneNote did not report.</summary>
     public const double PositionTolerancePt = 4.0;
 
-    /// <summary>The elements that put something other than text inside an outline: a picture, ink, an attached or media file, a table or a tag.</summary>
-    private static readonly HashSet<string> NonTextContent = new(StringComparer.Ordinal)
+    /// <summary>
+    /// The only elements a tool outline may hold, from the official 2013 schema's Outline and OE content models: position,
+    /// size, indents, meta, paragraphs of text runs, and list bullets or numbers. Anything else (a picture, ink, a file, a
+    /// table, a tag, an Outlook task, a linked note, media, content from a later OneNote version as one:FutureObject, or an
+    /// element the schema does not know) is the user's.
+    /// </summary>
+    private static readonly HashSet<string> ToolOutlineContent = new(StringComparer.Ordinal)
     {
-        "Image", "InkWord", "InkParagraph", "InkDrawing", "InsertedFile", "MediaFile", "Table", "Tag",
+        "Position", "Size", "Indents", "Indent", "Meta", "OEChildren", "OE", "T", "List", "Bullet", "Number",
     };
 
     /// <param name="page">The page as read.</param>
@@ -123,15 +128,16 @@ public static class SlotInspector
     }
 
     /// <summary>
-    /// True when the outline still holds text only, as the tool writes it: no picture, ink, attached or media file, table
-    /// or tag that the user put inside it (clicking at the end of a tool line puts the cursor inside its outline). Extra
-    /// lines of typed text do not change the shape; the text comparison in Propagator.IsEdited catches them.
+    /// True when the outline still holds text only, as the tool writes it: every element inside it is one the tool's text
+    /// outlines are made of (<see cref="ToolOutlineContent"/>, in the OneNote namespace), so nothing the user put inside it
+    /// (clicking at the end of a tool line puts the cursor inside its outline) is there to lose. Extra lines of typed text
+    /// do not change the shape; the text comparison in Propagator.IsEdited catches them.
     /// </summary>
     public static bool HasToolShape(OutlineInfo outline)
     {
         ArgumentNullException.ThrowIfNull(outline);
         XNamespace one = outline.Element.Name.Namespace;
-        return !outline.Element.Descendants().Any(e => e.Name.Namespace == one && NonTextContent.Contains(e.Name.LocalName));
+        return outline.Element.Descendants().All(e => e.Name.Namespace == one && ToolOutlineContent.Contains(e.Name.LocalName));
     }
 
     private static string Describe(OutlineInfo outline)

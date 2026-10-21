@@ -19,8 +19,8 @@ namespace Sfp.Refresh.Tests.Support;
 /// </summary>
 public sealed class FakeOneNoteApp : IOneNoteApp
 {
-    /// <summary>Top-level page children that are content objects, merged by objectID; every other child (Meta, PageSettings, Title ...) is replaced by name.</summary>
-    private static readonly HashSet<string> ContentObjects = new(StringComparer.Ordinal) { "Outline", "Image", "InkDrawing", "InsertedFile", "MediaFile" };
+    /// <summary>Top-level page children that are content objects (the 2013 schema's page content choice), merged by objectID; every other child (Meta, PageSettings, Title ...) is replaced by name.</summary>
+    private static readonly HashSet<string> ContentObjects = new(StringComparer.Ordinal) { "Outline", "Image", "InkDrawing", "InsertedFile", "MediaFile", "FutureObject" };
 
     private readonly Dictionary<string, Notebook> notebooks = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Section> sections = new(StringComparer.Ordinal);
