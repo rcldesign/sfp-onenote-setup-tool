@@ -742,9 +742,36 @@ public sealed class FakeNotebookRegistry : INotebookRegistry
 
     public Exception? Throw { get; set; }
 
+    /// <summary>
+    /// When set, every listing waits here once it is counted (released by the test), as the listing of a slow or
+    /// unreachable folder does; a listing never released fails after <see cref="TestDispatcher.Timeout"/>.
+    /// </summary>
+    public ManualResetEventSlim? Gate { get; set; }
+
+    /// <summary>The listings started so far; safe to read while one waits at <see cref="Gate"/> on the thread pool.</summary>
+    public int Listings
+    {
+        get
+        {
+            lock (Queries)
+            {
+                return Queries.Count;
+            }
+        }
+    }
+
     public IReadOnlyList<KnownNotebook> List(IEnumerable<string> folders)
     {
-        Queries.Add(folders.ToList());
+        lock (Queries)
+        {
+            Queries.Add(folders.ToList());
+        }
+
+        if (Gate is { } gate && !gate.Wait(TestDispatcher.Timeout))
+        {
+            throw new TimeoutException("The test never released the folder listing.");
+        }
+
         if (Throw is not null)
         {
             throw Throw;

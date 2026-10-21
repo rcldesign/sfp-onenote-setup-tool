@@ -184,13 +184,14 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Lists the notebooks again, keeping the selected notebook (the same sidecar file) when it still exists. The rows are
-    /// new records, since the registry reads each sidecar again (after a run, with the new Last refreshed), so the shown
-    /// results (summary, Setup values, changes) are cleared only when the selection ends up on another notebook.
+    /// Lists the notebooks again, keeping the selected notebook (the same sidecar file) when it still exists. The selection
+    /// kept is the one the list has when it is rebuilt, after the folders were listed, so a notebook clicked while they
+    /// were listed stays selected. The rows are new records, since the registry reads each sidecar again (after a run,
+    /// with the new Last refreshed), so the shown results (summary, Setup values, changes) are cleared, and the daily
+    /// checkbox read again, only when the selection ends up on another notebook than the one selected at the rebuild.
     /// </summary>
     public async Task ReloadAsync()
     {
-        KnownNotebookItem? previous = SelectedNotebook;
         IReadOnlyList<string> folders = Folders;
         IReadOnlyList<KnownNotebook> found;
         try
@@ -207,6 +208,10 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
             NotebooksStatus = "Could not list notebooks: " + ex.Message;
         }
 
+        // Taken now, not before the listing: the list is enabled while the folders are listed, and a notebook clicked
+        // meanwhile has already cleared the results and synced the daily checkbox to its own task. Without a click this is
+        // still the notebook selected before, after a run the run's notebook, whose results the reload keeps.
+        KnownNotebookItem? previous = SelectedNotebook;
         _reloading = true;
         try
         {
@@ -225,7 +230,8 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
 
         if (!IsSameNotebook(SelectedNotebook, previous))
         {
-            // The first load, or the notebook shown before is gone: the results on screen were not about this one.
+            // The first load, or the notebook selected at the rebuild is gone: the results on screen and the daily checkbox
+            // were not about this one.
             ClearResults();
             SyncScheduleFromService(SelectedNotebook);
         }
