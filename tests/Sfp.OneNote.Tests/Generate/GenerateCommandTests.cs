@@ -646,6 +646,89 @@ public class GenerateCommandTests
         }
     }
 
+    [Fact]
+    public void A_log_folder_that_cannot_be_created_moves_the_log_to_the_temp_folder_and_the_run_goes_on()
+    {
+        // SFP2ONENOTE_LOGDIR under a file: the folder can never be created. The verbs used to stop with exit 1 and an
+        // unhandled DirectoryNotFoundException, so the unattended daily refresh never ran. Now one line says so, even
+        // with --quiet, and the run goes on with its log in the temp folder.
+        string file = Path.Combine(Root, "not-a-folder");
+        File.WriteAllText(file, "");
+        string logs = Path.Combine(file, "logs");
+        string[] refresh = { "refresh", "--notebook", "SFP Q1 2027", "--today", "2027-01-04", "--templates", TestPaths.TemplatesDir, "--quiet" };
+        string[] generate = { "generate", "--pdf", Pdf, "--start", "2027-01", "--out", Path.Combine(Root, "out"), "--templates", TestPaths.TemplatesDir, "--quiet" };
+        foreach (string[] args in new[] { refresh, generate })
+        {
+            (int code, _, string stderr) = RunCli(logs, args);
+
+            stderr.Should().NotContain("Unhandled exception");
+            code.Should().NotBe(1, stderr);
+            string notice = stderr.Split('\n').Select(l => l.TrimEnd('\r')).Should().ContainSingle(l => l.StartsWith("Could not use the log folder ", StringComparison.Ordinal)).Which;
+            notice.Should().StartWith("Could not use the log folder " + logs + ": ").And.EndWith(" This run logs to " + RunLog.FallbackDirectory + " instead.");
+            if (!OperatingSystem.IsWindows())
+            {
+                code.Should().Be(ExitCodes.OneNoteUnavailable, "the run went on to OneNote, which is unavailable here");
+            }
+
+            if (args == generate)
+            {
+                stderr.Should().Contain("Log: " + RunLog.FallbackDirectory + Path.DirectorySeparatorChar, "the failure block names the log in the temp folder");
+            }
+        }
+    }
+
+    [Fact]
+    public void The_run_log_falls_back_to_one_folder_and_gives_up_in_one_line_when_neither_works()
+    {
+        string root = Path.Combine(Root, "log-fallback");
+        Directory.CreateDirectory(root);
+        string file = Path.Combine(root, "a-file");
+        File.WriteAllText(file, "");
+        string underFile = Path.Combine(file, "logs");
+        string fallback = Path.Combine(root, "temp-logs");
+        DateTimeOffset now = new(2027, 1, 4, 9, 0, 0, TimeSpan.Zero);
+
+        // A folder that works: no notice.
+        StringWriter fineErr = new();
+        using (RunLog? log = RunLog.StartWithFallback("refresh", quiet: true, fineErr, Path.Combine(root, "logs"), fallbackDirectory: fallback, now: now))
+        {
+            log!.Path.Should().Be(Path.Combine(root, "logs", "20270104-090000-refresh.log"));
+        }
+
+        fineErr.ToString().Should().BeEmpty();
+
+        // A folder that cannot be created: one line naming it and the reason; the log, which keeps the reason, starts in the fallback.
+        StringWriter movedErr = new();
+        using (RunLog? log = RunLog.StartWithFallback("refresh", quiet: true, movedErr, underFile, fallbackDirectory: fallback, now: now))
+        {
+            log!.Path.Should().Be(Path.Combine(fallback, "20270104-090000-refresh.log"));
+        }
+
+        movedErr.ToString().Should().StartWith("Could not use the log folder " + underFile + ": ").And.EndWith(" This run logs to " + fallback + " instead." + Environment.NewLine);
+        movedErr.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Should().ContainSingle();
+        File.ReadAllText(Path.Combine(fallback, "20270104-090000-refresh.log")).Should().Contain("The log folder " + underFile + " could not be used: ");
+
+        // A folder that exists but cannot hold the file (a folder already has its name): the file sink would log nothing
+        // and the run would name a log that does not exist, so this falls back too.
+        string blocked = Path.Combine(root, "blocked");
+        Directory.CreateDirectory(Path.Combine(blocked, "20270104-090000-generate.log"));
+        StringWriter blockedErr = new();
+        using (RunLog? log = RunLog.StartWithFallback("generate", quiet: true, blockedErr, blocked, fallbackDirectory: fallback, now: now))
+        {
+            log!.Path.Should().Be(Path.Combine(fallback, "20270104-090000-generate.log"));
+        }
+
+        blockedErr.ToString().Should().StartWith("Could not use the log folder " + blocked + ": ");
+
+        // Neither folder works: one line naming both with their reasons, and no log; the verb exits 2.
+        string fallbackUnderFile = Path.Combine(file, "temp");
+        StringWriter failedErr = new();
+        RunLog? none = RunLog.StartWithFallback("refresh", quiet: true, failedErr, underFile, fallbackDirectory: fallbackUnderFile, now: now);
+        none.Should().BeNull();
+        failedErr.ToString().Should().StartWith("Could not start the run log in " + underFile + ": ").And.Contain(" Nor in " + fallbackUnderFile + ": ");
+        failedErr.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Should().ContainSingle();
+    }
+
     [SkippableFact]
     public void Without_onenote_each_verb_prints_the_message_once_and_no_stack_trace()
     {

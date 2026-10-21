@@ -1,4 +1,6 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Security;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
@@ -43,6 +45,9 @@ public sealed class RunLog : IDisposable
         }
     }
 
+    /// <summary>Where a CLI verb's log goes when its folder cannot be used (<see cref="StartWithFallback"/>): sfp2onenote\logs in the temp folder.</summary>
+    public static string FallbackDirectory => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sfp2onenote", "logs");
+
     /// <summary>The console's line: Serilog's default without the exception, so a stack trace goes to the file only.</summary>
     private const string ConsoleTemplate = "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}";
 
@@ -55,8 +60,7 @@ public sealed class RunLog : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(verb);
         string dir = directory ?? DefaultDirectory;
         Directory.CreateDirectory(dir);
-        DateTimeOffset stamp = now ?? DateTimeOffset.Now;
-        string file = System.IO.Path.Combine(dir, stamp.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + verb + ".log");
+        string file = FilePath(dir, verb, now ?? DateTimeOffset.Now);
 
         LoggerConfiguration config = new LoggerConfiguration()
             .MinimumLevel.Debug()
@@ -69,6 +73,83 @@ public sealed class RunLog : IDisposable
         Logger logger = config.CreateLogger();
         logger.Information("sfp2onenote {Verb} started; log {Path}", verb, file);
         return new RunLog(logger, file);
+    }
+
+    /// <summary>
+    /// <see cref="Start"/> for a CLI verb, which must not stop for its log folder: the daily refresh task runs unattended.
+    /// When <paramref name="directory"/> (the default folder when null) cannot be created or cannot hold the log file,
+    /// one line naming the folder and the reason goes to <paramref name="stderr"/>, even when quiet (it is a setting the
+    /// user has to fix), and the log starts in <paramref name="fallbackDirectory"/> (<see cref="FallbackDirectory"/> when
+    /// null) instead. When that fails too, one line names both folders and their reasons and the result is null: the verb
+    /// stops with the validation exit code.
+    /// </summary>
+    public static RunLog? StartWithFallback(
+        string verb,
+        bool quiet,
+        TextWriter stderr,
+        string? directory = null,
+        bool printsOwnProgress = false,
+        string? fallbackDirectory = null,
+        DateTimeOffset? now = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(verb);
+        ArgumentNullException.ThrowIfNull(stderr);
+        string dir = directory ?? DefaultDirectory;
+        string fallback = fallbackDirectory ?? FallbackDirectory;
+        DateTimeOffset stamp = now ?? DateTimeOffset.Now;
+        if (TryStart(verb, quiet, dir, stamp, printsOwnProgress, out RunLog? log, out string? reason))
+        {
+            return log;
+        }
+
+        if (TryStart(verb, quiet, fallback, stamp, printsOwnProgress, out log, out string? fallbackReason))
+        {
+            stderr.WriteLine("Could not use the log folder " + dir + ": " + Sentence(reason) + " This run logs to " + fallback + " instead.");
+
+            // Information: the file keeps the reason, and the console, which shows a verb's warnings, has the line above.
+            log.Logger.Information("The log folder {Folder} could not be used: {Reason}", dir, reason);
+            return log;
+        }
+
+        stderr.WriteLine("Could not start the run log in " + dir + ": " + Sentence(reason) + " Nor in " + fallback + ": " + Sentence(fallbackReason));
+        return null;
+    }
+
+    /// <summary>
+    /// Starts the log in <paramref name="dir"/> or says why it cannot. The file is opened once first because the file
+    /// sink, unlike <see cref="Directory.CreateDirectory(string)"/>, does not throw for a file it cannot open: it logs
+    /// nothing, and the run would name a log file that does not exist.
+    /// </summary>
+    private static bool TryStart(string verb, bool quiet, string dir, DateTimeOffset stamp, bool printsOwnProgress, [NotNullWhen(true)] out RunLog? log, [NotNullWhen(false)] out string? reason)
+    {
+        try
+        {
+            Directory.CreateDirectory(dir);
+            using (new FileStream(FilePath(dir, verb, stamp), FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+            {
+            }
+
+            log = Start(verb, quiet, dir, stamp, printsOwnProgress);
+            reason = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or SecurityException)
+        {
+            log = null;
+            reason = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>The run's log file: yyyyMMdd-HHmmss-verb.log in <paramref name="dir"/>.</summary>
+    private static string FilePath(string dir, string verb, DateTimeOffset stamp) =>
+        System.IO.Path.Combine(dir, stamp.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + verb + ".log");
+
+    /// <summary>The text trimmed and ending with a period, so a reason reads as a sentence inside the line.</summary>
+    private static string Sentence(string text)
+    {
+        string trimmed = text.Trim();
+        return trimmed.EndsWith('.') ? trimmed : trimmed + ".";
     }
 
     /// <summary>

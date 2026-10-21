@@ -165,8 +165,15 @@ public static class GenerateCommand
         GenerateRequest request = new(options, manifest, templatesDir, renderOnly, renderOnly ? Path.GetFullPath(args.RenderOnly!) : null);
 
         // The verb prints its own progress, summary and failure block, so the log's console sink keeps to warnings; the
-        // errors, which the failure block reports, go to the log file only.
-        using RunLog log = RunLog.Start("generate", args.Quiet, logDirectory, printsOwnProgress: true);
+        // errors, which the failure block reports, go to the log file only. A log folder that cannot be used moves the
+        // log to the temp folder with a one-line notice instead of stopping the run.
+        RunLog? started = RunLog.StartWithFallback("generate", args.Quiet, stderr, logDirectory, printsOwnProgress: true);
+        if (started is null)
+        {
+            return ExitCodes.ValidationError;
+        }
+
+        using RunLog log = started;
         log.Logger.Information("generate --pdf {Pdf} --start {Start} --dpi {Dpi} render-only {RenderOnly}", options.PdfPath, options.Start, options.Dpi, renderOnly);
         IGenerateOrchestrator orchestrator;
         try

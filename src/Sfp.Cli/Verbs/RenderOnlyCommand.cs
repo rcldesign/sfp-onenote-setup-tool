@@ -46,8 +46,8 @@ public sealed record RenderOnlyRequest(
 /// [--weeks-remaining corrected] [--no-links] [--time-blocks 6-22] [--include-out-of-quarter-days]
 /// [--manifest user.json] [--templates DIR] [--quiet]: validates the PDF against the manifest, builds the plan and
 /// writes every page as a PNG plus pages.json without touching OneNote. This is how overlay positions are tuned and
-/// how the suite runs on a machine without Office. Exit codes: 0, 2 (bad option, manifest or PDF mismatch), 4
-/// (render failure). The integrator adds the command to Program.cs with <see cref="Build"/>.
+/// how the suite runs on a machine without Office. Exit codes: 0, 2 (bad option, manifest or PDF mismatch, or no folder,
+/// the temp folder included, can hold the run log), 4 (render failure). The integrator adds the command to Program.cs with <see cref="Build"/>.
 /// </summary>
 public static class RenderOnlyCommand
 {
@@ -167,7 +167,14 @@ public static class RenderOnlyCommand
             return ExitCodes.ValidationError;
         }
 
-        using RunLog log = RunLog.Start(Verb, quiet: true, request.LogDirectory);
+        // As generate --render-only does: a log folder that cannot be used moves the log to the temp folder with a notice.
+        RunLog? started = RunLog.StartWithFallback(Verb, quiet: true, stderr, request.LogDirectory);
+        if (started is null)
+        {
+            return ExitCodes.ValidationError;
+        }
+
+        using RunLog log = started;
         ILogger logger = log.Logger;
         logger.Information("render-only {Start} from {Pdf} to {Out} at {Dpi} DPI", request.Start, request.Pdf, request.Out, request.Dpi);
         foreach (string warning in validation.Warnings)
