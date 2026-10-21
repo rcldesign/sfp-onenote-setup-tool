@@ -670,6 +670,64 @@ public class NextQuarterLinkWriterTests
     }
 
     /// <summary>
+    /// Round 4 onenote-5: a run cancelled (Ctrl+C, the app's Cancel) while the writer waits for a Refresh to release the
+    /// previous notebook's lock stops waiting at the poll it was cancelled in, not after 30 seconds, and leaves the link
+    /// unwritten with a warning that says why; nothing is read from or written to OneNote and the Refresh's lock is left.
+    /// </summary>
+    [Fact]
+    public void A_run_cancelled_while_the_writer_waits_for_the_lock_stops_waiting_and_leaves_the_link_unwritten()
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        DateTimeOffset now = new(2026, 10, 21, 5, 0, 0, TimeSpan.Zero);
+        using RefreshLock refresh = RefreshLock.TryAcquire(previous.SidecarPath, now, new CapturingSink().CreateLogger(), out _)!;
+        using CancellationTokenSource run = new();
+        int waits = 0;
+        NextQuarterLinkWriter writer = new(app, new SidecarStore(), M, MonJan4.Options(M), new CapturingSink().CreateLogger(), () => now, wait =>
+        {
+            now += wait;
+            if (++waits == 2)
+            {
+                run.Cancel();
+            }
+        });
+        string before = File.ReadAllText(previous.SidecarPath);
+        int calls = app.Calls.Count;
+
+        NextQuarterLinkResult result = writer.Link(previous.Folder, Next, CoverHref, run.Token);
+
+        result.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
+        waits.Should().Be(2, "the wait ends at the poll the run was cancelled in");
+        result.Warning.Should().Be(
+            "The Next quarter link was not written to the previous notebook " + previous.Folder + ": the run was cancelled while it waited for another run that uses it (process "
+            + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + " on " + Environment.MachineName + ", since 2026-10-21 05:00) to release its lock.");
+        app.Calls.Should().HaveCount(calls, "nothing is read from or written to OneNote");
+        File.ReadAllText(previous.SidecarPath).Should().Be(before, "the state file is left to the Refresh");
+        File.Exists(RefreshLock.PathBeside(previous.SidecarPath)).Should().BeTrue("the Refresh's lock is left to it");
+    }
+
+    /// <summary>
+    /// Round 4 onenote-5: without a test hook the writer waits on the run's cancellation token, so a cancel ends the wait
+    /// for the lock at once instead of after the 30 seconds a plain sleep would run out.
+    /// </summary>
+    [Fact]
+    public void The_wait_for_the_lock_ends_as_soon_as_the_run_is_cancelled()
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        using RefreshLock refresh = RefreshLock.TryAcquire(previous.SidecarPath, DateTimeOffset.Now, new CapturingSink().CreateLogger(), out _)!;
+        using CancellationTokenSource run = new(TimeSpan.FromMilliseconds(300));
+        System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+
+        NextQuarterLinkResult result = Writer(app).Link(previous.Folder, Next, CoverHref, run.Token);
+
+        clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10), "the cancel ends the wait, which would otherwise last 30 seconds");
+        result.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
+        result.Warning.Should().Contain("the run was cancelled while it waited for another run that uses it");
+        File.Exists(RefreshLock.PathBeside(previous.SidecarPath)).Should().BeTrue("the Refresh's lock is left to it");
+    }
+
+    /// <summary>
     /// onenote-2: a state file update another writer saves while the link is written (here, during UpdatePageContent, a
     /// Refresh-style save of a new anchor, a pending-write journal and its run time) survives the writer's save: the file
     /// is read again right before the save and only anchors["nextQuarter"] is changed on it. The writer holds the run

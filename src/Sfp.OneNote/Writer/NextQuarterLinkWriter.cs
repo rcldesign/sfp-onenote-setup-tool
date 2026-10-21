@@ -66,7 +66,11 @@ public interface INextQuarterLinkWriter
     /// <param name="previousNotebook">The previous notebook's folder, or the path of its state file.</param>
     /// <param name="next">The notebook just generated.</param>
     /// <param name="coverHref">onenote: URL of the new notebook's cover page.</param>
-    NextQuarterLinkResult Link(string previousNotebook, NotebookHandle next, string coverHref);
+    /// <param name="cancellationToken">
+    /// The run's cancellation. A cancel while the writer waits for the previous notebook's run lock ends the wait at once
+    /// and the link is not written (the result says so); a caller with no run to cancel passes none.
+    /// </param>
+    NextQuarterLinkResult Link(string previousNotebook, NotebookHandle next, string coverHref, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -82,13 +86,14 @@ public interface INextQuarterLinkWriter
 /// place, with a warning), unless the tool's own link from an earlier run already sits there unrecorded (a rebuilt state
 /// file recorded the edited outline instead): that one is updated in place and recorded. Anything else overlapping the
 /// slot or that spot (the user's text, ink, or a picture, file or other object placed on the page) is left alone and the
-/// link is not written. When the notebook is not open in OneNote, or the page ID no longer resolves, the notebook is opened from its
-/// folder once (or, when that folder is no longer on disk, from the location its state file records) and the page is
-/// tried again. Anchors are placed relative to the sheet image as it sits on the page, so a hidden-title or scaled
-/// notebook is linked correctly. The previous notebook's run lock (<see cref="RefreshLock"/>) is held from the read of
-/// its state file to the save, so a Refresh of that notebook never runs in between (while one holds it, the writer waits
-/// up to <see cref="LockWait"/> and then leaves the link unwritten with a warning); the state file is read again right
-/// before the save and only anchors["nextQuarter"] is changed on it, so nothing another writer recorded is lost.
+/// link is not written. When the notebook is not open in OneNote, or the page ID no longer resolves, the notebook is
+/// opened from its folder once (or, when that folder is no longer on disk, from the location its state file records) and
+/// the page is tried again. Anchors are placed relative to the sheet image as it sits on the page, so a hidden-title or
+/// scaled notebook is linked correctly. The previous notebook's run lock (<see cref="RefreshLock"/>) is held from the read
+/// of its state file to the save, so a Refresh of that notebook never runs in between (while one holds it, the writer
+/// waits up to <see cref="LockWait"/>, or until the run is cancelled, and then leaves the link unwritten with a warning);
+/// the state file is read again right before the save and only anchors["nextQuarter"] is changed on it, so nothing
+/// another writer recorded is lost.
 /// </summary>
 public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
 {
@@ -133,7 +138,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
     private readonly PageXmlOptions _options;
     private readonly ILogger _log;
     private readonly Func<DateTimeOffset> _clock;
-    private readonly Action<TimeSpan> _sleep;
+    private readonly Action<TimeSpan>? _sleep;
 
     /// <param name="app">The run's COM session.</param>
     /// <param name="sidecars">State file store.</param>
@@ -141,7 +146,10 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
     /// <param name="options">Page XML settings of the run (font family, ink color, the manifest OneNote block).</param>
     /// <param name="log">Run log.</param>
     /// <param name="clock">The clock for the run lock and its wait; the system clock unless a test injects one.</param>
-    /// <param name="sleep">How the writer waits between tries of the run lock; Thread.Sleep unless a test injects one.</param>
+    /// <param name="sleep">
+    /// How the writer waits between tries of the run lock when a test injects it (the run's cancellation is checked before
+    /// and after each wait); by default the writer waits on the cancellation token's handle, so a cancel ends the wait at once.
+    /// </param>
     public NextQuarterLinkWriter(IOneNoteApp app, ISidecarStore sidecars, Manifest manifest, PageXmlOptions options, ILogger log, Func<DateTimeOffset>? clock = null, Action<TimeSpan>? sleep = null)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -155,7 +163,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         _options = options;
         _log = log;
         _clock = clock ?? (() => DateTimeOffset.Now);
-        _sleep = sleep ?? Thread.Sleep;
+        _sleep = sleep;
     }
 
     /// <summary>The warning line for a previous notebook that did not get its link.</summary>
@@ -163,7 +171,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         string.Format(CultureInfo.InvariantCulture, "The Next quarter link was not written to the previous notebook {0}: {1}.", previousNotebook, reason.TrimEnd('.'));
 
     /// <inheritdoc />
-    public NextQuarterLinkResult Link(string previousNotebook, NotebookHandle next, string coverHref)
+    public NextQuarterLinkResult Link(string previousNotebook, NotebookHandle next, string coverHref, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(previousNotebook);
         ArgumentNullException.ThrowIfNull(next);
@@ -171,7 +179,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         string given = previousNotebook.Trim();
         try
         {
-            return LinkCore(given, next, coverHref);
+            return LinkCore(given, next, coverHref, cancellationToken);
         }
         catch (Exception ex) when (ex is OneNoteException or IOException or UnauthorizedAccessException or JsonException or XmlException or FormatException)
         {
@@ -180,7 +188,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         }
     }
 
-    private NextQuarterLinkResult LinkCore(string given, NotebookHandle next, string coverHref)
+    private NextQuarterLinkResult LinkCore(string given, NotebookHandle next, string coverHref, CancellationToken cancellationToken)
     {
         (string? folder, string sidecarPath) = Locate(given);
         string missing = folder is not null && !Directory.Exists(folder)
@@ -192,7 +200,12 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         }
 
         // The run lock is held from here to the end of the save (disposed when this method returns).
-        using RefreshLock? held = TakeLock(sidecarPath, out string? holder);
+        using RefreshLock? held = TakeLock(sidecarPath, cancellationToken, out string? holder, out bool cancelled);
+        if (cancelled)
+        {
+            return NotWritten(given, given, "the run was cancelled while it waited for another run that uses it (" + holder + ") to release its lock");
+        }
+
         if (held is null && holder is not null)
         {
             return NotWritten(given, given, string.Format(
@@ -314,11 +327,14 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
     /// <summary>
     /// Takes the previous notebook's run lock beside <paramref name="sidecarPath"/>. While a Refresh holds it, tries again
     /// every <see cref="LockPoll"/> for up to <see cref="LockWait"/>; then returns null with <paramref name="holder"/>
-    /// naming that run. A lock file that cannot be written at all returns null with no holder (logged by the lock): the
-    /// writer then goes ahead without it, and the reload before the save still keeps what another writer recorded.
+    /// naming that run. When the run is cancelled while it waits, returns null at once with <paramref name="cancelled"/>
+    /// set and <paramref name="holder"/> naming that run. A lock file that cannot be written at all returns null with no
+    /// holder (logged by the lock): the writer then goes ahead without it, and the reload before the save still keeps what
+    /// another writer recorded.
     /// </summary>
-    private RefreshLock? TakeLock(string sidecarPath, out string? holder)
+    private RefreshLock? TakeLock(string sidecarPath, CancellationToken cancellationToken, out string? holder, out bool cancelled)
     {
+        cancelled = false;
         DateTimeOffset started = _clock();
         while (true)
         {
@@ -335,8 +351,32 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
             }
 
             _log.Information("A Refresh of the notebook of {Path} holds its lock ({Holder}); waiting for it", sidecarPath, holder);
-            _sleep(LockPoll);
+            if (WaitCancelled(cancellationToken))
+            {
+                cancelled = true;
+                return null;
+            }
         }
+    }
+
+    /// <summary>
+    /// Waits <see cref="LockPoll"/> before the next try of the run lock; true when the run was cancelled before or during
+    /// the wait. Without a test hook the wait is on the token's handle, so a cancel ends it at once.
+    /// </summary>
+    private bool WaitCancelled(CancellationToken cancellationToken)
+    {
+        if (_sleep is null)
+        {
+            return cancellationToken.WaitHandle.WaitOne(LockPoll);
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return true;
+        }
+
+        _sleep(LockPoll);
+        return cancellationToken.IsCancellationRequested;
     }
 
     /// <summary>Two warning sentences as one line; the first may be absent.</summary>

@@ -603,6 +603,35 @@ public class GenerateOrchestratorTests
         plain.NextQuarterLink.Should().BeNull();
     }
 
+    /// <summary>
+    /// Round 4 onenote-5: the link step gets the run's cancellation token, so a cancel while the writer waits for the
+    /// previous notebook's run lock ends that wait instead of being ignored for up to 30 seconds.
+    /// </summary>
+    [Fact]
+    public void The_link_step_is_given_the_runs_cancellation_token()
+    {
+        TokenRecordingLinks links = new();
+        Harness h = new() { NextQuarterLinks = () => links };
+        using CancellationTokenSource run = new();
+
+        GenerateResult result = h.Run(h.Request(h.Options() with { PreviousNotebook = "/notebooks/SFP Q4 2026" }), run.Token);
+
+        result.Success.Should().BeTrue(result.Error);
+        links.Tokens.Should().ContainSingle().Which.Should().Be(run.Token);
+    }
+
+    /// <summary>A link writer that records the cancellation token of each call and writes nothing.</summary>
+    private sealed class TokenRecordingLinks : INextQuarterLinkWriter
+    {
+        public List<CancellationToken> Tokens { get; } = new();
+
+        public NextQuarterLinkResult Link(string previousNotebook, NotebookHandle next, string coverHref, CancellationToken cancellationToken = default)
+        {
+            Tokens.Add(cancellationToken);
+            return new NextQuarterLinkResult { Outcome = NextQuarterLinkOutcome.Unchanged, PreviousNotebook = previousNotebook };
+        }
+    }
+
     [Fact]
     public void Render_only_writes_one_png_per_page_and_a_pages_json_index_without_touching_onenote()
     {
