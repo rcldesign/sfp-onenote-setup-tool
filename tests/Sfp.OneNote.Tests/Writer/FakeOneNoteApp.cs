@@ -370,7 +370,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
             return "onenote:#notebook-id=" + id + "&end";
         }
 
-        throw new OneNoteException("GetHyperlinkToObject", OneNoteHResults.NoHyperlinkToObject, "No object " + id, null);
+        throw new OneNoteException("GetHyperlinkToObject", OneNoteHResults.ObjectDoesNotExist, "No object " + id, null);
     }
 
     public void SyncHierarchy(string id) => Record("SyncHierarchy", id);

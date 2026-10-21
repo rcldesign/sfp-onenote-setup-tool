@@ -5,7 +5,9 @@ namespace Sfp.OneNote.Com;
 
 /// <summary>
 /// HRESULT values the wrapper understands and the rule that maps a COM failure to a typed exception.
-/// The 0x8004xxxx values are the OneNote 2013 developer reference's error codes; the others are standard COM.
+/// The 0x8004xxxx values are Microsoft's published table, "Error codes (OneNote)" in the OneNote developer reference
+/// (learn.microsoft.com/office/client-developer/onenote/error-codes-onenote), every row with its published name; the
+/// others are standard COM.
 /// </summary>
 public static class OneNoteHResults
 {
@@ -20,7 +22,7 @@ public static class OneNoteHResults
     public const int ObjectNotConnected = unchecked((int)0x800401FD);
     public const int MonikerUnavailable = unchecked((int)0x800401E3);
 
-    // OneNote: XML and content insertion.
+    // OneNote: Microsoft's "Error codes (OneNote)" table, in its order (there is no 0x80042021).
     public const int MalformedXml = unchecked((int)0x80042000);
     public const int InvalidXml = unchecked((int)0x80042001);
     public const int CreatingSection = unchecked((int)0x80042002);
@@ -41,15 +43,37 @@ public static class OneNoteHResults
     public const int GroupDoesNotExist = unchecked((int)0x80042011);
     public const int PageDoesNotExistInGroup = unchecked((int)0x80042012);
     public const int NoActiveSelection = unchecked((int)0x80042013);
-    public const int NoHyperlinkToObject = unchecked((int)0x80042014);
-    public const int ObjectDoesNotExist = unchecked((int)0x80042015);
-    public const int NotebookDoesNotExist = unchecked((int)0x80042016);
+    public const int ObjectDoesNotExist = unchecked((int)0x80042014);
+    public const int NotebookDoesNotExist = unchecked((int)0x80042015);
+    public const int InsertingFile = unchecked((int)0x80042016);
+    public const int InvalidName = unchecked((int)0x80042017);
+    public const int FolderDoesNotExist = unchecked((int)0x80042018);
+    public const int InvalidQuery = unchecked((int)0x80042019);
     public const int FileAlreadyExists = unchecked((int)0x8004201A);
     public const int SectionEncryptedAndLocked = unchecked((int)0x8004201B);
     public const int DisabledByPolicy = unchecked((int)0x8004201C);
     public const int NotYetSynchronized = unchecked((int)0x8004201D);
     public const int LegacySection = unchecked((int)0x8004201E);
     public const int MergeFailed = unchecked((int)0x8004201F);
+    public const int InvalidXmlSchema = unchecked((int)0x80042020);
+    public const int FutureContentLoss = unchecked((int)0x80042022);
+    public const int TimeOut = unchecked((int)0x80042023);
+    public const int RecordingInProgress = unchecked((int)0x80042024);
+    public const int UnknownLinkedNoteState = unchecked((int)0x80042025);
+    public const int NoShortNameForLinkedNote = unchecked((int)0x80042026);
+    public const int NoFriendlyNameForLinkedNote = unchecked((int)0x80042027);
+    public const int InvalidLinkedNoteUri = unchecked((int)0x80042028);
+    public const int InvalidLinkedNoteThumbnail = unchecked((int)0x80042029);
+    public const int ImportLntThumbnailFailed = unchecked((int)0x8004202A);
+    public const int UnreadDisabledForNotebook = unchecked((int)0x8004202B);
+    public const int InvalidSelection = unchecked((int)0x8004202C);
+    public const int ConvertFailed = unchecked((int)0x8004202D);
+    public const int RecycleBinEditFailed = unchecked((int)0x8004202E);
+    public const int IMConversationTypeInvalid = unchecked((int)0x8004202F);
+
+    /// <summary>"A modal dialog is blocking the app": retried like busy (<see cref="IsBusy"/>), then reported as a dialog to close.</summary>
+    public const int AppInModalUI = unchecked((int)0x80042030);
+    public const int PublishFormatUnsupportedForLabels = unchecked((int)0x80042031);
 
     private static readonly IReadOnlyDictionary<int, string> Names = new Dictionary<int, string>
     {
@@ -82,22 +106,53 @@ public static class OneNoteHResults
         [GroupDoesNotExist] = "hrGroupDoesNotExist",
         [PageDoesNotExistInGroup] = "hrPageDoesNotExistInGroup",
         [NoActiveSelection] = "hrNoActiveSelection",
-        [NoHyperlinkToObject] = "hrNoHyperlinkToObject",
         [ObjectDoesNotExist] = "hrObjectDoesNotExist",
         [NotebookDoesNotExist] = "hrNotebookDoesNotExist",
+        [InsertingFile] = "hrInsertingFile",
+        [InvalidName] = "hrInvalidName",
+        [FolderDoesNotExist] = "hrFolderDoesNotExist",
+        [InvalidQuery] = "hrInvalidQuery",
         [FileAlreadyExists] = "hrFileAlreadyExists",
         [SectionEncryptedAndLocked] = "hrSectionEncryptedAndLocked",
         [DisabledByPolicy] = "hrDisabledByPolicy",
         [NotYetSynchronized] = "hrNotYetSynchronized",
         [LegacySection] = "hrLegacySection",
         [MergeFailed] = "hrMergeFailed",
+        [InvalidXmlSchema] = "hrInvalidXMLSchema",
+        [FutureContentLoss] = "hrFutureContentLoss",
+        [TimeOut] = "hrTimeOut",
+        [RecordingInProgress] = "hrRecordingInProgress",
+        [UnknownLinkedNoteState] = "hrUnknownLinkedNoteState",
+        [NoShortNameForLinkedNote] = "hrNoShortNameForLinkedNote",
+        [NoFriendlyNameForLinkedNote] = "hrNoFriendlyNameForLinkedNote",
+        [InvalidLinkedNoteUri] = "hrInvalidLinkedNoteUri",
+        [InvalidLinkedNoteThumbnail] = "hrInvalidLinkedNoteThumbnail",
+        [ImportLntThumbnailFailed] = "hrImportLNTThumbnailFailed",
+        [UnreadDisabledForNotebook] = "hrUnreadDisabledForNotebook",
+        [InvalidSelection] = "hrInvalidSelection",
+        [ConvertFailed] = "hrConvertFailed",
+        [RecycleBinEditFailed] = "hrRecycleBinEditFailed",
+        [IMConversationTypeInvalid] = "hrIMConversationTypeInvalid",
+        [AppInModalUI] = "hrAppInModalUI",
+        [PublishFormatUnsupportedForLabels] = "hrPublishFormatUnsupportedForLabels",
     };
 
     /// <summary>The call name of creating the OneNote.Application object, as the log and the exceptions carry it.</summary>
     public const string ActivateCall = "activate";
 
-    /// <summary>True for the two results that mean "OneNote is busy, call again": the wrapper retries once after a delay.</summary>
-    public static bool IsBusy(int hresult) => hresult is RpcCallRejected or RpcServerCallRetryLater;
+    /// <summary>
+    /// True for the results that mean "OneNote cannot take the call now, call again": the two COM busy results and
+    /// hrAppInModalUI (a dialog in OneNote blocks it). The wrapper retries once after a delay.
+    /// </summary>
+    public static bool IsBusy(int hresult) => hresult is RpcCallRejected or RpcServerCallRetryLater or AppInModalUI;
+
+    /// <summary>
+    /// The message of a call still refused after the retry: a dialog to close for hrAppInModalUI, else "busy". Used by
+    /// <see cref="OneNoteBusyException"/>.
+    /// </summary>
+    public static string BusyMessage(string call, int hresult) => hresult == AppInModalUI
+        ? string.Format(CultureInfo.InvariantCulture, "OneNote is showing a dialog and refused {0} twice ({1}). Close the dialog OneNote is showing, then retry.", call, Describe(hresult))
+        : string.Format(CultureInfo.InvariantCulture, "OneNote is busy and rejected {0} twice ({1}).", call, Describe(hresult));
 
     /// <summary>True when the failure means OneNote desktop is not installed, not registered or not running.</summary>
     public static bool IsUnavailable(int hresult) =>

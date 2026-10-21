@@ -68,6 +68,26 @@ public class OneNoteSessionTests
     }
 
     [Fact]
+    public void A_modal_dialog_is_retried_once_and_then_reported_as_a_dialog_to_close()
+    {
+        (OneNoteSession session, FakeOneNoteTarget fake, _, _) = Create();
+        using (session)
+        {
+            fake.FailNext(OneNoteHResults.AppInModalUI);
+            session.SyncHierarchy("{nb}");
+            fake.CallCount("SyncHierarchy").Should().Be(2, "a dialog the user closes in time lets the retry through");
+
+            fake.FailNext(OneNoteHResults.AppInModalUI, OneNoteHResults.AppInModalUI);
+            Action act = () => session.GetHierarchy(null, HierarchyScope.Notebooks);
+
+            OneNoteBusyException ex = act.Should().Throw<OneNoteBusyException>().Which;
+            ex.HResult.Should().Be(OneNoteHResults.AppInModalUI);
+            ex.Message.Should().Contain("hrAppInModalUI (0x80042030)").And.Contain("Close the dialog OneNote is showing, then retry.");
+            fake.CallCount("GetHierarchy").Should().Be(2, "exactly one retry is made");
+        }
+    }
+
+    [Fact]
     public void The_retry_waits_the_configured_delay()
     {
         FakeOneNoteTarget fake = new();

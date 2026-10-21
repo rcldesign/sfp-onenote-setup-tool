@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace Sfp.OneNote.Com;
 
 /// <summary>A OneNote COM call failed. <see cref="Exception.HResult"/> holds the COM HRESULT; <see cref="Call"/> names the call.</summary>
@@ -96,7 +94,10 @@ public sealed class OneNoteXmlRejectedException : OneNoteException
     public string? Xml { get; }
 }
 
-/// <summary>OneNote reported RPC_E_CALL_REJECTED or RPC_E_SERVERCALL_RETRYLATER twice in a row for one call.</summary>
+/// <summary>
+/// OneNote refused one call twice in a row with a busy result (<see cref="OneNoteHResults.IsBusy"/>): RPC_E_CALL_REJECTED,
+/// RPC_E_SERVERCALL_RETRYLATER, or hrAppInModalUI, whose message asks for the dialog to be closed.
+/// </summary>
 public sealed class OneNoteBusyException : OneNoteException
 {
     public OneNoteBusyException()
@@ -114,7 +115,7 @@ public sealed class OneNoteBusyException : OneNoteException
     }
 
     public OneNoteBusyException(string call, int hresult, Exception? innerException)
-        : base(call, hresult, string.Format(CultureInfo.InvariantCulture, "OneNote is busy and rejected {0} twice ({1}).", call, OneNoteHResults.Describe(hresult)), innerException)
+        : base(call, hresult, OneNoteHResults.BusyMessage(call, hresult), innerException)
     {
     }
 }

@@ -711,7 +711,7 @@ public class GenerateOrchestratorTests
     }
 
     private static readonly OneNoteException OpenHierarchyRefused =
-        new("OpenHierarchy", OneNoteHResults.NotebookDoesNotExist, "OneNote call OpenHierarchy failed: hrNotebookDoesNotExist (0x80042016)", null);
+        new("OpenHierarchy", OneNoteHResults.NotebookDoesNotExist, "OneNote call OpenHierarchy failed: hrNotebookDoesNotExist (0x80042015)", null);
 
     private static FakePreflight NoOpenNotebooks() =>
         new(new PreflightResult(Array.Empty<(string, int)>(), Array.Empty<string>()) { NoOpenNotebooks = true });
@@ -727,7 +727,7 @@ public class GenerateOrchestratorTests
         result.Success.Should().BeFalse();
         result.ExitCode.Should().Be(3);
         result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
-        result.Error.Should().Contain(GenerateText.SignInMessage).And.Contain("0x80042016");
+        result.Error.Should().Contain(GenerateText.SignInMessage).And.Contain("0x80042015");
         result.OutputPath.Should().BeNull("no notebook was created");
         h.Writer.Written.Should().BeEmpty();
         h.Renderer.Rendered.Should().BeEmpty();
@@ -744,7 +744,7 @@ public class GenerateOrchestratorTests
 
         result.ExitCode.Should().Be(5);
         result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
-        result.Error.Should().Contain("0x80042016").And.NotContain(GenerateText.SignInMessage);
+        result.Error.Should().Contain("0x80042015").And.NotContain(GenerateText.SignInMessage);
     }
 
     [Fact]
@@ -797,7 +797,7 @@ public class GenerateOrchestratorTests
         else
         {
             result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
-            result.Error.Should().Contain("0x80042016");
+            result.Error.Should().Contain("0x80042015");
             (result.Error!.Contains(GenerateText.SignInMessage, StringComparison.Ordinal)).Should().Be(exitCode == 3);
             app.WrittenPages.Should().BeEmpty();
         }
