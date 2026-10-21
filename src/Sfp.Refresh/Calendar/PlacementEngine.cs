@@ -31,7 +31,7 @@ public sealed record PlacementOptions
 /// calendar slot of that day's pages, including the empty ones, so the diff (M5.3) can see which slots are in scope:
 /// daily "timeBlockEvent:{hour}" rows for each hour of the time-block window plus "allDayBand", the week's
 /// "overviewDay:{weekdayIndex}" column and the month's "calendarEvents:{yyyy-MM-dd}" cell lines.
-/// Widths and line caps come from the manifest; nothing measured lives here.
+/// Widths and line caps come from the manifest (a Time Blocks row holds the lines its pitch fits); nothing measured lives here.
 /// </summary>
 public sealed class PlacementEngine
 {
@@ -132,10 +132,11 @@ public sealed class PlacementEngine
             }
         }
 
+        int rowLines = RowLines(column);
         for (int h = window.StartHour; h < window.EndHour; h++)
         {
-            IEnumerable<string> lines = Lines(primary, h).Concat(Lines(continuation, h));
-            slots.Add(new CalendarSlotText(dayPage, CalendarSlots.TimeBlockEvent(h), day, string.Join(LineSeparator, lines)));
+            List<string> lines = Lines(primary, h).Concat(Lines(continuation, h)).ToList();
+            slots.Add(new CalendarSlotText(dayPage, CalendarSlots.TimeBlockEvent(h), day, string.Join(LineSeparator, Cap(lines, rowLines))));
         }
 
         BandSlot band = manifest.Slots.AllDayBand;
@@ -166,6 +167,13 @@ public sealed class PlacementEngine
         List<string> lines = allDay.Select(e => Fit(e.Title, cell.W, cell.SizePt)).ToList();
         return string.Join(LineSeparator, Cap(lines, cell.MaxLines));
     }
+
+    /// <summary>
+    /// How many event lines one Time Blocks row holds: as many as fit its pitch in the window (floor(pitch / line
+    /// height), at least one), so a busy hour never runs into the next row; no cap when the manifest gives no line height.
+    /// </summary>
+    private int RowLines(TimeBlocksSlot column) =>
+        column.EventLineHeight > 0 ? Math.Max(1, (int)Math.Floor(column.PitchFor(window.RowCount) / column.EventLineHeight)) : 0;
 
     /// <summary>At most <paramref name="maxLines"/> lines: when there are more, the last visible line is "+n more".</summary>
     private IReadOnlyList<string> Cap(List<string> lines, int maxLines)

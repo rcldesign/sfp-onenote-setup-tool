@@ -105,6 +105,37 @@ public class PlacementEngineTests
     }
 
     [Fact]
+    public void A_time_block_row_holds_the_lines_its_pitch_fits_and_ends_with_a_more_line()
+    {
+        Manifest m = TestManifest.Load();
+        TimeBlocksSlot column = m.Slots.TimeBlocks;
+        int fits = (int)Math.Floor(column.PitchFor(TimeBlockWindow.Default.RowCount) / column.EventLineHeight);
+        fits.Should().Be(3, "the 16 rows of the default window are 33.9 pt apart and an event line is 10 pt");
+        CalendarEvent[] busy = { Timed("Standup", 9, 0, 9, 15), Timed("Review", 9, 15, 9, 30), Timed("Call", 9, 30, 9, 45), Timed("Sync", 9, 45, 10, 0) };
+
+        string[] row = TextOf(Engine().Place(Day, Day, busy, Targets), DayPage, "timeBlockEvent:9").Split('\n');
+
+        row.Should().Equal("9:00 Standup", "9:15 Review", "+2 more");
+
+        int fitsInAFullDay = (int)Math.Floor(column.PitchFor(24) / column.EventLineHeight);
+        fitsInAFullDay.Should().Be(2, "24 rows are 22.6 pt apart");
+        TextOf(Engine(new TimeBlockWindow(0, 24)).Place(Day, Day, busy, Targets), DayPage, "timeBlockEvent:9").Split('\n')
+            .Should().Equal("9:00 Standup", "+3 more");
+        TextOf(Engine().Place(Day, Day, busy.Take(3).ToArray(), Targets), DayPage, "timeBlockEvent:9").Split('\n')
+            .Should().HaveCount(3, "lines that fit are all shown");
+    }
+
+    [Fact]
+    public void Continuation_lines_count_toward_the_row_cap()
+    {
+        CalendarEvent[] events = { Timed("Planning", 8, 0, 10, 30), Timed("Offsite", 8, 30, 11, 0), Timed("Call", 9, 0, 9, 30), Timed("Sync", 9, 30, 10, 0) };
+
+        string[] row = TextOf(Engine().Place(Day, Day, events, Targets), DayPage, "timeBlockEvent:9").Split('\n');
+
+        row.Should().Equal(new[] { "9:00 Call", "9:30 Sync", "+2 more" }, "the two continuations are past the cap and counted in the more line");
+    }
+
+    [Fact]
     public void An_event_ending_part_way_through_an_hour_still_covers_that_hour()
     {
         IReadOnlyList<CalendarSlotText> slots = Engine().Place(Day, Day, new[] { Timed("Review", 9, 30, 11, 30) }, Targets);
