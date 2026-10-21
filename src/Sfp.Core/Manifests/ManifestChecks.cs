@@ -3,10 +3,10 @@ using System.Globalization;
 namespace Sfp.Core.Manifests;
 
 /// <summary>
-/// Structural sanity and token validation run on every loaded manifest: page size and count, the nine-page week run,
-/// PDF page numbers inside the document, known page names in every <c>appliesTo</c> list and page template, and the
-/// PRD token set in every section name and page title pattern. Each failure is a <see cref="ManifestException"/>
-/// naming the manifest and the offending value.
+/// Structural sanity and token validation run on every loaded manifest: no null where the record needs a value, page
+/// size and count, the nine-page week run, PDF page numbers inside the document, known page names in every
+/// <c>appliesTo</c> list and page template, and the PRD token set in every section name and page title pattern. Each
+/// failure is a <see cref="ManifestException"/> naming the manifest and the offending value.
 /// </summary>
 public static class ManifestChecks
 {
@@ -16,11 +16,16 @@ public static class ManifestChecks
     /// <summary>OneNote supports page levels 1 to 3.</summary>
     public const int MaxPageLevel = 3;
 
-    /// <summary>Runs every check; <paramref name="sourceName"/> names the manifest in error messages.</summary>
+    /// <summary>
+    /// Runs every check; <paramref name="sourceName"/> names the manifest in error messages. The null walk runs first
+    /// (a user manifest's {"slots": {"date": null}} is reported as "$.slots.date must not be null" instead of failing
+    /// later with a NullReferenceException), so the remaining checks can rely on every non-nullable member.
+    /// </summary>
     public static void Run(Manifest manifest, string sourceName)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(sourceName);
+        ManifestNullChecks.Run(manifest, sourceName);
         CheckPage(manifest, sourceName);
         CheckPageTypes(manifest, sourceName);
         CheckSlots(manifest, sourceName);
@@ -123,10 +128,59 @@ public static class ManifestChecks
         }
     }
 
+    /// <summary>
+    /// The tokens the notebook name pattern may use: the quarter tokens {Qn} and {YYYY}, the only values the plan
+    /// builder (and every other place that names a notebook) supplies for it.
+    /// </summary>
+    public static IReadOnlyList<string> NamePatternTokens { get; } = InCanonicalOrder(Tokens.QuarterLabel, Tokens.Year);
+
+    /// <summary>
+    /// The tokens a section name may use: {Qn} and {YYYY}, plus the week tokens {NN}, {start} and {end} when the
+    /// section repeats per week (eachWeek). These are exactly the values the plan builder supplies for a section name.
+    /// </summary>
+    public static IReadOnlyList<string> SectionNameTokens(bool eachWeek) =>
+        eachWeek ? SectionTokensEachWeek : SectionTokensOnce;
+
+    /// <summary>
+    /// The tokens a page title may use, by context: the quarter and date tokens ({Qn}, {YYYY}, {Ddd}, {Mon}, {D},
+    /// {Month}) everywhere; {NN}, {start} and {end} inside an eachWeek section; {n} on objective templates; {Note} on
+    /// notes templates with eachNote. A title that passes this check always expands in the plan builder.
+    /// </summary>
+    public static IReadOnlyList<string> TitleTokens(PageTemplate page, bool inEachWeekSection)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        List<string> tokens = new(QuarterAndDateTokens);
+        if (inEachWeekSection)
+        {
+            tokens.AddRange(WeekTokens);
+        }
+
+        if (page.Type == PageNames.Objective)
+        {
+            tokens.Add(Tokens.ObjectiveNumber);
+        }
+
+        if (page.Type == PageNames.Notes && page.EachNote)
+        {
+            tokens.Add(Tokens.NoteName);
+        }
+
+        return InCanonicalOrder(tokens.ToArray());
+    }
+
+    private static readonly string[] WeekTokens = { Tokens.WeekNumber, Tokens.WeekStart, Tokens.WeekEnd };
+
+    private static readonly IReadOnlyList<string> QuarterAndDateTokens = InCanonicalOrder(
+        Tokens.QuarterLabel, Tokens.Year, Tokens.DayAbbrev, Tokens.MonthAbbrev, Tokens.DayOfMonth, Tokens.MonthName);
+
+    private static readonly IReadOnlyList<string> SectionTokensOnce = InCanonicalOrder(Tokens.QuarterLabel, Tokens.Year);
+
+    private static readonly IReadOnlyList<string> SectionTokensEachWeek = InCanonicalOrder(
+        Tokens.QuarterLabel, Tokens.Year, Tokens.WeekNumber, Tokens.WeekStart, Tokens.WeekEnd);
+
     private static void CheckNotebook(Manifest m, string source)
     {
-        string[] patternTokens = Tokens.All.Where(t => t != Tokens.NoteName).ToArray();
-        ValidatePattern(source, "notebook.namePattern", m.Notebook.NamePattern, patternTokens);
+        ValidatePattern(source, "notebook.namePattern", m.Notebook.NamePattern, NamePatternTokens, "in the notebook name pattern");
 
         if (m.Notebook.Sections.Count == 0)
         {
@@ -137,7 +191,8 @@ public static class ManifestChecks
         {
             SectionTemplate section = m.Notebook.Sections[s];
             string sectionPath = $"notebook.sections[{Int(s)}]";
-            ValidatePattern(source, $"{sectionPath}.name", section.Name, patternTokens);
+            string sectionContext = section.EachWeek ? "in the name of a section with eachWeek" : "in the name of a section without eachWeek";
+            ValidatePattern(source, $"{sectionPath}.name", section.Name, SectionNameTokens(section.EachWeek), sectionContext);
 
             if (section.Pages.Count == 0)
             {
@@ -160,24 +215,41 @@ public static class ManifestChecks
 
                 if (page.Title is not null)
                 {
-                    IEnumerable<string> allowed = page.EachNote ? Tokens.All : patternTokens;
-                    ValidatePattern(source, $"{pagePath}.title", page.Title, allowed);
+                    string pageContext = $"on a '{page.Type}' page{(page.EachNote ? " with eachNote" : "")} {(section.EachWeek ? "inside" : "outside")} an eachWeek section";
+                    ValidatePattern(source, $"{pagePath}.title", page.Title, TitleTokens(page, section.EachWeek), pageContext);
                 }
             }
         }
     }
 
-    private static void ValidatePattern(string source, string path, string pattern, IEnumerable<string> allowed)
+    /// <summary>
+    /// Rejects a pattern with an unknown token or a stray brace (the PRD token set), then any known token that has no
+    /// value in this context, naming the path, the token, the pattern, the context and the tokens available there.
+    /// </summary>
+    private static void ValidatePattern(string source, string path, string pattern, IReadOnlyList<string> available, string context)
     {
         try
         {
-            TokenExpander.Validate(pattern, allowed);
+            TokenExpander.Validate(pattern, Tokens.All);
         }
         catch (ManifestException ex)
         {
             throw new ManifestException($"Manifest '{source}': {path}: {ex.Message}", ex);
         }
+
+        foreach (string token in TokenExpander.TokensIn(pattern))
+        {
+            if (!available.Contains(token, StringComparer.Ordinal))
+            {
+                string list = string.Join(", ", available.Select(t => "{" + t + "}"));
+                Fail(source, $"{path}: token {{{token}}} in '{pattern}' has no value {context}. Tokens available there: {list}.");
+            }
+        }
     }
+
+    /// <summary>The given tokens in the canonical order of <see cref="Tokens.All"/>, each once.</summary>
+    private static IReadOnlyList<string> InCanonicalOrder(params string[] tokens) =>
+        Tokens.All.Where(t => tokens.Contains(t, StringComparer.Ordinal)).ToArray();
 
     private static IEnumerable<(string Name, FixedPagesSpec Spec)> FixedPageTypes(PageTypesSpec types)
     {

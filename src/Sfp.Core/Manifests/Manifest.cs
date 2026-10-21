@@ -88,13 +88,17 @@ public sealed record ColorSpec
     /// <summary>Three section tints cycling by month.</summary>
     public required IReadOnlyList<string> SectionTints { get; init; }
 
-    public double GreyedInkOpacity { get; init; } = 0.4;
+    /// <summary>Ink opacity of out-of-quarter and out-of-month dates (the PRD's 40%).</summary>
+    public required double GreyedInkOpacity { get; init; }
 
-    public double PrefillInkOpacity { get; init; } = 0.6;
+    /// <summary>Ink opacity of propagated pre-fills such as standing goals (the PRD's 60%).</summary>
+    public required double PrefillInkOpacity { get; init; }
 
-    public double EventInkOpacity { get; init; } = 0.7;
+    /// <summary>Ink opacity of calendar event lines (the PRD's 70%).</summary>
+    public required double EventInkOpacity { get; init; }
 
-    public double CounterInkOpacity { get; init; } = 0.6;
+    /// <summary>Ink opacity of the day counter (the PRD's 60%).</summary>
+    public required double CounterInkOpacity { get; init; }
 }
 
 public sealed record PageTypesSpec
@@ -311,11 +315,14 @@ public sealed record DayGridSlot
 
     public required double BoxPt { get; init; }
 
-    public double ColumnPitch { get; init; } = 121.1;
+    /// <summary>Width of one grid cell (the distance between column origins).</summary>
+    public required double ColumnPitch { get; init; }
 
-    public double RowPitch { get; init; } = 120;
+    /// <summary>Height of one grid cell (the distance between row origins).</summary>
+    public required double RowPitch { get; init; }
 
-    public double DayHeaderY { get; init; } = 92;
+    /// <summary>Baseline of the printed Monday to Sunday headers above the grid.</summary>
+    public required double DayHeaderY { get; init; }
 
     public TrackerStripSpec? TrackerStrip { get; init; }
 
@@ -424,11 +431,14 @@ public sealed record TimeBlocksSlot
 
     public required double LabelSizePt { get; init; }
 
-    public double PrintedLabelSizePt { get; init; } = 7;
+    /// <summary>Size of the hour labels the PDF prints in the column (7 pt).</summary>
+    public required double PrintedLabelSizePt { get; init; }
 
-    public int PrintedRows { get; init; } = 24;
+    /// <summary>Number of hour rules the PDF prints in the column (25: 12, 1 ... 12, 1 ... 12).</summary>
+    public required int PrintedRows { get; init; }
 
-    public double PrintedPitch { get; init; } = 22.6;
+    /// <summary>Distance between the printed hour rules.</summary>
+    public required double PrintedPitch { get; init; }
 
     public required double RuleWidthPt { get; init; }
 
@@ -829,7 +839,11 @@ public sealed record PageTemplate
 
     public required int Level { get; init; }
 
-    /// <summary>For fixed multi-page types (annual): which of the type's PDF pages, 0-based.</summary>
+    /// <summary>
+    /// Which instance a template that does not repeat stands for, 0-based (default 0): for annual (and the other fixed
+    /// types) which of the type's PDF pages; for objective which objective (0 is Objective 1); for calendar and
+    /// monthlyReview which quarter month; for notes which configured Notes page name.
+    /// </summary>
     public int? Index { get; init; }
 
     /// <summary>Repeat per instance: objectives 1 to 8, or days of the week.</summary>

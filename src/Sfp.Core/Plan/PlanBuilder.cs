@@ -23,6 +23,10 @@ namespace Sfp.Core.Plan;
 /// year), NN, start and end on week pages, n on objective pages, Note on notes pages, plus the
 /// <see cref="Tokens.Extra"/> values. dayOfQuarter on an out-of-quarter day page is the signed offset from the
 /// quarter start (0 for the day before it, length + 1 for the day after), with inQuarter "false".
+/// Errors: a manifest the loader accepted can still make a plan that cannot exist, reported as
+/// <see cref="ManifestException"/> (a week page outside an eachWeek section, an index outside its instances, a page key
+/// produced twice, checked whatever the Links option); Notes page names that are blank or collide are an
+/// <see cref="ArgumentException"/> from <see cref="ValidateNotesPages"/>.
 /// </remarks>
 public sealed class PlanBuilder : IPlanBuilder
 {
@@ -82,7 +86,34 @@ public sealed class PlanBuilder : IPlanBuilder
             }
         }
 
+        CheckUniqueKeys(sections);
         return new NotebookPlan(NotebookName(m, q, o), q, sections, _links.Build(m, q, sections, o));
+    }
+
+    /// <summary>
+    /// Checks the Notes page names a notes template expands: none may be blank, and no two may give the same page key
+    /// ("Ideas" and "ideas" both give notes:ideas). Throws <see cref="ArgumentException"/> naming the entry or the pair.
+    /// </summary>
+    public static void ValidateNotesPages(IReadOnlyList<string> names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        Dictionary<PageKey, string> byKey = new();
+        for (int i = 0; i < names.Count; i++)
+        {
+            string? name = names[i];
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                throw new ArgumentException($"Notes page name {Int(i + 1)} of {Int(names.Count)} is blank; every Notes page needs a name.");
+            }
+
+            PageKey key = PageKey.Notes(name);
+            if (byKey.TryGetValue(key, out string? earlier))
+            {
+                throw new ArgumentException($"Notes page names '{earlier.Trim()}' and '{name.Trim()}' both give the page key '{key}'; give each Notes page a distinct name.");
+            }
+
+            byKey[key] = name;
+        }
     }
 
     /// <summary>The notebook name: the option override when given, else the manifest name pattern with the quarter tokens ("SFP Q1 2027").</summary>
@@ -197,7 +228,7 @@ public sealed class PlanBuilder : IPlanBuilder
     private static IEnumerable<PageSpec> MonthPages(PageTemplate t, Context ctx, Week? week, PageType type, string pdfPageName)
     {
         Manifest m = ctx.Manifest;
-        foreach (int i in Instances(t.EachMonth, t.Index + 1, ctx.Months.Count, t.Type).Select(n => n - 1))
+        foreach (int i in Instances(t.EachMonth, t.Index, ctx.Months.Count, t.Type).Select(n => n - 1))
         {
             (int year, int month) = ctx.Months[i];
             DateOnly first = new(year, month, 1);
@@ -223,28 +254,33 @@ public sealed class PlanBuilder : IPlanBuilder
     private static IEnumerable<PageSpec> NotesPages(PageTemplate t, Context ctx, Week? week)
     {
         IReadOnlyList<string> names = ctx.Options.NotesPages;
-        foreach (int n in Instances(t.EachNote, t.Index + 1, names.Count, PageNames.Notes))
+        ValidateNotesPages(names);
+        foreach (int n in Instances(t.EachNote, t.Index, names.Count, PageNames.Notes))
         {
             string name = names[n - 1].Trim();
             yield return Page(t, ctx, week, PageType.Notes, PageKey.Notes(name), null, PageNames.Notes, ctx.Quarter.Start, note: name);
         }
     }
 
-    /// <summary>1-based instance numbers: all of them when the template repeats, else the one at the template index (default the first).</summary>
-    private static IEnumerable<int> Instances(bool each, int? single1, int count, string typeName)
+    /// <summary>
+    /// 1-based instance numbers: all of them when the template repeats, else the one at the template's 0-based
+    /// <see cref="PageTemplate.Index"/> (default 0, the first), the same rule as the annual and other fixed types.
+    /// </summary>
+    private static IEnumerable<int> Instances(bool each, int? index0, int count, string typeName)
     {
         if (each)
         {
             return Enumerable.Range(1, count);
         }
 
-        int n = single1 ?? 1;
-        if (n < 1 || n > count)
+        int index = index0 ?? 0;
+        if (index < 0 || index >= count)
         {
-            throw new ManifestException($"Page template '{typeName}' asks for instance {Int(n)} but only {Int(count)} exist.");
+            string range = count == 0 ? "there are none" : $"the valid indexes are 0 to {Int(count - 1)}";
+            throw new ManifestException($"Page template '{typeName}' index {Int(index)} is out of range: {range}.");
         }
 
-        return new[] { n };
+        return new[] { index + 1 };
     }
 
     private static PageSpec Page(
@@ -311,6 +347,28 @@ public sealed class PlanBuilder : IPlanBuilder
         string pattern = t.Title ?? DefaultTitles[t.Type];
         string title = TokenExpander.Expand(pattern, tokens);
         return new PageSpec(key, type, title, t.Level, pdfPage, date, tokens);
+    }
+
+    /// <summary>
+    /// Every page key appears once, whatever the Links option (the link graph's own check only runs with links on).
+    /// A template outside a repeating context, such as a cover inside an eachWeek section, would repeat its page.
+    /// </summary>
+    private static void CheckUniqueKeys(IReadOnlyList<SectionSpec> sections)
+    {
+        Dictionary<PageKey, string> sectionOf = new();
+        foreach (SectionSpec section in sections)
+        {
+            foreach (PageSpec page in section.Pages)
+            {
+                if (!sectionOf.TryAdd(page.Key, section.Name))
+                {
+                    throw new ManifestException(
+                        $"The notebook template produces page key '{page.Key}' twice (in sections '{sectionOf[page.Key]}' and '{section.Name}'); "
+                        + "every page needs its own key, so a template must not repeat a page (a cover inside an eachWeek section, for example) "
+                        + "or produce a page that another template already produces.");
+                }
+            }
+        }
     }
 
     private static void Add(Dictionary<string, string> target, IReadOnlyDictionary<string, string> source)

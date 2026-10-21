@@ -148,6 +148,40 @@ public class LinkGraphBuilderTests
     }
 
     [Fact]
+    public void A_quarter_whose_third_month_overflows_leaves_its_last_week_without_a_calendar_label()
+    {
+        // Accepted in docs/decisions.md ("A sixth-row overflow week has no calendar label"). March 2031 starts on a
+        // Saturday and needs a sixth row, so Mon Mar 31, the only quarter day of week 14, is stacked in the Mar 24 box.
+        // One anchor per box: neither the stacked 31 nor week 14 gets a calendarDay or calendarWeek anchor, and no
+        // later grid exists to label the week. Week 14 stays reachable from its neighbors, the scorecard and the days.
+        NotebookPlan plan = Build(new QuarterSpec(2031, 1));
+        Quarter q = plan.Quarter;
+        Week week14 = Engine.Weeks(q)[^1];
+        MonthGrid march = Engine.Grid(2031, 3, q);
+
+        q.WeekCount.Should().Be(14);
+        week14.MondayStart.Should().Be(D(2031, 3, 31));
+        week14.QuarterDays.Should().Equal(D(2031, 3, 31));
+        march.HasOverflow.Should().BeTrue();
+        march.Rows[4][0].Date.Should().Be(D(2031, 3, 24));
+        march.Rows[4][0].StackedDay.Should().Be(31);
+
+        List<LinkSpec> fromCalendars = plan.Links.Where(l => plan.Page(l.From).Type == PageType.Calendar).ToList();
+        fromCalendars.Should().NotContain(l => l.To == PageKey.WeekOverview(14), "no calendar row starts week 14");
+        fromCalendars.Should().NotContain(l => l.To == PageKey.Day(D(2031, 3, 31)), "the stacked 31 shares the Mar 24 box, whose anchor is the 24");
+        plan.LinksFrom(PageKey.Calendar(2031, 3)).Where(l => l.AnchorType == "calendarWeek").Select(l => l.AnchorId)
+            .Should().Equal("calendarWeek:09", "calendarWeek:10", "calendarWeek:11", "calendarWeek:12", "calendarWeek:13");
+        plan.LinksFrom(PageKey.Calendar(2031, 3)).Count(l => l.AnchorType == "calendarDay").Should().Be(30);
+        ByType(plan)["calendarWeek"].Select(l => l.To).Distinct().Should().HaveCount(13, "13 of the 14 weeks have a calendar label");
+
+        Link(plan, PageKey.WeekOverview(13), "next").To.Should().Be(PageKey.WeekOverview(14));
+        Link(plan, PageKey.WeekReflection(13), "reflectionNext").To.Should().Be(PageKey.WeekOverview(14));
+        Link(plan, PageKey.Scorecard, "scorecardWeek:14").To.Should().Be(PageKey.WeekReflection(14));
+        Link(plan, PageKey.Day(D(2031, 3, 30)), "next").To.Should().Be(PageKey.Day(D(2031, 3, 31)));
+        Link(plan, PageKey.Day(D(2031, 3, 31)), "dailyDate").To.Should().Be(PageKey.WeekOverview(14));
+    }
+
+    [Fact]
     public void Calendar_navigation_and_review_links()
     {
         PageKey jan = PageKey.Calendar(2027, 1);

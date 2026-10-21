@@ -215,6 +215,47 @@ public class ManifestLoaderTests : IDisposable
         act.Should().Throw<ManifestException>().WithMessage("*baselineY*");
     }
 
+    [Theory]
+    [InlineData("colors", "greyedInkOpacity")]
+    [InlineData("colors", "prefillInkOpacity")]
+    [InlineData("colors", "eventInkOpacity")]
+    [InlineData("colors", "counterInkOpacity")]
+    [InlineData("slots.dayGrid", "columnPitch")]
+    [InlineData("slots.dayGrid", "rowPitch")]
+    [InlineData("slots.dayGrid", "dayHeaderY")]
+    [InlineData("slots.timeBlocks", "printedLabelSizePt")]
+    [InlineData("slots.timeBlocks", "printedRows")]
+    [InlineData("slots.timeBlocks", "printedPitch")]
+    public void Calibrated_geometry_has_no_code_default_so_a_missing_key_is_a_load_error(string parent, string key)
+    {
+        string path = WriteModified(root =>
+        {
+            JsonNode node = parent.Split('.').Aggregate(root, (n, part) => n[part]!);
+            node.AsObject().Remove(key).Should().BeTrue("the shipped manifest carries the key");
+        });
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage($"*{key}*");
+    }
+
+    [Fact]
+    public void Calibrated_geometry_comes_from_the_manifest_values()
+    {
+        Manifest m = _loader.Load(TestPaths.ManifestPath);
+
+        m.Slots.TimeBlocks.PrintedRows.Should().Be(25, "the real PDF prints 25 hour rules (12, 1 ... 12, 1 ... 12)");
+        m.Slots.TimeBlocks.PrintedPitch.Should().Be(22.6);
+        m.Slots.TimeBlocks.PrintedLabelSizePt.Should().Be(7);
+        m.Slots.DayGrid.ColumnPitch.Should().Be(121.1);
+        m.Slots.DayGrid.RowPitch.Should().Be(120);
+        m.Slots.DayGrid.DayHeaderY.Should().Be(92);
+        m.Colors.GreyedInkOpacity.Should().Be(0.4);
+        m.Colors.PrefillInkOpacity.Should().Be(0.6);
+        m.Colors.EventInkOpacity.Should().Be(0.7);
+        m.Colors.CounterInkOpacity.Should().Be(0.6);
+    }
+
     [Fact]
     public void Missing_manifest_file_throws_a_manifest_exception()
     {

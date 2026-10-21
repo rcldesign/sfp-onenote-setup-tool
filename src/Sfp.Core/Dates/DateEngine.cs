@@ -6,6 +6,9 @@ namespace Sfp.Core.Dates;
 /// </summary>
 public sealed class DateEngine : IDateEngine
 {
+    /// <summary>The last year a grid can show: a quarter starting in November or December 2199 ends in 2200.</summary>
+    public const int MaxGridYear = QuarterSpec.MaxYear + 1;
+
     private const int DaysPerWeek = 7;
 
     /// <inheritdoc />
@@ -77,9 +80,18 @@ public sealed class DateEngine : IDateEngine
             throw new ArgumentOutOfRangeException(nameof(month), month, $"Month must be between 1 and 12; got {month}.");
         }
 
-        if (year < QuarterSpec.MinYear || year > QuarterSpec.MaxYear)
+        // A grid is drawn for one of the quarter's three months. Build accepts starts up to 2199-12, so the months of
+        // a valid quarter run up to 2200-02; checking membership (not the start-year range) keeps 2199-11 and 2199-12
+        // working. The year guard only stops a hand-built Quarter from running the grid past the calendar's range.
+        if (!q.Months.Contains((year, month)))
         {
-            throw new ArgumentOutOfRangeException(nameof(year), year, $"Year must be between {QuarterSpec.MinYear} and {QuarterSpec.MaxYear}; got {year}.");
+            string months = string.Join(", ", q.Months.Select(ym => YearMonth(ym.Year, ym.Month)));
+            throw new ArgumentOutOfRangeException(nameof(month), month, $"Month {YearMonth(year, month)} is not one of the quarter's months ({months}).");
+        }
+
+        if (year < QuarterSpec.MinYear || year > MaxGridYear)
+        {
+            throw new ArgumentOutOfRangeException(nameof(year), year, $"Year must be between {QuarterSpec.MinYear} and {MaxGridYear} (the months of quarters starting {QuarterSpec.MinYear}-01 to {QuarterSpec.MaxYear}-12); got {year}.");
         }
 
         DateOnly first = new(year, month, 1);
@@ -124,6 +136,9 @@ public sealed class DateEngine : IDateEngine
 
     /// <summary>Monday = 0 ... Sunday = 6 (the PRD's offset o).</summary>
     private static int MondayBasedWeekday(DateOnly date) => ((int)date.DayOfWeek + 6) % DaysPerWeek;
+
+    private static string YearMonth(int year, int month) =>
+        year.ToString("0000", System.Globalization.CultureInfo.InvariantCulture) + "-" + month.ToString("00", System.Globalization.CultureInfo.InvariantCulture);
 
     private static DateOnly MondayOnOrBefore(DateOnly date) => date.AddDays(-MondayBasedWeekday(date));
 

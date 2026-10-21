@@ -141,6 +141,46 @@ public class PlanBuilderTests
         plan.Pages.Should().HaveCount(142);
     }
 
+    [Theory]
+    [InlineData(new[] { "Backlog", " ", "Ideas" }, "Notes page name 2 of 3 is blank; every Notes page needs a name.")]
+    [InlineData(new[] { "" }, "Notes page name 1 of 1 is blank; every Notes page needs a name.")]
+    [InlineData(new[] { "Ideas", "Backlog", "ideas" }, "Notes page names 'Ideas' and 'ideas' both give the page key 'notes:ideas'; give each Notes page a distinct name.")]
+    [InlineData(new[] { "Reading list", " reading-list " }, "Notes page names 'Reading list' and 'reading-list' both give the page key 'notes:reading-list'; give each Notes page a distinct name.")]
+    public void Blank_or_colliding_notes_page_names_are_rejected_with_or_without_links(string[] names, string message)
+    {
+        foreach (bool links in new[] { true, false })
+        {
+            Action act = () => Build(Q1_2027, o => o with { NotesPages = names, Links = links });
+
+            act.Should().Throw<ArgumentException>().WithMessage(message);
+        }
+    }
+
+    [Fact]
+    public void A_null_notes_page_name_is_rejected_as_blank()
+    {
+        Action act = () => Build(Q1_2027, o => o with { NotesPages = new[] { "Backlog", null! } });
+
+        act.Should().Throw<ArgumentException>().WithMessage("Notes page name 2 of 2 is blank*");
+    }
+
+    [Fact]
+    public void A_page_the_template_repeats_by_mistake_is_rejected_with_or_without_links()
+    {
+        // A cover inside the eachWeek section would be the page "cover" fourteen times over.
+        SectionTemplate weeks = Shipped.Notebook.Sections[3];
+        SectionTemplate broken = weeks with { Pages = weeks.Pages.Append(new PageTemplate { Type = PageNames.Cover, Level = 1 }).ToList() };
+        Manifest m = Shipped with { Notebook = Shipped.Notebook with { Sections = Shipped.Notebook.Sections.Select(s => s == weeks ? broken : s).ToList() } };
+
+        foreach (bool links in new[] { true, false })
+        {
+            Action act = () => new PlanBuilder(Engine).Build(m, Engine.Build(Q1_2027), new GenerateOptions { Start = Q1_2027, Links = links });
+
+            act.Should().Throw<ManifestException>()
+                .WithMessage("The notebook template produces page key 'cover' twice (in sections 'Quarter' and 'Week 01 (Jan 1 to Jan 3)')*");
+        }
+    }
+
     [Fact]
     public void Q2_2024_has_18_sections_13_weeks_and_91_day_pages()
     {
@@ -368,6 +408,41 @@ public class PlanBuilderTests
             .Should().OnlyContain(p => p.Level == 1);
     }
 
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(2, 3)]
+    [InlineData(7, 8)]
+    public void A_single_objective_template_takes_its_index_0_based_like_every_other_type(int index, int objective)
+    {
+        PageTemplate single = new() { Type = PageNames.Objective, Index = index, Title = "Objective {n}", Level = 1 };
+        PageTemplate firstMonth = new() { Type = PageNames.Calendar, Index = index % 3, Level = 1 };
+        PageTemplate annual = new() { Type = PageNames.Annual, Index = index % 2, Level = 1 };
+        SectionTemplate section = new() { Name = "Singles", Pages = new[] { single, firstMonth, annual } };
+        Manifest m = Shipped with { Notebook = Shipped.Notebook with { Sections = new[] { section } } };
+
+        NotebookPlan plan = new PlanBuilder(Engine).Build(m, Engine.Build(Q1_2027), new GenerateOptions { Start = Q1_2027 });
+
+        PageSpec page = plan.Pages.Single(p => p.Type == PageType.Objective);
+        page.Key.Should().Be(PageKey.Objective(objective));
+        page.Title.Should().Be($"Objective {objective}");
+        page.PdfPage.Should().Be(Shipped.PageTypes.Objective.PdfPages[index]);
+        plan.Pages.Single(p => p.Type == PageType.Calendar).IntToken(Tokens.Extra.MonthIndex).Should().Be(index % 3, "calendar counts the same way");
+        plan.Pages.Single(p => p.Type == PageType.Annual).PdfPage.Should().Be(Shipped.PageTypes.Annual.PdfPages[index % 2], "annual counts the same way");
+    }
+
+    [Theory]
+    [InlineData(8)]
+    [InlineData(-1)]
+    public void A_single_objective_template_index_outside_the_objectives_is_a_manifest_error(int index)
+    {
+        PageTemplate single = new() { Type = PageNames.Objective, Index = index, Title = "Objective {n}", Level = 1 };
+        Manifest m = Shipped with { Notebook = Shipped.Notebook with { Sections = new[] { new SectionTemplate { Name = "Singles", Pages = new[] { single } } } } };
+
+        Action act = () => new PlanBuilder(Engine).Build(m, Engine.Build(Q1_2027), new GenerateOptions { Start = Q1_2027 });
+
+        act.Should().Throw<ManifestException>().WithMessage($"Page template 'objective' index {index} is out of range: the valid indexes are 0 to 7.");
+    }
+
     [Fact]
     public void A_week_page_outside_an_each_week_section_is_a_manifest_error()
     {
@@ -387,6 +462,20 @@ public class PlanBuilderTests
     public void Links_are_empty_when_the_option_is_off()
     {
         Build(Q1_2027, o => o with { Links = false }).Links.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(2199, 11)]
+    [InlineData(2199, 12)]
+    public void A_start_in_late_2199_builds_a_plan_whose_calendar_reaches_2200(int year, int month)
+    {
+        // The last accepted starts: their quarters end in 2200, and the calendar links need the 2200 month grids.
+        NotebookPlan plan = Build(new QuarterSpec(year, month));
+
+        plan.Page(PageKey.Calendar(2200, 1)).Title.Should().Be("January 2200");
+        plan.LinksFrom(PageKey.Calendar(2200, 1)).Count(l => l.AnchorType == "calendarDay").Should().Be(31);
+        plan.Pages.Count(p => p.Type == PageType.Calendar).Should().Be(3);
+        plan.Links.Should().OnlyContain(l => plan.FindPage(l.To) != null);
     }
 
     [Fact]

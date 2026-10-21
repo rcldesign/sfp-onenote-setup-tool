@@ -7,7 +7,10 @@ namespace Sfp.Core.Dates;
 /// <param name="Label">"Q1 2027" for an on-cycle start, otherwise the month span such as "Feb to Apr 2027".</param>
 public sealed record Quarter(DateOnly Start, DateOnly End, int WeekCount, string Label)
 {
-    /// <summary>L, the number of days in the quarter (90, 91 or 92).</summary>
+    /// <summary>
+    /// L, the number of days in the quarter: 90, 91 or 92 for an on-cycle quarter, and 89 for an off-cycle start in
+    /// February of a common year (28 + 31 + 30), so 89 to 92 in all.
+    /// </summary>
     public int Length => End.DayNumber - Start.DayNumber + 1;
 
     /// <summary>The first month of the quarter as a spec.</summary>
