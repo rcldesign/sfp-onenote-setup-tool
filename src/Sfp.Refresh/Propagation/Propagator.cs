@@ -119,8 +119,9 @@ public sealed class Propagator : IPropagator
     /// The change for one slot from its desired text and current state: nothing when the owned object already holds the
     /// text (or there is nothing to write), Create when the slot is empty, Update when the text differs, Remove when the
     /// desired text is empty; blocked when a user object overlaps the slot, the owned object was moved, or the user changed
-    /// it (its text is no longer the <paramref name="toolText"/> the tool last wrote there, or it holds a picture, ink, a
-    /// file, a table or a tag the user put inside it): it is left as it is, never updated and never deleted.
+    /// it (its text is no longer the <paramref name="toolText"/> the tool last wrote there, or it holds an element outside
+    /// the tool's shape that the user put inside it, see SlotInspector.HasToolShape): it is left as it is, never updated
+    /// and never deleted.
     /// When the owned object already holds the text but a user object overlaps it, a blocked entry reports the slot
     /// (nothing is written), so the summary names the slot the user wrote over (PRD Refresh acceptance item 2).
     /// </summary>
@@ -194,9 +195,10 @@ public sealed class Propagator : IPropagator
         toolText is not null && !string.Equals(Collapse(current ?? ""), Collapse(toolText), StringComparison.Ordinal);
 
     /// <summary>
-    /// True when the slot's tool-owned outline was changed by the user: it holds something other than text (a picture,
-    /// ink, a file, a table or a tag put inside it, see SlotInspector.HasToolShape), or its text is no longer what the tool
-    /// last wrote (<paramref name="toolText"/>, compared as above). False when the slot has no owned outline.
+    /// True when the slot's tool-owned outline was changed by the user: it holds an element outside the tool's shape
+    /// (anything but Position, Size, Indents, Indent, Meta, OEChildren, OE, T, List, Bullet and Number, see
+    /// SlotInspector.HasToolShape), or its text is no longer what the tool last wrote (<paramref name="toolText"/>,
+    /// compared as above). False when the slot has no owned outline.
     /// </summary>
     public static bool IsEdited(SlotState state, string? toolText)
     {

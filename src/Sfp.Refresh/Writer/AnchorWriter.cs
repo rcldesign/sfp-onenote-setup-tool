@@ -158,7 +158,7 @@ public sealed class AnchorWriter : IAnchorWriter
 
             if (!SlotInspector.HasToolShape(target))
             {
-                throw new InvalidOperationException($"The outline {objectId} of {write.Change.SlotId} on page {pageId} holds a picture, ink, a file, a table or a tag the user put inside it, so it is never deleted.");
+                throw new InvalidOperationException($"The outline {objectId} of {write.Change.SlotId} on page {pageId} holds an element outside the tool's shape (text, lists, indents, meta) that the user put inside it, so it is never deleted.");
             }
 
             try

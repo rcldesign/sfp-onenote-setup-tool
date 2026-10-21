@@ -60,7 +60,7 @@ public class StoppedRunStreakTests
 
         for (int day = 0; day < 3; day++)
         {
-            h.Run(today: RefreshHarness.Jan4.AddDays(day)).Error.Should().StartWith("Another Refresh of 'SFP Q1 2027' is running");
+            h.Run(today: RefreshHarness.Jan4.AddDays(day)).Error.Should().StartWith("Another run that uses 'SFP Q1 2027' is in progress").And.NotContain("is stale");
         }
 
         FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(0, "another run really holds the lock");
@@ -84,7 +84,8 @@ public class StoppedRunStreakTests
             RefreshResult refused = h.Run(today: RefreshHarness.Jan4.AddDays(day));
 
             refused.ExitCode.Should().Be(RefreshOrchestrator.WriteFailureExitCode);
-            refused.Error.Should().Contain("process 4242 on OTHER-PC");
+            refused.Error.Should().Contain("process 4242 on OTHER-PC")
+                .And.EndWith("this run was not started. Try again when it has finished. The lock file " + lockPath + " is stale and could not be removed; delete it by hand.");
             FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(day + 1, "the stale lock could not be taken over");
         }
 

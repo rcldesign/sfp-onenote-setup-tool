@@ -57,7 +57,7 @@ public class ToolShapeTests
 
         Action remove = () => writer.Write(nb.PageIds[MonJan4], nb.Read(MonJan4), new[] { new AnchorWrite(new PlannedChange(MonJan4, "standingGoal:1", "Walk 30 min", "", ChangeKind.Remove, false, null), goal, id) });
 
-        remove.Should().Throw<InvalidOperationException>().WithMessage("*never deleted*");
+        remove.Should().Throw<InvalidOperationException>().WithMessage($"The outline {id} of standingGoal:1 on page * holds an element outside the tool's shape (text, lists, indents, meta) that the user put inside it, so it is never deleted.");
         nb.App.CallCount("DeletePageContent").Should().Be(deletes);
         nb.Read(MonJan4).Outlines.Should().Contain(o => o.ObjectId == id);
     }

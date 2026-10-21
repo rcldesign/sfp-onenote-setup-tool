@@ -43,7 +43,7 @@ public class RefreshLockTests
         second.Should().NotBeNull();
         second!.Success.Should().BeFalse();
         second.ExitCode.Should().Be(RefreshOrchestrator.WriteFailureExitCode);
-        second.Error.Should().StartWith("Another Refresh of 'SFP Q1 2027' is running (process " + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + " on ")
+        second.Error.Should().StartWith("Another run that uses 'SFP Q1 2027' is in progress (process " + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + " on ")
             .And.EndWith("this run was not started. Try again when it has finished.");
         first.Success.Should().BeTrue(first.Error);
         first.Summary!.ValuesWritten.Should().Be(107);
@@ -98,7 +98,7 @@ public class RefreshLockTests
             WriteLock(h, Environment.ProcessId, Environment.MachineName, RefreshHarness.Now.AddMinutes(-1), self.StartTime.ToUniversalTime());
         }
 
-        h.Run().Error.Should().StartWith("Another Refresh of 'SFP Q1 2027' is running", "the process that holds it is alive");
+        h.Run().Error.Should().StartWith("Another run that uses 'SFP Q1 2027' is in progress", "the process that holds it is alive");
         WriteLock(h, Environment.ProcessId, Environment.MachineName, RefreshHarness.Now.AddMinutes(-1), new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc));
         h.Run().Success.Should().BeTrue("the ID now belongs to another process than the one that took the lock");
 
