@@ -56,6 +56,12 @@ public sealed record GenerateResult
 
     public int PagesWritten { get; init; }
 
+    /// <summary>
+    /// PNG files a render-only run wrote: fewer than <see cref="PagesRendered"/>, which counts every page of the plan,
+    /// because a page without an image (Contents, the blank Objective Details parent) gets no file. 0 for a notebook run.
+    /// </summary>
+    public int PngFiles { get; init; }
+
     public TimeSpan Elapsed { get; init; }
 
     /// <summary>Size of the notebook folder (or PNG folder) in bytes when known.</summary>

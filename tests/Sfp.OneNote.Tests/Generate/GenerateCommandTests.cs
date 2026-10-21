@@ -274,7 +274,8 @@ public class GenerateCommandTests
             Phase = GeneratePhase.Done,
             OutputPath = png,
             NotebookName = "SFP Q1 2027",
-            PagesRendered = 143,
+            PagesRendered = 144,
+            PngFiles = 142,
             Elapsed = TimeSpan.FromSeconds(52),
             OutputBytes = 40_000_000,
             Warnings = new[] { "Font 'Bookman Old Style' is not installed; using the bundled 'TeX Gyre Bonum' instead." },
@@ -295,7 +296,7 @@ public class GenerateCommandTests
         logPath.Should().StartWith(Path.Combine(Root, "logs")).And.EndWith("-generate.log");
         File.Exists(logPath).Should().BeTrue();
         stdout.Should().Contain("Rendering pages (3 of 132): Mon Jan 4");
-        stdout.Should().Contain("Rendered 143 pages to " + png + " in 0:52; pages.json written.");
+        stdout.Should().Contain("Rendered 144 pages of SFP Q1 2027: 142 PNG files and pages.json written to " + png + " in 52.0 s.", "the render-only verb's sentence: Contents and the blank parent page get no PNG");
         stdout.Should().Contain("Warning: Font 'Bookman Old Style'");
         stdout.Should().NotContain("Move Notebook", "render-only needs no OneDrive instruction");
     }
@@ -434,8 +435,7 @@ public class GenerateCommandTests
     [Fact]
     public void Each_page_count_is_printed_once_and_only_moving_forward()
     {
-        // Render-only reports every page from its render worker and again from the loop that writes the file, and the
-        // workers finish out of order.
+        // The render workers' reports can arrive out of order; repeated counts are dropped as well.
         GenerateProgress[] reports =
         {
             new(GeneratePhase.Rendering, 0, 0, null),

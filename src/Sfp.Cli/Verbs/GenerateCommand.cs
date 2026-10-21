@@ -448,14 +448,22 @@ public static class GenerateCommand
             return;
         }
 
-        string elapsed = Elapsed(result.Elapsed);
         if (request.RenderOnly)
         {
-            stdout.WriteLine(string.Format(CultureInfo.InvariantCulture, "Rendered {0} pages to {1} in {2}; {3} written.", result.PagesRendered, result.OutputPath, elapsed, RenderOnlyRunner.IndexFileName));
+            // The render-only verb's own sentence: pages counts every page of the plan, PNG files only those with an image.
+            stdout.WriteLine(string.Format(
+                CultureInfo.InvariantCulture,
+                "Rendered {0} pages of {1}: {2} PNG files and {3} written to {4} in {5:0.0} s.",
+                result.PagesRendered,
+                result.NotebookName,
+                result.PngFiles,
+                RenderOnlyRunner.IndexFileName,
+                result.OutputPath,
+                result.Elapsed.TotalSeconds));
         }
         else
         {
-            stdout.WriteLine(string.Format(CultureInfo.InvariantCulture, "Generated {0}: {1} pages written in {2}.", result.NotebookName, result.PagesWritten, elapsed));
+            stdout.WriteLine(string.Format(CultureInfo.InvariantCulture, "Generated {0}: {1} pages written in {2}.", result.NotebookName, result.PagesWritten, Elapsed(result.Elapsed)));
             stdout.WriteLine("Notebook folder: " + result.OutputPath + (result.OutputBytes is long bytes ? string.Format(CultureInfo.InvariantCulture, " ({0:0.0} MB)", bytes / 1048576.0) : ""));
             if (!string.IsNullOrEmpty(result.SidecarPath))
             {
@@ -490,8 +498,8 @@ public static class GenerateCommand
 
     /// <summary>
     /// Prints one line per progress report, synchronously (reports arrive from render workers too). A page count is
-    /// printed once per phase and only moving forward: render-only reports each page from its render worker and again
-    /// from the loop that writes the file, and workers finish out of order.
+    /// printed once per phase and only moving forward. The orchestrator reports each page once; the render workers'
+    /// reports can arrive out of order, and a count lower than one already printed is not printed.
     /// </summary>
     private sealed class ProgressPrinter : IProgress<GenerateProgress>
     {

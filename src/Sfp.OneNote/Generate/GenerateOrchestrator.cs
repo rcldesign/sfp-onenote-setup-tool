@@ -210,6 +210,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             OutputPath = dir,
             NotebookName = plan.Name,
             PagesRendered = rendered.PagesRendered,
+            PngFiles = rendered.PngFiles,
             Elapsed = state.Clock.Elapsed,
             OutputBytes = FolderSize(dir),
             LogPath = _options.LogPath,
@@ -522,13 +523,10 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
                 phase = GeneratePhase.Rendering;
                 page = render.Page ?? page;
                 exitCode = RenderError;
-                message = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "Rendering {0} page '{1}' (PDF page {2}) failed: {3}",
-                    page?.Type,
-                    page?.Title,
-                    page?.PdfPage?.ToString(CultureInfo.InvariantCulture) ?? "none",
-                    (render.InnerException ?? render).Message);
+
+                // The PRD sentence has one copy (GenerateText.RenderFailed); without a page to name only the reason is left.
+                string reason = (render.InnerException ?? render).Message;
+                message = page is null ? reason : GenerateText.RenderFailed(page, reason);
                 break;
             case OneNoteUnavailableException unavailable:
                 exitCode = OneNoteUnavailable;
