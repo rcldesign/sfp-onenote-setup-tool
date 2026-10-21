@@ -19,7 +19,8 @@ public sealed record RenderOnlyResult(int PagesRendered, int PngFiles, string In
 /// (<see cref="RenderParallelism.Default"/> workers by default: the processor count, at most four; PDFium is serialized
 /// by the rasterizer, overlays and PNG encoding run side by side). Each page's PNG is written and released before the
 /// next page on that worker, so memory stays at a few pages. Progress is reported per finished page; cancellation
-/// stops after the pages in flight and writes no pages.json.
+/// stops after the pages in flight and writes no pages.json. A page that fails to render stops the run the same way;
+/// with <see cref="NamePageFailures"/> its exception is wrapped in a <see cref="PageRenderException"/> naming the page.
 /// </summary>
 public sealed class RenderOnlyRunner
 {
@@ -43,6 +44,14 @@ public sealed class RenderOnlyRunner
 
     /// <summary>The most pages this runner renders at once.</summary>
     public int MaxDegreeOfParallelism { get; }
+
+    /// <summary>
+    /// When true, an exception from the renderer (cancellation aside) surfaces as a <see cref="PageRenderException"/>
+    /// whose message names the page in the PRD's render-error sentence; the render-only verb sets it. When false (the
+    /// default) the renderer's own exception surfaces unchanged, for a caller whose renderer already names the page
+    /// that failed (GenerateOrchestrator's render-only mode wraps its renderer in a RenderFailedException).
+    /// </summary>
+    public bool NamePageFailures { get; init; }
 
     /// <summary>The PNG file name of a page: its key with every ':' replaced by '-', plus ".png".</summary>
     public static string FileNameFor(PageKey key)
@@ -70,7 +79,7 @@ public sealed class RenderOnlyRunner
             Parallel.For(0, pages.Count, parallel, i =>
             {
                 (PageSpec page, string section) = pages[i];
-                RenderedPage art = renderer.Render(page, plan, options);
+                RenderedPage art = Render(page, plan, options);
                 string? file = null;
                 if (art.Png.Length > 0)
                 {
@@ -93,5 +102,18 @@ public sealed class RenderOnlyRunner
         string indexPath = Path.Combine(outDir, IndexFileName);
         File.WriteAllText(indexPath, index.Serialize() + "\n");
         return new RenderOnlyResult(pages.Count, files, indexPath, clock.Elapsed);
+    }
+
+    /// <summary>Renders one page, naming it in a <see cref="PageRenderException"/> when it fails and <see cref="NamePageFailures"/> is set.</summary>
+    private RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions options)
+    {
+        try
+        {
+            return renderer.Render(page, plan, options);
+        }
+        catch (Exception ex) when (NamePageFailures && ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            throw new PageRenderException(page, ex);
+        }
     }
 }

@@ -116,6 +116,48 @@ public sealed class RenderOnlyRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("day:2027-01-04", "Rendering Day page 'Mon Jan 4' (PDF page 26) failed: PDFium could not decode the page")]
+    [InlineData("scorecard", "Rendering Scorecard page 'Quarter scorecard' (PDF page none) failed: PDFium could not decode the page")]
+    public void With_page_failures_named_a_render_failure_names_the_page_in_the_generate_sentence(string key, string sentence)
+    {
+        string dir = TestPaths.NewTempDir("runner-named");
+        try
+        {
+            InvalidOperationException cause = new("PDFium could not decode the page");
+            PageKey failing = new(key);
+            RenderOnlyRunner runner = new(new FailingRenderer(failing, cause), maxDegreeOfParallelism: 1) { NamePageFailures = true };
+            Action act = () => runner.Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir);
+
+            PageRenderException ex = act.Should().Throw<PageRenderException>().Which;
+            ex.Message.Should().Be(sentence);
+            ex.Page.Should().BeSameAs(f.Q1Plan.Page(failing));
+            ex.InnerException.Should().BeSameAs(cause, "the renderer's exception is kept for the log");
+            File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse("a failed run writes no pages.json");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void With_page_failures_named_a_cancellation_from_the_renderer_is_not_wrapped()
+    {
+        string dir = TestPaths.NewTempDir("runner-named-cancel");
+        try
+        {
+            RenderOnlyRunner runner = new(new FailingRenderer(PageKey.Cover, new OperationCanceledException()), maxDegreeOfParallelism: 1) { NamePageFailures = true };
+            Action act = () => runner.Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir);
+
+            act.Should().Throw<OperationCanceledException>();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Parallelism_must_be_positive()
     {
@@ -182,6 +224,22 @@ public sealed class RenderOnlyRunnerTests
             Interlocked.Increment(ref calls);
             return new RenderedPage(page.Key, Array.Empty<byte>(), 0, 0, Array.Empty<AnchorPlacement>());
         }
+    }
+
+    /// <summary>A renderer that returns imageless pages and throws the given exception for one page.</summary>
+    private sealed class FailingRenderer : IPageRenderer
+    {
+        private readonly PageKey failing;
+        private readonly Exception error;
+
+        public FailingRenderer(PageKey failing, Exception error)
+        {
+            this.failing = failing;
+            this.error = error;
+        }
+
+        public RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions o) =>
+            page.Key == failing ? throw error : new RenderedPage(page.Key, Array.Empty<byte>(), 0, 0, Array.Empty<AnchorPlacement>());
     }
 
     /// <summary>Progress that records on the calling thread (Progress&lt;T&gt; would post to a context the test cannot wait on).</summary>

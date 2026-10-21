@@ -201,7 +201,7 @@ public static class RenderOnlyCommand
 
             using Rasterizer rasterizer = new(ColorParser.Parse(manifest.Colors.Background));
             PageRenderer renderer = new(manifest, rasterizer, fonts, engine);
-            RenderOnlyRunner runner = new(renderer);
+            RenderOnlyRunner runner = new(renderer) { NamePageFailures = true };
             RenderOptions renderOptions = new(request.Pdf, request.Dpi, options);
             Progress<RenderProgress> progress = new(p => logger.Debug("Rendered {Done}/{Total} {Key} ({Title})", p.Done, p.Total, p.Key, p.Title));
             RenderOnlyResult result = runner.Run(plan, renderOptions, request.Out, progress);
@@ -217,7 +217,8 @@ public static class RenderOnlyCommand
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Top-level handler of a CLI verb: any failure while rendering maps to the render exit code with one line.
+            // Top-level handler of a CLI verb: any failure while rendering maps to the render exit code with one line. A
+            // page that fails to render arrives as a PageRenderException, whose message names the page as Generate does.
             logger.Warning(ex, "Render failed");
             stderr.WriteLine("Render failed: " + ex.Message);
             stderr.WriteLine("Log: " + log.Path);

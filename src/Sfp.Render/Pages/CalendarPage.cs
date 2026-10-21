@@ -11,8 +11,9 @@ namespace Sfp.Render.Pages;
 /// M2.5: the Monthly Calendar page. The month name goes at slots.monthName; each cell of the engine's 5 by 7 grid gets
 /// its day number: an in-month quarter day is a calendarDay link (never baked), an out-of-month day is baked at the
 /// greyed opacity or left blank (GenerateOptions.OutOfMonthDays), and a stacked sixth-row day is baked as " / 30"
-/// beside the linked "23" so the box reads "23 / 30". Week labels, the habit legend band and the event lines under
-/// each quarter day box are placements only.
+/// beside the linked "23" so the box reads "23 / 30". The "Week NN" labels are calendarWeek link placements, or baked
+/// text when the page has no link for them (links off); the habit legend band and the event lines under each quarter
+/// day box are placements only.
 /// </summary>
 internal static class CalendarPage
 {
@@ -45,12 +46,7 @@ internal static class CalendarPage
             }
         }
 
-        CalendarWeekAnchor weekAnchor = m.Links.CalendarWeek;
-        foreach (LinkSpec link in c.LinksOfType(CalendarWeekAnchor))
-        {
-            int row = RowOfWeek(c, month, link);
-            c.AddLink(link.AnchorId, weekAnchor.Rect(grid, row), link.Text, weekAnchor.Align, weekAnchor.SizePt);
-        }
+        WeekLabels(c, grid, month);
 
         HabitLegendSlot habits = m.Slots.HabitLegend;
         if (c.Applies(habits.AppliesTo))
@@ -113,19 +109,34 @@ internal static class CalendarPage
         }
     }
 
-    /// <summary>The grid row whose Monday cell starts the week a calendarWeek:{NN} link names.</summary>
-    private static int RowOfWeek(RenderContext c, MonthGrid month, LinkSpec link)
+    /// <summary>
+    /// The "Week NN" label of every grid row whose Monday cell starts a week of the quarter: the calendarWeek:{NN} link
+    /// placement, or, with no link for it (links off), the label baked where the link would sit, in the link's size and
+    /// alignment, so the calendar still numbers its weeks.
+    /// </summary>
+    private static void WeekLabels(RenderContext c, DayGridSlot grid, MonthGrid month)
     {
-        int number = int.Parse(link.AnchorInstance ?? "", CultureInfo.InvariantCulture);
-        Week week = c.Dates.Weeks(c.Plan.Quarter).First(w => w.Number == number);
-        for (int row = 0; row < month.Rows.Count; row++)
+        CalendarWeekAnchor anchor = c.Manifest.Links.CalendarWeek;
+        IReadOnlyList<Week> weeks = c.Dates.Weeks(c.Plan.Quarter);
+        for (int row = 0; row < month.Rows.Count && row < grid.RowY.Count; row++)
         {
-            if (month.Rows[row][0].Date == week.MondayStart)
+            DateOnly monday = month.Rows[row][0].Date;
+            Week? week = weeks.FirstOrDefault(w => w.MondayStart == monday);
+            if (week is null)
             {
-                return row;
+                continue;
+            }
+
+            RectPt rect = anchor.Rect(grid, row);
+            LinkSpec? link = c.Link(CalendarWeekAnchor + ":" + PlannerText.WeekNumber(week.Number));
+            if (link is not null)
+            {
+                c.AddLink(link.AnchorId, rect, link.Text, anchor.Align, anchor.SizePt);
+            }
+            else
+            {
+                c.TextIn(rect, LinkGraphBuilder.WeekLabel(week.Number), anchor.Align, anchor.SizePt);
             }
         }
-
-        throw new InvalidOperationException($"Calendar page {c.Page.Key} has no row starting on {week.MondayStart:yyyy-MM-dd} for link {link.AnchorId}.");
     }
 }

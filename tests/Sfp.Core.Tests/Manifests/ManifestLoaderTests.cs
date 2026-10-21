@@ -226,6 +226,10 @@ public class ManifestLoaderTests : IDisposable
     [InlineData("slots.timeBlocks", "printedLabelSizePt")]
     [InlineData("slots.timeBlocks", "printedRows")]
     [InlineData("slots.timeBlocks", "printedPitch")]
+    [InlineData("slots.timeBlocks", "eventLineHeight")]
+    [InlineData("slots.habitLegend", "columns")]
+    [InlineData("slots.habitLegend", "lineHeight")]
+    [InlineData("onenote", "pageDateTimeHour")]
     public void Calibrated_geometry_has_no_code_default_so_a_missing_key_is_a_load_error(string parent, string key)
     {
         string path = WriteModified(root =>
@@ -254,6 +258,10 @@ public class ManifestLoaderTests : IDisposable
         m.Colors.PrefillInkOpacity.Should().Be(0.6);
         m.Colors.EventInkOpacity.Should().Be(0.7);
         m.Colors.CounterInkOpacity.Should().Be(0.6);
+        m.Slots.TimeBlocks.EventLineHeight.Should().Be(10);
+        m.Slots.HabitLegend.Columns.Should().Be(8);
+        m.Slots.HabitLegend.LineHeight.Should().Be(11);
+        m.OneNote.PageDateTimeHour.Should().Be(6);
     }
 
     [Fact]

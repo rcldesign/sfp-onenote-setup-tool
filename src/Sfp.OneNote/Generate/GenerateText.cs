@@ -1,5 +1,7 @@
 using System.Globalization;
 using Sfp.Core.Options;
+using Sfp.Core.Plan;
+using Sfp.Render;
 
 namespace Sfp.OneNote.Generate;
 
@@ -31,4 +33,10 @@ public static class GenerateText
     /// <summary>Output folder cannot be created or written.</summary>
     public static string FolderNotWritable(string folder, string reason) =>
         string.Format(CultureInfo.InvariantCulture, "Output folder {0} is not writable: {1}", folder, reason);
+
+    /// <summary>
+    /// PRD error table: a render error on a page, "Rendering {type} page '{title}' (PDF page {n}) failed: {reason}". The
+    /// sentence lives in Sfp.Render (<see cref="PageRenderException.Describe"/>), so render-only prints the same words.
+    /// </summary>
+    public static string RenderFailed(PageSpec page, string reason) => PageRenderException.Describe(page, reason);
 }
