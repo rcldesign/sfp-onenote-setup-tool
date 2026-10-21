@@ -35,6 +35,9 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     /// <summary>The phase line from the moment Cancel is pressed until the run has stopped.</summary>
     public const string CancellingText = "Cancelling after the current page";
 
+    /// <summary>The start of the failure line, before the error as reported.</summary>
+    public const string FailurePrefix = "Generate failed: ";
+
     /// <summary>Exit code reported when the orchestrator throws instead of returning a result (the contract says it never does).</summary>
     private const int UnexpectedErrorExitCode = 5;
 
@@ -125,6 +128,10 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string? _actionMessage;
 
+    /// <summary>The one line shown when the run's log could not be started anywhere, so the run has no log file; else null.</summary>
+    [ObservableProperty]
+    private string? _logNotice;
+
     public GenerateRunViewModel(
         IRunLogFactory logs,
         GenerateOrchestratorFactory orchestrators,
@@ -144,6 +151,12 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
 
     /// <summary>True while a result of any kind is shown.</summary>
     public bool HasResult => ShowSuccess || ShowFailure || ShowCancelled;
+
+    /// <summary>
+    /// The notebook folder the run in progress creates (its output folder and name), named when the window is closed
+    /// while a cancelled run does not stop; null when no run is on or the request names no folder.
+    /// </summary>
+    public string? RunningNotebookPath { get; private set; }
 
     /// <summary>The phase name for the progress bar: "Rendering pages", "Writing pages", and so on.</summary>
     public static string PhaseName(GeneratePhase phase) => phase switch
@@ -217,6 +230,15 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     private async Task RunAsync(GenerateRequest request)
     {
         ResetViews();
+
+        // Before the run counts as running, and never throwing: a log folder that cannot be created must not leave the
+        // tab locked. It falls back to the temp folder, then to no log file with a one-line notice.
+        using IRunLog log = _logs.StartOrFallBack("generate", out string? logNotice);
+        LogNotice = logNotice;
+        GenerateOptions options = request.Options;
+        RunningNotebookPath = string.IsNullOrWhiteSpace(options.OutputFolder) || string.IsNullOrWhiteSpace(options.NotebookName)
+            ? null
+            : System.IO.Path.Combine(options.OutputFolder, options.NotebookName);
         IsRunning = true;
         IsIndeterminate = true;
         PhaseText = "Starting";
@@ -224,7 +246,6 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         _cts = new CancellationTokenSource();
         CancellationToken token = _cts.Token;
 
-        using IRunLog log = _logs.Start("generate");
         GenerateResult result;
         try
         {
@@ -250,6 +271,7 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            RunningNotebookPath = null;
             IsRunning = false;
         }
 
@@ -379,6 +401,7 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         FailureText = null;
         LogPath = null;
         ActionMessage = null;
+        LogNotice = null;
         Current = 0;
         Total = 0;
         Fraction = 0;
@@ -453,18 +476,22 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         return after + "; the partial notebook was deleted.";
     }
 
-    /// <summary>"Failed while writing pages, page Mon Jan 4: 0x80042001 invalid XML. The partial notebook at ... is left in place for inspection."</summary>
+    /// <summary>
+    /// "Generate failed: Writing pages, page Mon Jan 4: OneNote rejected the XML for page 'Mon Jan 4' (0x80042001). The
+    /// partial notebook at ... is left in place for inspection." The orchestrator's error already names the phase and the
+    /// page, so the line shows it as it is behind a neutral prefix, and so does an exception the view model caught itself.
+    /// One trailing period of the error is dropped, so the sentence ends with exactly one.
+    /// </summary>
     public static string FailureTextFor(GenerateResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        string phase = PhaseName(result.Phase);
-        string text = "Failed during " + phase.ToLowerInvariant();
-        if (!string.IsNullOrEmpty(result.FailedPage))
+        string error = string.IsNullOrWhiteSpace(result.Error) ? "no details were reported" : result.Error.TrimEnd();
+        if (error.EndsWith('.'))
         {
-            text += ", page " + result.FailedPage;
+            error = error[..^1];
         }
 
-        text += ": " + (result.Error ?? "no details were reported") + ".";
+        string text = FailurePrefix + error + ".";
         if (!string.IsNullOrEmpty(result.OutputPath))
         {
             text += " The partial notebook at " + result.OutputPath + " is left in place for inspection.";

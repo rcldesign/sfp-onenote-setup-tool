@@ -9,6 +9,10 @@ public sealed class RunLogFactory : IRunLogFactory
 {
     public IRunLog Start(string verb) => new RunLogHandle(RunLog.Start(verb, quiet: true));
 
+    /// <summary>The same log in %TEMP%\sfp2onenote\logs, for a run whose usual log folder cannot be used.</summary>
+    public IRunLog StartFallback(string verb) =>
+        new RunLogHandle(RunLog.Start(verb, quiet: true, directory: System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sfp2onenote", "logs")));
+
     private sealed class RunLogHandle : IRunLog
     {
         private readonly RunLog _log;

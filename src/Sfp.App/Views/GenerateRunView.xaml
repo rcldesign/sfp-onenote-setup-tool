@@ -3,6 +3,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:Sfp.App.Views">
   <StackPanel Margin="8,0,8,8">
+    <TextBlock Style="{StaticResource WarningText}" Text="{Binding LogNotice}" AutomationProperties.Name="Run log notice" />
+
     <!-- Progress while a run is on -->
     <StackPanel Visibility="{Binding IsRunning, Converter={StaticResource BoolToVisibility}}">
       <TextBlock Text="{Binding PhaseText}" FontWeight="SemiBold" AutomationProperties.Name="Generate phase" />

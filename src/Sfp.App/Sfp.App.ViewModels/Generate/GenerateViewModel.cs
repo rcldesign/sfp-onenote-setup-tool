@@ -56,6 +56,9 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     private string _defaultName = "";
     private QuarterSpec _lastValidStart;
 
+    /// <summary>The last page scale the box held as a finite number; the options and the saved settings use it while the box holds none.</summary>
+    private double _lastFiniteScale = 1.0;
+
     [ObservableProperty]
     private string _pdfPath = "";
 
@@ -213,6 +216,9 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     /// <summary>The fields unlock when no run is on.</summary>
     public bool FieldsEnabled => !Run.IsRunning;
 
+    /// <summary>The window is closing and waits for runs to stop (<see cref="BeginClosing"/>); nothing new can start.</summary>
+    public bool IsClosing { get; private set; }
+
     /// <summary>
     /// The PRD's "fallback font in use" banner: the font service's warnings, one per line, or null when the template
     /// typeface is installed. Shown before Generate so the user knows the dates will use the bundled face.
@@ -273,6 +279,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
             TimeBlockStart = settings.TimeBlocks.StartHour;
             TimeBlockEnd = settings.TimeBlocks.EndHour;
             PdfPath = settings.PdfPath ?? "";
+            RememberFiniteScale();
         }
         finally
         {
@@ -284,13 +291,18 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         RequestPreviews();
     }
 
-    /// <summary>The options the fields describe, using the last valid start when the year box does not parse.</summary>
+    /// <summary>
+    /// The options the fields describe, using the last valid start when the year box does not parse and the last finite
+    /// page scale when the scale box holds no finite number (NaN or Infinity would make the settings unsaveable). The
+    /// output folder and the previous notebook are made absolute (<see cref="FolderPaths.Resolve"/>): OneNote runs in
+    /// its own process and would resolve a relative folder against its own working folder.
+    /// </summary>
     public GenerateOptions ToOptions() => new()
     {
         Start = Start ?? _lastValidStart,
         PdfPath = PdfPath.Trim(),
         NotebookName = NotebookName.Trim(),
-        OutputFolder = OutputFolder.Trim(),
+        OutputFolder = FolderPaths.Resolve(OutputFolder),
         DateOrder = DateFormat.Order,
         PadDateFields = DateFormat.Padded,
         WeeksRemaining = WeeksRemaining,
@@ -299,13 +311,13 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         Links = Links,
         HideTitle = HideTitle,
         PageSize = CustomPageSize ? PageSizeMode.Custom : PageSizeMode.Automatic,
-        PageScale = ParsePageScale() ?? 1.0,
+        PageScale = ParsePageScale() ?? _lastFiniteScale,
         SixthRow = SixthRow,
         OutOfMonthDays = OutOfMonthDays,
         ReflectionDateIsWeekStart = ReflectionDateIsWeekStart,
         IncludeOutOfQuarterDays = IncludeOutOfQuarterDays,
         TimeBlocks = new TimeBlockWindow(TimeBlockStart, TimeBlockEnd),
-        PreviousNotebook = string.IsNullOrWhiteSpace(PreviousNotebook) ? null : PreviousNotebook.Trim(),
+        PreviousNotebook = string.IsNullOrWhiteSpace(PreviousNotebook) ? null : FolderPaths.Resolve(PreviousNotebook),
     };
 
     /// <summary>The settings to save for the current fields.</summary>
@@ -328,24 +340,57 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Readies the tab for the window to close; true when it may close. During a run the user is asked whether to cancel
     /// it: no keeps the window open (false); yes cancels the run and completes only once the run has stopped, after the
-    /// orchestrator deleted the partial notebook, so closing never leaves one behind. The preview render is stopped and
-    /// awaited too, so the composition root can dispose the renderer's fonts and rasterizer afterwards. Completes at once
-    /// when nothing is running.
+    /// orchestrator deleted the partial notebook. The preview render is stopped and awaited too, so the composition root
+    /// can dispose the renderer's fonts and rasterizer afterwards. While it waits the tab is closing
+    /// (<see cref="BeginClosing"/>), so no new run starts. Completes at once when nothing is running.
     /// </summary>
     public async Task<bool> PrepareToCloseAsync()
     {
-        if (Run.IsRunning)
+        if (!ConfirmClose())
         {
-            if (!_dialogs.Confirm(CloseWhileRunningTitle, CloseWhileRunningQuestion))
-            {
-                return false;
-            }
-
-            await Run.CancelAndWaitAsync();
+            return false;
         }
 
-        await Previews.StopAsync();
+        Task stopped = StopForCloseAsync();
+        if (!stopped.IsCompleted)
+        {
+            BeginClosing();
+        }
+
+        await stopped;
         return true;
+    }
+
+    /// <summary>
+    /// The window's close flow asks this first, and asking changes nothing: true when no run is on or the user agreed to
+    /// cancel the one in progress (one Yes/No question).
+    /// </summary>
+    public bool ConfirmClose() => !Run.IsRunning || _dialogs.Confirm(CloseWhileRunningTitle, CloseWhileRunningQuestion);
+
+    /// <summary>Cancels the run in progress and stops the preview strip for good; completes once both have stopped.</summary>
+    public async Task StopForCloseAsync()
+    {
+        await Run.CancelAndWaitAsync();
+        await Previews.StopAsync();
+    }
+
+    /// <summary>
+    /// The window is closing and waits for runs to stop: Generate and the Browse buttons stay disabled from now on, so
+    /// no run starts that the close would then cut off.
+    /// </summary>
+    public void BeginClosing()
+    {
+        if (IsClosing)
+        {
+            return;
+        }
+
+        IsClosing = true;
+        OnPropertyChanged(nameof(IsClosing));
+        Revalidate();
+        BrowsePdfCommand.NotifyCanExecuteChanged();
+        BrowseFolderCommand.NotifyCanExecuteChanged();
+        BrowsePreviousCommand.NotifyCanExecuteChanged();
     }
 
     public void Dispose()
@@ -375,6 +420,9 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
             case nameof(NotebookName):
                 _nameFollowsDefault = NotebookName == _defaultName;
                 break;
+            case nameof(PageScaleText):
+                RememberFiniteScale();
+                break;
             default:
                 break;
         }
@@ -388,7 +436,9 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         InputChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    [RelayCommand]
+    private bool CanBrowse => !IsClosing;
+
+    [RelayCommand(CanExecute = nameof(CanBrowse))]
     private void BrowsePdf()
     {
         string? chosen = _dialogs.PickFile("Choose the SFP template PDF", "PDF files (*.pdf)|*.pdf|All files (*.*)|*.*", PdfPath);
@@ -398,7 +448,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanBrowse))]
     private void BrowseFolder()
     {
         string? chosen = _dialogs.PickFolder("Choose the output folder", OutputFolder);
@@ -408,7 +458,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanBrowse))]
     private void BrowsePrevious()
     {
         string start = string.IsNullOrWhiteSpace(PreviousNotebook) ? OutputFolder : PreviousNotebook;
@@ -473,8 +523,17 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     private int? ParseYear() =>
         int.TryParse(YearText.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int year) ? year : null;
 
+    /// <summary>The page scale the box holds, or null when it holds no finite number ("abc", "NaN", "Infinity", "1e999").</summary>
     private double? ParsePageScale() =>
-        double.TryParse(PageScaleText.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double scale) ? scale : null;
+        double.TryParse(PageScaleText.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double scale) && double.IsFinite(scale) ? scale : null;
+
+    private void RememberFiniteScale()
+    {
+        if (ParsePageScale() is double scale)
+        {
+            _lastFiniteScale = scale;
+        }
+    }
 
     private void StartPdfCheck()
     {
@@ -529,7 +588,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         SizeEstimate = GenerateOptions.AllowedDpis.Contains(Dpi) && QuarterOf(Start ?? _lastValidStart) is { } quarter
             ? NotebookSizeEstimate.Describe(Dpi, GenerateFormDefaults.PageCount(quarter))
             : "";
-        CanGenerate = _validation.CanGenerate && !Run.IsRunning;
+        CanGenerate = _validation.CanGenerate && !Run.IsRunning && !IsClosing;
         OnPropertyChanged(nameof(Start));
         OnPropertyChanged(nameof(DefaultNotebookName));
         OnPropertyChanged(nameof(Validation));

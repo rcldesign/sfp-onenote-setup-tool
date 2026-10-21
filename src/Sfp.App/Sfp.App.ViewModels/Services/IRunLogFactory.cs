@@ -15,9 +15,52 @@ public interface IRunLog : IDisposable
 public interface IRunLogFactory
 {
     IRunLog Start(string verb);
+
+    /// <summary>
+    /// Starts the run's log in the temp folder: the fallback when <see cref="Start"/> fails (the log folder cannot be
+    /// created or written). A factory without a fallback throws, and the run then goes on without a log file.
+    /// </summary>
+    IRunLog StartFallback(string verb) => throw new NotSupportedException("This log factory has no fallback folder.");
 }
 
-/// <summary>A log that goes nowhere, for tests and for runs that need no file.</summary>
+/// <summary>Starts a run's log without ever letting a log problem stop or lock the run.</summary>
+public static class RunLogStarter
+{
+    /// <summary>
+    /// The run's log: <see cref="IRunLogFactory.Start"/>, else <see cref="IRunLogFactory.StartFallback"/> (which records
+    /// why the usual folder failed), else a log without a file (an empty <see cref="IRunLog.Path"/>) and
+    /// <paramref name="notice"/> set to the one line the tab shows. Never throws.
+    /// </summary>
+    public static IRunLog StartOrFallBack(this IRunLogFactory logs, string verb, out string? notice)
+    {
+        ArgumentNullException.ThrowIfNull(logs);
+        notice = null;
+        Exception failure;
+        try
+        {
+            return logs.Start(verb);
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+
+        try
+        {
+            IRunLog fallback = logs.StartFallback(verb);
+            fallback.Logger.Warning(failure, "The log folder could not be used; this run logs to {Path}", fallback.Path);
+            return fallback;
+        }
+        catch (Exception)
+        {
+            // The usual folder's failure is the one worth naming; the fallback's own reason adds nothing for the user.
+            notice = "The run log could not be started (" + failure.Message + "); this run has no log file.";
+            return new SilentRunLog("");
+        }
+    }
+}
+
+/// <summary>A log that goes nowhere, for tests and for runs without a file (then <see cref="Path"/> is empty).</summary>
 public sealed class SilentRunLog : IRunLog
 {
     public SilentRunLog(string path)

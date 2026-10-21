@@ -35,8 +35,10 @@ public partial class MainWindow : System.Windows.Window
 
         if (_pendingClose is { IsCompleted: false })
         {
-            // A second click while the run is stopping: the first close is already waiting for it.
+            // A second click while the run is stopping: the first close is already waiting for it, and now asks whether
+            // to close anyway, in case the run never returns.
             e.Cancel = true;
+            _viewModel.RequestCloseAgain();
             return;
         }
 
@@ -44,7 +46,7 @@ public partial class MainWindow : System.Windows.Window
         if (prepare.IsCompleted)
         {
             // Nothing to wait for: close now, or stay open because the user chose to keep the run going.
-            _readyToClose = prepare.GetAwaiter().GetResult();
+            _readyToClose = CloseAllowed(prepare);
             e.Cancel = !_readyToClose;
             return;
         }
@@ -57,10 +59,24 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task CloseWhenReadyAsync(Task<bool> prepare)
     {
-        if (await prepare)
+        // WhenAny never throws: a failed preparation is reported by CloseAllowed instead of escaping this handler.
+        await Task.WhenAny(prepare);
+        if (CloseAllowed(prepare))
         {
             _readyToClose = true;
             Close();
         }
+    }
+
+    /// <summary>The completed preparation's answer; a failed one allows the close after a message saying what went wrong.</summary>
+    private bool CloseAllowed(Task<bool> prepare)
+    {
+        bool allowed = MainViewModel.MayClose(prepare, out string? notice);
+        if (notice is not null)
+        {
+            System.Windows.MessageBox.Show(this, notice, TitleText, System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+        }
+
+        return allowed;
     }
 }

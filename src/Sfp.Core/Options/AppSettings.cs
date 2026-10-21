@@ -8,7 +8,10 @@ namespace Sfp.Core.Options;
 /// </summary>
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 1;
+    /// <summary>The settings schema this version writes. A file with a higher version comes from a newer version of the app.</summary>
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 
     public string? PdfPath { get; init; }
 
@@ -48,6 +51,28 @@ public sealed record AppSettings
 
     /// <summary>Output folders where notebooks were generated, for the Refresh tab's notebook list.</summary>
     public IReadOnlyList<string> KnownOutputFolders { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// These settings with every member that must hold a value but is null replaced by its default, and null entries
+    /// dropped from <see cref="KnownOutputFolders"/>. The JSON reader fills a member with null when the file says null (a
+    /// hand edit, another version), whatever the member's annotation. Members declared nullable keep their null, which
+    /// already means the default.
+    /// </summary>
+    public AppSettings WithDefaultsForNulls()
+    {
+        IReadOnlyList<string>? folders = KnownOutputFolders;
+        TimeBlockWindow? timeBlocks = TimeBlocks;
+        if (folders is not null && !folders.Any(f => f is null) && timeBlocks is not null)
+        {
+            return this;
+        }
+
+        return this with
+        {
+            KnownOutputFolders = folders is null ? Array.Empty<string>() : folders.Where(f => f is not null).ToArray(),
+            TimeBlocks = timeBlocks ?? TimeBlockWindow.Default,
+        };
+    }
 
     /// <summary>Applies the saved values over a GenerateOptions with the given start.</summary>
     public GenerateOptions ToGenerateOptions(QuarterSpec start) => new()
