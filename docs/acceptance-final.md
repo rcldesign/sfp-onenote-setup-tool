@@ -22,7 +22,7 @@ they are listed unticked with the exact step to perform. A failed or deferred it
 | Manifest hardening (fix round 2): duplicate keys, unpaired surrogates, omitted members, undefined enums, malformed colors, overlapping week runs, colliding section names and an erase rectangle smaller than its printed extent all exit 2 (plan and render-only print one line; generate prints its standard failure block) | tests/Sfp.Core.Tests/Manifests/ManifestLoaderTests.cs, PlanBuilderTests, PlanCommandTests | pass |
 | Refresh ownership (fix round 2): same-name notebooks, pictures or ink inside tool outlines, page-level pictures over a slot, unrecorded outlines, confirmed inked values, partial feed outages, all-conflict runs and overlapping runs | tests/Sfp.Refresh.Tests (SameNameNotebookTests, InsideOutlineTests, PagePictureTests, PendingWritesTests, ConfirmedInkTests, CalendarOutageTests, ConflictRunTests, RefreshLockTests) | pass |
 
-Whole suite in the build environment: `dotnet test --filter "Category!=COM"` = 1186 passed, 0 failed, 0 skipped (the real PDF present); the count will be re-stated at the final integration.
+Whole suite in the build environment: `dotnet test --filter "Category!=COM"` = 1874 passed, 0 failed, 0 skipped after fix round 3 (Core 857, OneNote 404, Refresh 369, Render 244; the real PDF present; the Render project run alone with one test thread).
 COM-category tests (ComNotebookWriterComTests, the OneNoteApp integration test, SidecarRecovery, Outlook) skip here and run on the owner's PC.
 
 ## Performance and size (M7.2, measured here)
