@@ -142,6 +142,22 @@ public sealed class PageXmlFixture
         return this;
     }
 
+    /// <summary>
+    /// A picture ("Image"), attached file ("InsertedFile") or media file ("MediaFile") placed on the page outside any
+    /// outline at an exact sheet rectangle, the way pasting one onto the page stores it.
+    /// </summary>
+    public PageXmlFixture Placed(RectPt sheetRect, string kind = "Image")
+    {
+        string id = ObjectId(nextObject += 10);
+        root.Add(new XElement(
+            one + kind,
+            new XAttribute("objectID", id),
+            OneNoteXml.Position(one, sheetRect.X + sheetX, sheetRect.Y + sheetY, 3),
+            OneNoteXml.Size(one, sheetRect.W, sheetRect.H, true)));
+        LastObjectId = id;
+        return this;
+    }
+
     public string Xml() => OneNoteXml.Serialize(root);
 
     public PageXml Build() => PageXmlParser.Parse(Xml());

@@ -8,11 +8,15 @@ namespace Sfp.OneNote.Xml;
 
 /// <summary>
 /// Parses the XML GetPageContent returns into the <see cref="PageXml"/> model: page ID and title, page-level meta,
-/// top-level outlines with position, size, z, text runs and ink words, and every image. The namespace is taken from
-/// the document so 2010 and 2013 pages both parse. Malformed XML raises <see cref="System.Xml.XmlException"/>.
+/// top-level outlines with position, size, z, text runs and ink words, every image, and the pictures and files placed
+/// on the page outside any outline with their positions. The namespace is taken from the document so 2010 and 2013
+/// pages both parse. Malformed XML raises <see cref="System.Xml.XmlException"/>.
 /// </summary>
 public static partial class PageXmlParser
 {
+    /// <summary>The content objects that can sit on a page outside any outline and are read into <see cref="PageXml.PageObjects"/>.</summary>
+    private static readonly HashSet<string> PageObjectKinds = new(StringComparer.Ordinal) { "Image", "InsertedFile", "MediaFile" };
+
     public static PageXml Parse(string xml)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(xml);
@@ -38,7 +42,11 @@ public static partial class PageXmlParser
 
         List<OutlineInfo> outlines = root.Elements(one + "Outline").Select(o => ParseOutline(o, one)).ToList();
         List<ImageInfo> images = root.Descendants(one + "Image").Select(i => ParseImage(i, one)).ToList();
-        return new PageXml(pageId, title, outlines, images, meta, doc);
+        List<PageObjectInfo> pageObjects = root.Elements()
+            .Where(e => e.Name.Namespace == one && PageObjectKinds.Contains(e.Name.LocalName) && !Flag(e, "backgroundImage"))
+            .Select(e => ParsePageObject(e, one))
+            .ToList();
+        return new PageXml(pageId, title, outlines, images, meta, doc) { PageObjects = pageObjects };
     }
 
     /// <summary>The CDATA of a one:T as plain text: line breaks kept, tags removed, entities decoded, ends trimmed.</summary>
@@ -112,6 +120,20 @@ public static partial class PageXmlParser
             size is null ? 0 : Number(size, "width"),
             size is null ? 0 : Number(size, "height"),
             (string?)image.Attribute("hyperlink"));
+    }
+
+    private static PageObjectInfo ParsePageObject(XElement element, XNamespace one)
+    {
+        XElement? position = element.Element(one + "Position");
+        XElement? size = element.Element(one + "Size");
+        return new PageObjectInfo(
+            ObjectId(element),
+            element.Name.LocalName,
+            new RectPt(
+                position is null ? 0 : Number(position, "x"),
+                position is null ? 0 : Number(position, "y"),
+                size is null ? 0 : Number(size, "width"),
+                size is null ? 0 : Number(size, "height")));
     }
 
     private static string EnclosingOeId(XElement element, XNamespace one) =>

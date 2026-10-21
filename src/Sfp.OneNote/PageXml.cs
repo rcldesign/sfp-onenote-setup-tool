@@ -16,6 +16,13 @@ public sealed record PageXml(
     IReadOnlyDictionary<string, string> Meta,
     XDocument Document)
 {
+    /// <summary>
+    /// The content objects placed on the page itself rather than inside an outline (a picture, an attached file, a media
+    /// file), with their positions, in document order. The sheet image is not among them: it sits in its own outline, and
+    /// a background image never counts. Empty when the page has none.
+    /// </summary>
+    public IReadOnlyList<PageObjectInfo> PageObjects { get; init; } = Array.Empty<PageObjectInfo>();
+
     /// <summary>The sfp.key meta value, or null when the page was not written by the tool.</summary>
     public string? SfpKey => Meta.TryGetValue("sfp.key", out string? v) ? v : null;
 
@@ -84,3 +91,9 @@ public sealed record InkWord(string ObjectId, string RecognizedText, RectPt? Bou
 /// <param name="Height">Size height.</param>
 /// <param name="Hyperlink">The hyperlink attribute, or null.</param>
 public sealed record ImageInfo(string ObjectId, bool IsBackground, double Width, double Height, string? Hyperlink);
+
+/// <summary>A one:Image, one:InsertedFile or one:MediaFile placed on the page outside any outline (what a picture pasted onto the page becomes).</summary>
+/// <param name="ObjectId">Object ID, or empty when OneNote gave none.</param>
+/// <param name="Kind">The element's local name: "Image", "InsertedFile" or "MediaFile".</param>
+/// <param name="Rect">Its one:Position and one:Size in page points; a missing value reads as 0.</param>
+public sealed record PageObjectInfo(string ObjectId, string Kind, RectPt Rect);
