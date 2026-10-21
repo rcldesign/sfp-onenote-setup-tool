@@ -110,7 +110,7 @@ public class RefreshCommandTests
         sourcesErr.Should().Contain("failed");
     }
 
-    [Fact]
+    [SkippableFact]
     public void The_production_composition_reports_OneNote_unavailable_off_Windows()
     {
         Skip.If(OperatingSystem.IsWindows(), "On Windows the production composition starts OneNote.");

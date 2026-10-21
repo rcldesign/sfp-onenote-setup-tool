@@ -86,10 +86,12 @@ public sealed class DateAndStripTests
         double cap = f.Fonts.TextWidth("0", strip.SizePt) * 1.4;
 
         // The disc on 13 (index 1) is centered on the number's ink and is wider than it, so 13 reaches the disc's rim.
+        // The margins leave room for one antialiased pixel at 220 DPI (0.33 pt): Windows (DirectWrite) feathers the rim
+        // and the glyph edges about a pixel wider than FreeType on Linux.
         double r = strip.CircleDiameterPt / 2;
         double cx = x[1] + InkCenter("13", strip.SizePt);
-        double Left(int i) => i == 1 ? cx - r - 0.3 : x[i] - 0.6;
-        double Right(int i) => i == 1 ? cx + r + 0.3 : x[i] + f.Fonts.TextWidth(numbers[i], strip.SizePt) + 0.6;
+        double Left(int i) => i == 1 ? cx - r - 0.6 : x[i] - 0.6;
+        double Right(int i) => i == 1 ? cx + r + 0.6 : x[i] + f.Fonts.TextWidth(numbers[i], strip.SizePt) + 0.6;
 
         // Every number has ink inside its own box and the gap before the next one is clear.
         for (int i = 0; i < 14; i++)
@@ -149,9 +151,12 @@ public sealed class DateAndStripTests
         string fit = string.Create(CultureInfo.InvariantCulture, $"disc center ({disc.CenterX:0.00}, {disc.CenterY:0.00}) r {disc.Radius:0.00}, white center ({disc.WhiteCenterX:0.00}, {disc.WhiteCenterY:0.00}), rim clearance {disc.RimClearance:0.00} pt");
         disc.CenterX.Should().BeInRange(x[index], x[index] + f.Fonts.TextWidth(circled, strip.SizePt), "the disc is on " + circled + ": " + fit);
         disc.Radius.Should().BeApproximately(strip.CircleDiameterPt / 2, 0.35, fit);
-        (disc.WhiteCenterX - disc.CenterX).Should().BeInRange(-0.35, 0.35, "the white number is centered across the disc: " + fit);
-        (disc.WhiteCenterY - disc.CenterY).Should().BeInRange(-0.35, 0.35, "and down it: " + fit);
-        disc.RimClearance.Should().BeGreaterThanOrEqualTo(0.6, "no white digit grazes the rim: " + fit);
+        // Centering within 0.4 pt catches the 0.65 pt offset of the original defect on either platform. The clearance
+        // floor is one pixel at 220 DPI: Windows text rasterization makes the white digits about a pixel wider than
+        // Linux does (0.39 pt against 0.7 pt measured for "14"), and the defect is the offset, not the width.
+        (disc.WhiteCenterX - disc.CenterX).Should().BeInRange(-0.4, 0.4, "the white number is centered across the disc: " + fit);
+        (disc.WhiteCenterY - disc.CenterY).Should().BeInRange(-0.4, 0.4, "and down it: " + fit);
+        disc.RimClearance.Should().BeGreaterThanOrEqualTo(0.33, "no white digit touches the rim: " + fit);
     }
 
     [Fact]
