@@ -697,6 +697,27 @@ public class GenerateCommandTests
         }
     }
 
+    [SkippableFact]
+    public void A_relative_log_folder_override_gives_runs_a_full_log_path()
+    {
+        // Fix round 3 app-5: SFP2ONENOTE_LOGDIR=rel-logs gave "Log: rel-logs/...", which means nothing once the current
+        // folder changes (the app's Save log copies the file after a file dialog that may change it). The folder is now
+        // resolved to a full path before any file path is built.
+        string folder = Path.Combine(Root, "relative-logs");
+        string relative = Path.GetRelativePath(Environment.CurrentDirectory, folder);
+        Skip.If(Path.IsPathRooted(relative), "The test folder is on another drive than the current folder.");
+        string[] renderOnly = { "generate", "--pdf", Pdf, "--start", "2027-01", "--render-only", Path.Combine(Root, "png-relative-log"), "--templates", TestPaths.TemplatesDir };
+
+        (int code, string stdout, string stderr) = RunCli(relative, renderOnly);
+
+        code.Should().Be(ExitCodes.ValidationError, "the placeholder PDF is not the planner: {0}", stderr);
+        string logLine = (stdout + stderr).Split('\n').Select(l => l.TrimEnd('\r')).Should().ContainSingle(l => l.StartsWith("Log: ", StringComparison.Ordinal)).Which;
+        string logPath = logLine["Log: ".Length..];
+        Path.IsPathFullyQualified(logPath).Should().BeTrue(logLine);
+        logPath.Should().StartWith(folder + Path.DirectorySeparatorChar);
+        File.Exists(logPath).Should().BeTrue();
+    }
+
     [Fact]
     public void The_run_log_falls_back_to_one_folder_and_gives_up_in_one_line_when_neither_works()
     {

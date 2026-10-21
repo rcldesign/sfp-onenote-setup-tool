@@ -29,7 +29,10 @@ public sealed class RunLog : IDisposable
     /// <summary>Full path of this run's log file.</summary>
     public string Path { get; }
 
-    /// <summary>Default log folder.</summary>
+    /// <summary>
+    /// Default log folder, as a full path: a relative SFP2ONENOTE_LOGDIR is resolved against the current folder when the
+    /// run starts, so the log path a run reports stays right after the current folder changes (a file dialog in the app).
+    /// </summary>
     public static string DefaultDirectory
     {
         get
@@ -37,16 +40,19 @@ public sealed class RunLog : IDisposable
             string? env = Environment.GetEnvironmentVariable(LogDirEnvVar);
             if (!string.IsNullOrWhiteSpace(env))
             {
-                return env;
+                return System.IO.Path.GetFullPath(env);
             }
 
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            return System.IO.Path.Combine(local, "sfp2onenote", "logs");
+            return System.IO.Path.GetFullPath(System.IO.Path.Combine(local, "sfp2onenote", "logs"));
         }
     }
 
-    /// <summary>Where a CLI verb's log goes when its folder cannot be used (<see cref="StartWithFallback"/>): sfp2onenote\logs in the temp folder.</summary>
-    public static string FallbackDirectory => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sfp2onenote", "logs");
+    /// <summary>
+    /// Where a run's log goes when its folder cannot be used (<see cref="StartWithFallback"/>, the app's log factory):
+    /// sfp2onenote\logs in the temp folder, as a full path.
+    /// </summary>
+    public static string FallbackDirectory => System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sfp2onenote", "logs"));
 
     /// <summary>The console's line: Serilog's default without the exception, so a stack trace goes to the file only.</summary>
     private const string ConsoleTemplate = "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}";
