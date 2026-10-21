@@ -54,6 +54,8 @@ public sealed record RefreshArgs
 /// </summary>
 public static class RefreshCommand
 {
+    private const string WindowsOnlyMessage = OneNoteUnavailableException.UserMessage + " Refresh runs on Windows only.";
+
     /// <summary>Creates the orchestrator for a run: the production composition, or a test double.</summary>
     /// <param name="request">The run's request.</param>
     /// <param name="manifest">The merged manifest.</param>
@@ -310,8 +312,6 @@ public static class RefreshCommand
 
         return Compose(request, manifest, templatesDir, log, logPath, () => FontService.Load(manifest.Font, templatesDir), () => OpenOneNote(log));
     }
-
-    private const string WindowsOnlyMessage = OneNoteUnavailableException.UserMessage + " Refresh runs on Windows only.";
 
     /// <summary>The production COM session; Windows only (the caller has already refused other platforms).</summary>
     private static IOneNoteApp OpenOneNote(ILogger log) =>

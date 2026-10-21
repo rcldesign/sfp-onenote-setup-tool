@@ -29,6 +29,7 @@ public sealed partial class PreviewStripViewModel : ObservableObject, IDisposabl
     private readonly IUiThread _ui;
     private readonly TimeSpan _debounce;
     private readonly int _previewDpi;
+
     /// <summary>Every render task not yet seen complete: a superseded render can still be inside the renderer after its cancel.</summary>
     private readonly List<Task> _renders = new();
     private CancellationTokenSource? _cts;
