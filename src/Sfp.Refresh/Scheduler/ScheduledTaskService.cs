@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text;
+using System.Xml.Linq;
 using Serilog;
 
 namespace Sfp.Refresh.Scheduler;
@@ -23,20 +25,28 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     /// <summary>The message reported where Windows Task Scheduler is not available.</summary>
     public const string NotSupportedMessage = "Scheduled refresh needs Windows Task Scheduler (schtasks.exe), which is only available on Windows.";
 
+    /// <summary>The longest /TR value schtasks.exe accepts; a longer command is registered from a task definition file (/XML).</summary>
+    public const int MaxTaskRunLength = 261;
+
+    private static readonly XNamespace TaskNamespace = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+
     private readonly IProcessRunner runner;
     private readonly ILogger log;
     private readonly bool isWindows;
+    private readonly string tempFolder;
 
     /// <param name="runner">Runs schtasks.exe; a fake in tests.</param>
     /// <param name="log">Run log.</param>
     /// <param name="isWindows">Override of the platform check for tests; null asks the operating system.</param>
-    public ScheduledTaskService(IProcessRunner runner, ILogger log, bool? isWindows = null)
+    /// <param name="tempFolder">Where a task definition file is written for /XML and deleted afterwards; the user's temp folder when null.</param>
+    public ScheduledTaskService(IProcessRunner runner, ILogger log, bool? isWindows = null, string? tempFolder = null)
     {
         ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(log);
         this.runner = runner;
         this.log = log;
         this.isWindows = isWindows ?? OperatingSystem.IsWindows();
+        this.tempFolder = tempFolder ?? Path.GetTempPath();
     }
 
     /// <summary>True when the service can register tasks on this machine.</summary>
@@ -59,20 +69,75 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     /// <summary>The /TR value with --folder "{folder}" appended when a notebooks folder is given (the sidecar lives there).</summary>
     public static string TaskRun(string notebookName, string executablePath, int horizonDays, string? notebooksFolder)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(notebookName);
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
-        string run = string.Format(
-            CultureInfo.InvariantCulture,
-            "\"{0}\" refresh --notebook \"{1}\" --calendar --horizon {2}",
-            executablePath,
-            notebookName.Trim(),
-            horizonDays);
+        return "\"" + executablePath + "\" " + TaskArguments(notebookName, horizonDays, notebooksFolder);
+    }
+
+    /// <summary>The program's arguments: refresh --notebook "{name}" --calendar --horizon {n}, plus --folder "{folder}" when given.</summary>
+    public static string TaskArguments(string notebookName, int horizonDays, string? notebooksFolder)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(notebookName);
+        string arguments = string.Format(CultureInfo.InvariantCulture, "refresh --notebook \"{0}\" --calendar --horizon {1}", notebookName.Trim(), horizonDays);
         if (!string.IsNullOrWhiteSpace(notebooksFolder))
         {
-            run += " --folder \"" + notebooksFolder.Trim().TrimEnd('\\') + "\"";
+            arguments += " --folder \"" + notebooksFolder.Trim().TrimEnd('\\') + "\"";
         }
 
-        return run;
+        return arguments;
+    }
+
+    /// <summary>The schtasks arguments that create (or replace) the task from a task definition file.</summary>
+    public static IReadOnlyList<string> XmlCreateArguments(string notebookName, string definitionPath) => new[]
+    {
+        "/Create", "/TN", TaskName(notebookName), "/XML", definitionPath, "/F",
+    };
+
+    /// <summary>
+    /// The task definition registered with /XML when the /TR value would pass <see cref="MaxTaskRunLength"/>: the same
+    /// daily 05:00 trigger, the same principal (the logged-on user, least privilege: schtasks' defaults without /RU and
+    /// /RL) and schtasks' default settings, with the program and its arguments in separate elements, which have no such
+    /// limit. <paramref name="startDate"/> is the trigger's first day, as schtasks uses the day the task is created.
+    /// </summary>
+    public static string TaskXml(string notebookName, string executablePath, int horizonDays, string? notebooksFolder, DateTime startDate)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(notebookName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
+        XNamespace t = TaskNamespace;
+        XElement task = new(
+            t + "Task",
+            new XAttribute("version", "1.2"),
+            new XElement(t + "RegistrationInfo", new XElement(t + "Description", "sfp2onenote daily refresh of " + notebookName.Trim())),
+            new XElement(
+                t + "Triggers",
+                new XElement(
+                    t + "CalendarTrigger",
+                    new XElement(t + "StartBoundary", startDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "T" + StartTime + ":00"),
+                    new XElement(t + "Enabled", "true"),
+                    new XElement(t + "ScheduleByDay", new XElement(t + "DaysInterval", "1")))),
+            new XElement(
+                t + "Principals",
+                new XElement(t + "Principal", new XAttribute("id", "Author"), new XElement(t + "LogonType", "InteractiveToken"), new XElement(t + "RunLevel", "LeastPrivilege"))),
+            new XElement(
+                t + "Settings",
+                new XElement(t + "MultipleInstancesPolicy", "IgnoreNew"),
+                new XElement(t + "DisallowStartIfOnBatteries", "true"),
+                new XElement(t + "StopIfGoingOnBatteries", "true"),
+                new XElement(t + "AllowHardTerminate", "true"),
+                new XElement(t + "StartWhenAvailable", "false"),
+                new XElement(t + "RunOnlyIfNetworkAvailable", "false"),
+                new XElement(t + "IdleSettings", new XElement(t + "StopOnIdleEnd", "true"), new XElement(t + "RestartOnIdle", "false")),
+                new XElement(t + "AllowStartOnDemand", "true"),
+                new XElement(t + "Enabled", "true"),
+                new XElement(t + "Hidden", "false"),
+                new XElement(t + "RunOnlyIfIdle", "false"),
+                new XElement(t + "WakeToRun", "false"),
+                new XElement(t + "ExecutionTimeLimit", "PT72H"),
+                new XElement(t + "Priority", "7")),
+            new XElement(
+                t + "Actions",
+                new XAttribute("Context", "Author"),
+                new XElement(t + "Exec", new XElement(t + "Command", executablePath), new XElement(t + "Arguments", TaskArguments(notebookName, horizonDays, notebooksFolder)))));
+        return "<?xml version=\"1.0\" encoding=\"UTF-16\"?>" + Environment.NewLine + task;
     }
 
     /// <summary>The schtasks arguments that create (or replace) the task.</summary>
@@ -117,13 +182,39 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
         ArgumentOutOfRangeException.ThrowIfNegative(horizonDays);
         RequireWindows();
-        ProcessResult result = runner.Run(SchtasksExe, CreateArguments(notebookName, executablePath, horizonDays, notebooksFolder));
+        string run = TaskRun(notebookName, executablePath, horizonDays, notebooksFolder);
+        ProcessResult result = run.Length <= MaxTaskRunLength
+            ? runner.Run(SchtasksExe, CreateArguments(notebookName, executablePath, horizonDays, notebooksFolder))
+            : CreateFromDefinition(notebookName, executablePath, horizonDays, notebooksFolder);
         if (!result.Succeeded)
         {
             throw new InvalidOperationException(Failure("register", notebookName, result));
         }
 
-        log.Information("Scheduled task {Task} registered: daily at {Time}, {Run}", TaskName(notebookName), StartTime, TaskRun(notebookName, executablePath, horizonDays, notebooksFolder));
+        log.Information("Scheduled task {Task} registered: daily at {Time}, {Run}", TaskName(notebookName), StartTime, run);
+    }
+
+    /// <summary>Registers the task from a definition file in the temp folder (see <see cref="TaskXml"/>), deleting the file afterwards.</summary>
+    private ProcessResult CreateFromDefinition(string notebookName, string executablePath, int horizonDays, string? notebooksFolder)
+    {
+        string path = Path.Combine(tempFolder, "sfp2onenote-task-" + Guid.NewGuid().ToString("N") + ".xml");
+        File.WriteAllText(path, TaskXml(notebookName, executablePath, horizonDays, notebooksFolder, DateTime.Today), Encoding.Unicode);
+        log.Information("The task command is longer than the {Limit} characters schtasks /TR accepts, so the task is registered from {Path}", MaxTaskRunLength, path);
+        try
+        {
+            return runner.Run(SchtasksExe, XmlCreateArguments(notebookName, path));
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                log.Warning(ex, "Could not delete the task definition file {Path}", path);
+            }
+        }
     }
 
     /// <inheritdoc />
