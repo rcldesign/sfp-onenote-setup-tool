@@ -108,6 +108,7 @@ public class RefreshViewModelTests
         _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary(), Elapsed = TimeSpan.FromSeconds(3) };
         _h.Refresher.ProgressToReport.Add("Reading Setup");
         RefreshViewModel vm = await Loaded();
+        Task loadedReload = vm.PendingReload;
         vm.HorizonDays = 21;
 
         await vm.PreviewChangesCommand.ExecuteAsync(null);
@@ -144,6 +145,12 @@ public class RefreshViewModelTests
         vm.Summary.SidecarRebuilt.Should().BeTrue();
         vm.Summary.HasWarnings.Should().BeTrue();
         vm.Summary.ElapsedText.Should().Be("3 s");
+
+        // Fix round 4 cliapp-5: the reload after a run is a detached task (PendingReload), so counting the listings right
+        // after the run proved nothing while the pool had not run a reload's listing yet. A dry run starts no reload at
+        // all, so the pending reload is still the one the load started, and once it has settled one listing was made.
+        vm.PendingReload.Should().BeSameAs(loadedReload, "a dry run starts no reload");
+        await _h.Settle(vm.PendingReload);
         _h.Registry.Queries.Should().HaveCount(1, "a dry run does not reload the list");
     }
 
