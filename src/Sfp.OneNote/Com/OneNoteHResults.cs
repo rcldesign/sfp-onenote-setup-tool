@@ -15,6 +15,7 @@ public static class OneNoteHResults
     public const int ClassNotRegistered = unchecked((int)0x80040154);
     public const int ServerExecFailed = unchecked((int)0x80080005);
     public const int RpcServerUnavailable = unchecked((int)0x800706BA);
+    public const int RpcCallFailed = unchecked((int)0x800706BE);
     public const int RpcDisconnected = unchecked((int)0x80010108);
     public const int ObjectNotConnected = unchecked((int)0x800401FD);
     public const int MonikerUnavailable = unchecked((int)0x800401E3);
@@ -57,6 +58,7 @@ public static class OneNoteHResults
         [ClassNotRegistered] = "REGDB_E_CLASSNOTREG",
         [ServerExecFailed] = "CO_E_SERVER_EXEC_FAILURE",
         [RpcServerUnavailable] = "RPC_S_SERVER_UNAVAILABLE",
+        [RpcCallFailed] = "RPC_S_CALL_FAILED",
         [RpcDisconnected] = "RPC_E_DISCONNECTED",
         [ObjectNotConnected] = "CO_E_OBJNOTCONNECTED",
         [MonikerUnavailable] = "MK_E_UNAVAILABLE",
@@ -99,13 +101,14 @@ public static class OneNoteHResults
 
     /// <summary>True when the failure means OneNote desktop is not installed, not registered or not running.</summary>
     public static bool IsUnavailable(int hresult) =>
-        hresult is ClassNotRegistered or ServerExecFailed or RpcServerUnavailable or RpcDisconnected or ObjectNotConnected or MonikerUnavailable;
+        hresult is ClassNotRegistered or ServerExecFailed or RpcServerUnavailable or RpcCallFailed or RpcDisconnected or ObjectNotConnected or MonikerUnavailable;
 
     /// <summary>
     /// True for the unavailable results that mean the COM server went away after the object existed (the RPC server is
-    /// gone, or the object disconnected from its clients), rather than that it could not be created.
+    /// gone, the call failed because OneNote crashed while it was in flight, or the object disconnected from its
+    /// clients), rather than that it could not be created.
     /// </summary>
-    public static bool IsDisconnected(int hresult) => hresult is RpcServerUnavailable or RpcDisconnected or ObjectNotConnected;
+    public static bool IsDisconnected(int hresult) => hresult is RpcServerUnavailable or RpcCallFailed or RpcDisconnected or ObjectNotConnected;
 
     /// <summary>True when OneNote rejected the XML or could not insert the content it described.</summary>
     public static bool IsXmlRejected(int hresult) =>

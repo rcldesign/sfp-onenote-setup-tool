@@ -22,9 +22,9 @@ public partial class MainWindow : System.Windows.Window
 
     /// <summary>
     /// The window closes only when the view model is ready (<see cref="MainViewModel.PrepareToCloseAsync"/>): at once
-    /// when nothing runs; during a Generate run only after the user agreed to cancel it and the run has stopped, so the
-    /// orchestrator has deleted the partial notebook; and never while a preview render still uses the renderer that
-    /// App.OnExit disposes.
+    /// when nothing runs; during a Generate or Refresh run only after the user agreed to cancel it and the run has
+    /// stopped, so the Generate orchestrator has deleted the partial notebook and the Refresh orchestrator has saved what
+    /// it wrote; and never while a preview render still uses the renderer that App.OnExit disposes.
     /// </summary>
     private void OnClosing(object? sender, CancelEventArgs e)
     {

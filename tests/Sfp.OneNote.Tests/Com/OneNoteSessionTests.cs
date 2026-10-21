@@ -154,6 +154,27 @@ public class OneNoteSessionTests
     }
 
     [Fact]
+    public void OneNote_crashing_while_a_call_is_in_flight_is_reported_as_onenote_stopping_during_the_run()
+    {
+        const int callFailed = unchecked((int)0x800706BE);
+        (OneNoteSession session, FakeOneNoteTarget fake, _, _) = Create();
+        using (session)
+        {
+            session.Version.Should().Be("16.0.fake", "OneNote was running when the run reached it");
+            fake.FailNext(callFailed);
+
+            Action act = () => session.UpdatePageContent("<one:Page/>", DateTime.MinValue);
+
+            OneNoteUnavailableException ex = act.Should().Throw<OneNoteUnavailableException>().Which;
+            ex.HResult.Should().Be(callFailed);
+            ex.Call.Should().Be("UpdatePageContent");
+            ex.Message.Should().StartWith(OneNoteUnavailableException.DisconnectedMessage + " UpdatePageContent failed with RPC_S_CALL_FAILED (0x800706BE)");
+            ex.Message.Should().NotContain(OneNoteUnavailableException.UserMessage);
+            fake.CallCount("UpdatePageContent").Should().Be(1, "a crashed OneNote is not retried");
+        }
+    }
+
+    [Fact]
     public void An_activation_that_cannot_reach_the_com_server_carries_the_install_message()
     {
         (OneNoteSession session, _, FakeActivator activator, _) = Create();

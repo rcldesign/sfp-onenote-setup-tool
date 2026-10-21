@@ -21,6 +21,7 @@ public class OneNoteHResultsTests
     [InlineData(unchecked((int)0x80080005), typeof(OneNoteUnavailableException))]
     [InlineData(unchecked((int)0x800706BA), typeof(OneNoteUnavailableException))]
     [InlineData(unchecked((int)0x80010108), typeof(OneNoteUnavailableException))]
+    [InlineData(unchecked((int)0x800706BE), typeof(OneNoteUnavailableException))]
     [InlineData(unchecked((int)0x80042000), typeof(OneNoteXmlRejectedException))]
     [InlineData(unchecked((int)0x80042001), typeof(OneNoteXmlRejectedException))]
     [InlineData(unchecked((int)0x80042007), typeof(OneNoteXmlRejectedException))]
@@ -48,6 +49,8 @@ public class OneNoteHResultsTests
     [InlineData("UpdatePageContent", unchecked((int)0x80010108))]
     [InlineData("GetHierarchy", unchecked((int)0x800401FD))]
     [InlineData("OpenHierarchy", unchecked((int)0x80010108))]
+    [InlineData("UpdatePageContent", unchecked((int)0x800706BE))]
+    [InlineData("GetPageContent", unchecked((int)0x800706BE))]
     public void A_disconnect_after_activation_says_onenote_stopped_or_was_closed_not_that_it_is_missing(string call, int hresult)
     {
         OneNoteException mapped = OneNoteHResults.Map(call, new COMException("The object invoked has disconnected from its clients.", hresult), null);
@@ -62,6 +65,7 @@ public class OneNoteHResultsTests
     [Theory]
     [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x800706BA))]
     [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x80010108))]
+    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x800706BE))]
     [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x80040154))]
     [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x80080005))]
     [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x800401E3))]
@@ -87,6 +91,19 @@ public class OneNoteHResultsTests
         OneNoteHResults.IsDisconnected(OneNoteHResults.ClassNotRegistered).Should().BeFalse();
         OneNoteHResults.IsDisconnected(OneNoteHResults.ServerExecFailed).Should().BeFalse();
         OneNoteHResults.IsDisconnected(OneNoteHResults.InvalidXml).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Rpc_call_failed_is_named_and_joins_the_disconnected_family_not_the_busy_one()
+    {
+        const int callFailed = unchecked((int)0x800706BE);
+
+        OneNoteHResults.RpcCallFailed.Should().Be(callFailed);
+        OneNoteHResults.Describe(callFailed).Should().Be("RPC_S_CALL_FAILED (0x800706BE)");
+        OneNoteHResults.IsDisconnected(callFailed).Should().BeTrue("OneNote crashing while a call is in flight is a mid-run disconnect");
+        OneNoteHResults.IsUnavailable(callFailed).Should().BeTrue("an unavailable OneNote exits with 3, not the generic 5");
+        OneNoteHResults.IsBusy(callFailed).Should().BeFalse("a crashed OneNote is not retried");
+        OneNoteHResults.IsXmlRejected(callFailed).Should().BeFalse();
     }
 
     [Fact]

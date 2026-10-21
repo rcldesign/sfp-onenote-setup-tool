@@ -86,17 +86,35 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public AppSettings Current() => Generate.ToSettings(_knownFolders.ToList());
 
     /// <summary>
-    /// The window's Closing handler asks this first; true when the window may close. A Generate run is cancelled (after
-    /// the user agrees) and awaited so its partial notebook is deleted, and the preview render is stopped before the
-    /// renderer is disposed. See <see cref="GenerateViewModel.PrepareToCloseAsync"/>.
+    /// The window's Closing handler asks this first; true when the window may close. A run on either tab is cancelled
+    /// after the user agrees, and awaited before the window closes: a Generate run so its partial notebook is deleted, a
+    /// Refresh run so it stops after the current page with what it wrote saved in the sidecar. The preview render is
+    /// stopped before the renderer is disposed. The Refresh question is asked first because asking it changes nothing,
+    /// so a No to either question keeps the window open and every run going. See
+    /// <see cref="GenerateViewModel.PrepareToCloseAsync"/> and <see cref="RefreshViewModel.ConfirmClose"/>.
     /// </summary>
-    public Task<bool> PrepareToCloseAsync() => Generate.PrepareToCloseAsync();
+    public async Task<bool> PrepareToCloseAsync()
+    {
+        if (!Refresh.ConfirmClose())
+        {
+            return false;
+        }
+
+        if (!await Generate.PrepareToCloseAsync())
+        {
+            return false;
+        }
+
+        await Refresh.CancelAndWaitAsync();
+        return true;
+    }
 
     public void Dispose()
     {
         Generate.InputChanged -= OnGenerateInputChanged;
         Generate.Run.Completed -= OnGenerateCompleted;
         Generate.Dispose();
+        Refresh.Dispose();
     }
 
     private void OnGenerateInputChanged(object? sender, EventArgs e) => Save(force: false);

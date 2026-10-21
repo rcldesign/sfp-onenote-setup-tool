@@ -92,6 +92,7 @@ public sealed class AppServices : IDisposable
             new ScheduledTaskService(new ProcessRunner(), Serilog.Core.Logger.None),
             logs,
             (logger, logPath) => CreateRefreshOrchestrator(logger, logPath, manifest, templatesDir),
+            dialogs,
             ui,
             env);
         MainViewModel main = new(generate, refresh, settings);
