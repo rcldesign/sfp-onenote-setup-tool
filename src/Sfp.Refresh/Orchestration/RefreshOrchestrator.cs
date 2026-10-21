@@ -201,12 +201,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         catch
         {
             // Cancelled, OneNote gone or an unexpected failure part way through: the outlines written so far are still
-            // recorded, or the next run would find them unowned and block their own slots.
-            SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, afterFailure: true);
+            // recorded, or the next run would find them unowned and block their own slots. A run that did not finish
+            // confirms no inked value.
+            SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, sidecar.ConfirmedInked, afterFailure: true);
             throw;
         }
 
-        sidecar = SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, afterFailure: false);
+        sidecar = SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, Propagator.ConfirmedInked(values, sidecar, request.WriteInkedValues), afterFailure: false);
 
         RefreshSummary summary = new()
         {
@@ -281,17 +282,18 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     }
 
     /// <summary>
-    /// The sidecar with what the write phase recorded (anchors and the texts written), LastRefresh and FrozenThrough,
-    /// saved. After a failure part way through the save is best effort: a save error is logged so the failure itself
-    /// still reaches the result.
+    /// The sidecar with what the write phase recorded (anchors and the texts written), LastRefresh, FrozenThrough and
+    /// the confirmed inked values, saved. After a failure part way through the save is best effort: a save error is
+    /// logged so the failure itself still reaches the result.
     /// </summary>
-    private Sidecar SaveWritten(string path, Sidecar sidecar, WriteState state, CalendarOutcome? calendar, bool afterFailure)
+    private Sidecar SaveWritten(string path, Sidecar sidecar, WriteState state, CalendarOutcome? calendar, IReadOnlyDictionary<string, string> confirmedInked, bool afterFailure)
     {
         Sidecar updated = sidecar with
         {
             Pages = state.Pages(sidecar),
             LastRefresh = services.Clock(),
             FrozenThrough = calendar?.FrozenThrough ?? sidecar.FrozenThrough,
+            ConfirmedInked = confirmedInked,
         };
         if (!afterFailure)
         {

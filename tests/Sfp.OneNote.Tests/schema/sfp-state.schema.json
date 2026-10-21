@@ -45,6 +45,12 @@
     "frozenThrough": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
     "previousNotebook": { "type": "string" },
     "planOptions": { "$ref": "#/definitions/planOptions" },
+    "confirmedInked": {
+      "description": "Setup slot id (objective:3, standingGoal:1, metricName:2, habit:4) to the inked text a Refresh run told to write inked values wrote; while the Setup slot still reads that text, a run without the confirmation treats it as typed. Absent or empty in older files.",
+      "type": "object",
+      "propertyNames": { "pattern": "^(objective|standingGoal|metricName|habit):[0-9]+$" },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
     "timeBlocks": { "$ref": "#/definitions/timeBlockWindow" }
   },
   "definitions": {

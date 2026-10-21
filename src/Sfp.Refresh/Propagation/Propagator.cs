@@ -52,7 +52,9 @@ public sealed class Propagator : IPropagator
     /// The plan for a run that writes inked values only when <paramref name="writeInkedValues"/> is true. The objective
     /// and habit legends are built from every value when it is, else from the typed values only, and are marked inked
     /// only when they include an inked value; the slots fed by one value (annual rows, headings, scorecard rows,
-    /// standing goals, metric names) carry it either way and are marked inked when it came from ink.
+    /// standing goals, metric names) carry it either way and are marked inked when it came from ink. An inked value the
+    /// sidecar records as confirmed (<see cref="Sidecar.ConfirmedInked"/>) counts as typed while its Setup slot still reads
+    /// the confirmed text, so a run without the confirmation never takes it out of a legend.
     /// </summary>
     public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s, bool writeInkedValues)
     {
@@ -60,6 +62,7 @@ public sealed class Propagator : IPropagator
         ArgumentNullException.ThrowIfNull(v);
         ArgumentNullException.ThrowIfNull(s);
         Manifest m = catalog.Manifest;
+        v = WithConfirmedInk(v, s);
         IReadOnlyList<string?> legendObjectives = writeInkedValues ? v.Objectives : TypedOnly(v.Objectives, v, SetupSlots.Objective);
         IReadOnlyList<string?> legendHabits = writeInkedValues ? v.Habits : TypedOnly(v.Habits, v, SetupSlots.Habit);
         Texts texts = new(
@@ -233,6 +236,47 @@ public sealed class Propagator : IPropagator
     /// <summary>True when a non-empty value among <paramref name="values"/> came from ink.</summary>
     private static bool IncludesInked(IReadOnlyList<string?> values, SetupValues v, Func<int, string> setupSlot) =>
         values.Select((value, i) => !string.IsNullOrWhiteSpace(value) && v.InkedSlots.Contains(setupSlot(i + 1), StringComparer.Ordinal)).Any(inked => inked);
+
+    /// <summary>
+    /// The confirmed inked values to record in the sidecar after a run, Setup slot id to text: every inked objective,
+    /// standing goal, metric name and habit when the run confirmed them (<paramref name="confirmedNow"/>), else the ones
+    /// the sidecar already records whose slot still reads the same text. A slot whose text changed, or that is typed or
+    /// empty now, is dropped (a changed inked value waits for its own confirmation).
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ConfirmedInked(SetupValues values, Sidecar sidecar, bool confirmedNow)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        ArgumentNullException.ThrowIfNull(sidecar);
+        return InkedTexts(values)
+            .Where(value => confirmedNow || IsConfirmed(sidecar, value.Slot, value.Text))
+            .ToDictionary(value => value.Slot, value => value.Text, StringComparer.Ordinal);
+    }
+
+    /// <summary>The values with every inked value the sidecar records as confirmed, with the same text, counted as typed.</summary>
+    private static SetupValues WithConfirmedInk(SetupValues v, Sidecar s)
+    {
+        if (s.ConfirmedInked.Count == 0)
+        {
+            return v;
+        }
+
+        HashSet<string> confirmed = InkedTexts(v).Where(value => IsConfirmed(s, value.Slot, value.Text)).Select(value => value.Slot).ToHashSet(StringComparer.Ordinal);
+        return confirmed.Count == 0 ? v : v with { InkedSlots = v.InkedSlots.Where(slot => !confirmed.Contains(slot)).ToList() };
+    }
+
+    private static bool IsConfirmed(Sidecar s, string slot, string text) =>
+        s.ConfirmedInked.TryGetValue(slot, out string? confirmed) && string.Equals(confirmed, text, StringComparison.Ordinal);
+
+    /// <summary>Every non-empty objective, standing goal, metric name and habit that came from ink, by Setup slot id, trimmed.</summary>
+    private static IEnumerable<(string Slot, string Text)> InkedTexts(SetupValues v) =>
+        Inked(v.Objectives, v, SetupSlots.Objective)
+            .Concat(Inked(v.StandingGoals, v, SetupSlots.StandingGoal))
+            .Concat(Inked(v.MetricNames, v, SetupSlots.MetricName))
+            .Concat(Inked(v.Habits, v, SetupSlots.Habit));
+
+    private static IEnumerable<(string Slot, string Text)> Inked(IReadOnlyList<string?> values, SetupValues v, Func<int, string> setupSlot) =>
+        values.Select((value, i) => (Slot: setupSlot(i + 1), Text: value?.Trim() ?? ""))
+            .Where(value => value.Text.Length > 0 && v.InkedSlots.Contains(value.Slot, StringComparer.Ordinal));
 
     private sealed record Texts(string Legend, bool LegendInked, string Habits, bool HabitsInked);
 }

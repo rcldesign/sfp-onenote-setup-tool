@@ -236,6 +236,26 @@ public class SidecarTests
     }
 
     [Fact]
+    public void Confirmed_inked_values_are_saved_by_setup_slot_validate_and_a_bad_slot_id_is_rejected()
+    {
+        (Sidecar built, _) = Build();
+        built.ConfirmedInked.Should().BeEmpty("Generate confirms nothing");
+        Sidecar sidecar = built with { ConfirmedInked = new Dictionary<string, string> { ["objective:3"] = "Launch v2", ["habit:12"] = "Read" } };
+        SidecarStore store = new();
+        string path = store.PathFor(Path.Combine(TestPaths.NewTempDir("sidecar-confirmed"), "SFP Q1 2027"));
+
+        store.Save(path, sidecar);
+
+        string json = File.ReadAllText(path);
+        JsonSchemaLite.AssertValid(File.ReadAllText(SchemaPath), json);
+        store.Load(path)!.ConfirmedInked.Should().Equal(sidecar.ConfirmedInked);
+        JsonSchemaLite.Validate(File.ReadAllText(SchemaPath), json.Replace("\"habit:12\"", "\"timeBlockStart\"", StringComparison.Ordinal))
+            .Should().Contain(p => p.Contains("timeBlockStart", StringComparison.Ordinal), "only objectives, standing goals, metric names and habits are confirmed");
+        JsonSchemaLite.Validate(File.ReadAllText(SchemaPath), json.Replace("\"Launch v2\"", "\"\"", StringComparison.Ordinal))
+            .Should().NotBeEmpty("a confirmed value has text");
+    }
+
+    [Fact]
     public void Tool_version_is_a_numeric_version()
     {
         ToolVersion.Current.Should().MatchRegex("^[0-9]+\\.[0-9]+");

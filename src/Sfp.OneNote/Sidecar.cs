@@ -53,6 +53,13 @@ public sealed record Sidecar
     public SidecarPlanOptions? PlanOptions { get; init; }
 
     /// <summary>
+    /// Setup slot id ("objective:3") to the inked text a Refresh run told to write inked values (--write-inked, or the
+    /// app's tick) wrote; while that Setup slot still reads the same text, a run without the confirmation treats it as
+    /// typed, so the daily task never takes it out of a legend. Empty in files written before it was recorded.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ConfirmedInked { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// The Time Blocks window the daily pages were generated with (their rows are baked art), so Refresh places calendar
     /// events in the rows the pages show; null in files written before it was recorded.
     /// </summary>

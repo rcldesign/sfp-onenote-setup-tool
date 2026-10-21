@@ -95,7 +95,8 @@ public sealed class SidecarRecovery
 
     /// <summary>
     /// Walks every page of the hierarchy, reads its sfp.key, and rebuilds the page, section and anchor maps; the history
-    /// of a stale sidecar (stamps, frozen days, previous notebook, plan options, Time Blocks window) is kept, and its plan
+    /// of a stale sidecar (stamps, frozen days, previous notebook, plan options, confirmed inked values, Time Blocks
+    /// window) is kept, and its plan
     /// options shape the plan the pages are matched against.
     /// </summary>
     public (Sidecar Sidecar, IReadOnlyDictionary<string, PageXml> Pages) Rebuild(NotebookHandle notebook, HierarchyNotebook tree, Sidecar? previous, string toolVersion)
@@ -169,6 +170,7 @@ public sealed class SidecarRecovery
             FrozenThrough = previous?.FrozenThrough,
             PreviousNotebook = previous?.PreviousNotebook,
             PlanOptions = previous?.PlanOptions,
+            ConfirmedInked = previous?.ConfirmedInked ?? new Dictionary<string, string>(StringComparer.Ordinal),
             TimeBlocks = previous?.TimeBlocks,
         };
         return (rebuilt, pages);
