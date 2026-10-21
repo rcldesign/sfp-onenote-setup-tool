@@ -1,8 +1,14 @@
 using System.CommandLine;
+using Serilog.Events;
 using Sfp.Cli;
+using Sfp.Cli.Logging;
 using Sfp.Cli.Verbs;
 using Sfp.Core.Options;
+using Sfp.OneNote.Com;
 using Sfp.OneNote.Generate;
+using Sfp.OneNote.Tests.Writer;
+using Sfp.Refresh;
+using Sfp.Render.Fonts;
 using Sfp.TestSupport;
 
 namespace Sfp.OneNote.Tests.Generate;
@@ -31,25 +37,35 @@ public class GenerateCommandTests
     /// <summary>An orchestrator returning a canned result and keeping the request it was given.</summary>
     private sealed class CannedOrchestrator : IGenerateOrchestrator, IDisposable
     {
-        public CannedOrchestrator(GenerateResult result)
+        private static readonly GenerateProgress[] DefaultReports =
+        {
+            new(GeneratePhase.CheckingOneNote, 0, 0, null),
+            new(GeneratePhase.Rendering, 3, 132, "Mon Jan 4"),
+            new(GeneratePhase.Done, 0, 0, null),
+        };
+
+        private readonly IReadOnlyList<GenerateProgress> _reports;
+
+        public CannedOrchestrator(GenerateResult result, IReadOnlyList<GenerateProgress>? reports = null)
         {
             Result = result;
+            _reports = reports ?? DefaultReports;
         }
 
         public GenerateResult Result { get; }
 
         public GenerateRequest? Request { get; private set; }
 
-        public List<GenerateProgress> Reports { get; } = new();
-
         public bool Disposed { get; private set; }
 
         public GenerateResult Run(GenerateRequest request, IProgress<GenerateProgress>? progress, CancellationToken cancellationToken)
         {
             Request = request;
-            progress?.Report(new GenerateProgress(GeneratePhase.CheckingOneNote, 0, 0, null));
-            progress?.Report(new GenerateProgress(GeneratePhase.Rendering, 3, 132, "Mon Jan 4"));
-            progress?.Report(new GenerateProgress(GeneratePhase.Done, 0, 0, null));
+            foreach (GenerateProgress report in _reports)
+            {
+                progress?.Report(report);
+            }
+
             return Result;
         }
 
@@ -101,6 +117,52 @@ public class GenerateCommandTests
 
         code.Should().Be(ExitCodes.ValidationError);
         stderr.ToString().Should().Contain(expectedText);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_start_is_refused_with_exit_2_instead_of_throwing(string start)
+    {
+        StringWriter stderr = new();
+        int code = -1;
+
+        Action run = () => code = GenerateCommand.Run(Args(start), new StringWriter(), stderr, (_, _, _) => throw new InvalidOperationException("must not run"));
+
+        run.Should().NotThrow();
+        code.Should().Be(ExitCodes.ValidationError);
+        stderr.ToString().Should().Contain("Start month must be YYYY-MM");
+    }
+
+    [Fact]
+    public void Parse_errors_exit_2_with_the_message_and_a_usage_hint()
+    {
+        static (int Code, string Out, string Err) Cli(params string[] args)
+        {
+            StringWriter output = new();
+            StringWriter error = new();
+            int code = Program.Run(args, output, error);
+            return (code, output.ToString(), error.ToString());
+        }
+
+        (int code, string stdout, string stderr) = Cli("generate", "--pdf", "a.pdf");
+        code.Should().Be(ExitCodes.ValidationError, "a missing required option is a validation error, not System.CommandLine's exit 1");
+        stderr.Should().Contain("Option '--start' is required.").And.Contain("Run 'sfp2onenote generate --help' for usage.");
+        stdout.Should().BeEmpty();
+
+        Cli("generate", "--pdf", "a.pdf", "--start", "2027-01", "--dpi", "x").Code.Should().Be(ExitCodes.ValidationError, "--dpi takes a number");
+        (int unknownCode, _, string unknownErr) = Cli("frobnicate");
+        unknownCode.Should().Be(ExitCodes.ValidationError);
+        unknownErr.Should().Contain("frobnicate").And.Contain("Run 'sfp2onenote --help' for usage.");
+        Cli().Code.Should().Be(ExitCodes.ValidationError, "a verb is required");
+
+        // A blank --start parses (it is a string) and reaches the verb, which refuses it with exit 2.
+        Cli("generate", "--pdf", Pdf, "--start", "", "--templates", TestPaths.TemplatesDir).Code.Should().Be(ExitCodes.ValidationError);
+
+        (int helpCode, string help, string helpErr) = Cli("generate", "--help");
+        helpCode.Should().Be(0, "help is not an error");
+        help.Should().Contain("--pdf");
+        helpErr.Should().BeEmpty();
     }
 
     [Fact]
@@ -180,6 +242,24 @@ public class GenerateCommandTests
         plain.OutputFolder.Should().Be(OutputFolders.Default());
         plain.NotebookName.Should().BeNull();
         plain.Links.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Generate_accepts_the_render_only_date_formats_and_finds_templates_the_same_way()
+    {
+        foreach ((string format, (DateFieldOrder order, bool padded)) in RenderOnlyCommand.DateFormats)
+        {
+            GenerateCommand.TryBuildOptions(Args() with { DateFormat = format }, new StringWriter(), out GenerateOptions? options, out _).Should().BeTrue(format);
+            (options!.DateOrder, options.PadDateFields).Should().Be((order, padded), format);
+        }
+
+        GenerateCommand.TryBuildOptions(Args() with { Templates = null }, new StringWriter(), out _, out string found).Should().BeTrue();
+        found.Should().Be(Path.GetFullPath(PlanCommand.FindTemplatesDir()!), "the lookup is PlanCommand.FindTemplatesDir: beside the executable, else above it");
+
+        StringWriter stderr = new();
+        string missing = Path.Combine(Root, "no-templates-here");
+        GenerateCommand.TryBuildOptions(Args() with { Templates = missing }, stderr, out _, out _).Should().BeFalse();
+        stderr.ToString().Should().Contain("Templates folder not found or has no sfp-quarterly.json: " + missing, "the same words as render-only and refresh");
     }
 
     [Fact]
@@ -311,13 +391,144 @@ public class GenerateCommandTests
     [Fact]
     public void A_cancelled_run_says_so_and_returns_zero()
     {
-        GenerateResult canned = new() { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, Error = "Cancelled" };
+        // The orchestrator names the notebook in a cancelled result once it had created it (and then deleted it).
+        GenerateResult canned = new() { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, Error = "Cancelled", NotebookName = "SFP Q1 2027" };
 
         (int code, string stdout, string stderr, _, _, _) = RunWith(Args(), canned);
 
         code.Should().Be(0);
         stderr.Should().BeEmpty();
         stdout.Should().Contain("Cancelled. The partial notebook was deleted.");
+
+        (_, string early, _, _, _, _) = RunWith(Args(), canned with { NotebookName = null });
+        early.Should().Contain("Cancelled before the notebook was created; nothing was written.");
+    }
+
+    [Fact]
+    public void A_cancelled_run_never_claims_a_deletion_that_failed()
+    {
+        string notebook = Path.Combine(Root, "out", "SFP Q1 2027");
+        string warning = GenerateMessages.PartialNotebookNotDeleted(notebook, "The process cannot access the file because it is being used by another process.");
+        GenerateResult canned = new()
+        {
+            Success = false,
+            Cancelled = true,
+            ExitCode = 0,
+            Phase = GeneratePhase.Cancelled,
+            Error = "Cancelled",
+            NotebookName = "SFP Q1 2027",
+            Warnings = new[] { "Font 'Bookman Old Style' is not installed; using the bundled 'TeX Gyre Bonum' instead.", warning },
+        };
+
+        (int code, string stdout, string stderr, _, _, _) = RunWith(Args(), canned);
+        (_, string quietOut, string quietErr, _, _, _) = RunWith(Args() with { Quiet = true }, canned);
+
+        code.Should().Be(0);
+        stdout.Should().NotContain("was deleted");
+        stderr.Should().Contain("Cancelled, but the partial notebook could not be deleted.").And.Contain("Warning: " + warning);
+        stderr.Should().NotContain("Bookman", "only the deletion failure is reported for a cancelled run");
+        quietOut.Should().BeEmpty();
+        quietErr.Should().Contain(warning, "a notebook left on disk is reported even with --quiet");
+    }
+
+    [Fact]
+    public void Each_page_count_is_printed_once_and_only_moving_forward()
+    {
+        // Render-only reports every page from its render worker and again from the loop that writes the file, and the
+        // workers finish out of order.
+        GenerateProgress[] reports =
+        {
+            new(GeneratePhase.Rendering, 0, 0, null),
+            new(GeneratePhase.Rendering, 0, 3, null),
+            new(GeneratePhase.Rendering, 1, 3, "Cover"),
+            new(GeneratePhase.Rendering, 1, 3, "Cover"),
+            new(GeneratePhase.Rendering, 3, 3, "Mon Jan 4"),
+            new(GeneratePhase.Rendering, 2, 3, "Fri Jan 1"),
+            new(GeneratePhase.Rendering, 2, 3, "Fri Jan 1"),
+            new(GeneratePhase.Rendering, 3, 3, "Mon Jan 4"),
+            new(GeneratePhase.Finishing, 0, 0, null),
+        };
+        GenerateResult ok = new() { Success = true, ExitCode = 0, Phase = GeneratePhase.Done, OutputPath = Path.Combine(Root, "png-dedupe"), NotebookName = "n", PagesRendered = 3 };
+        StringWriter stdout = new();
+
+        int code = GenerateCommand.Run(Args() with { RenderOnly = Path.Combine(Root, "png-dedupe") }, stdout, new StringWriter(), (_, _, _) => new CannedOrchestrator(ok, reports), Path.Combine(Root, "logs"));
+
+        code.Should().Be(0);
+        string[] lines = stdout.ToString().Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+        lines.TakeWhile(l => !l.StartsWith("Rendered ", StringComparison.Ordinal)).Should().Equal(
+            "Rendering pages",
+            "Rendering pages (0 of 3)",
+            "Rendering pages (1 of 3): Cover",
+            "Rendering pages (3 of 3): Mon Jan 4",
+            "Finishing");
+    }
+
+    [Fact]
+    public void The_console_shows_the_run_logs_warnings_but_not_its_information_lines()
+    {
+        // The verb prints its own progress and summary; the run log's console sink keeps to warnings and errors so every
+        // COM call and rendered page (logged at Information) does not flood the console or repeat the progress lines.
+        RunLog.ConsoleLevel(quiet: true, printsOwnProgress: true).Should().Be(LogEventLevel.Error);
+        RunLog.ConsoleLevel(quiet: false, printsOwnProgress: true).Should().Be(LogEventLevel.Warning);
+        RunLog.ConsoleLevel(quiet: false, printsOwnProgress: false).Should().Be(LogEventLevel.Information);
+
+        string info = "information-" + Guid.NewGuid().ToString("N");
+        string warning = "warning-" + Guid.NewGuid().ToString("N");
+        GenerateResult ok = new() { Success = true, ExitCode = 0, Phase = GeneratePhase.Done, OutputPath = "x", NotebookName = "n" };
+        StringWriter console = new();
+        TextWriter originalOut = Console.Out;
+        TextWriter originalError = Console.Error;
+        Console.SetOut(console);
+        Console.SetError(console);
+        try
+        {
+            GenerateCommand.Run(Args(), new StringWriter(), new StringWriter(), (_, log, _) =>
+            {
+                log.Information("{Marker}", info);
+                log.Warning("{Marker}", warning);
+                return new CannedOrchestrator(ok);
+            }, Path.Combine(Root, "logs"));
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+        }
+
+        console.ToString().Should().Contain(warning).And.NotContain(info);
+    }
+
+    [Fact]
+    public void The_fallback_font_warning_reaches_the_user_once()
+    {
+        // The production composition: without Bookman Old Style (always the case on Linux) the font service falls back
+        // and warns. The warning travels in the run's warnings, printed with the result; the log must not echo it too.
+        StringWriter console = new();
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+        TextWriter originalOut = Console.Out;
+        TextWriter originalError = Console.Error;
+        Console.SetOut(console);
+        Console.SetError(console);
+        try
+        {
+            GenerateCommand.Run(Args() with { RenderOnly = Path.Combine(Root, "png-font") }, stdout, stderr, null, Path.Combine(Root, "logs"));
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+        }
+
+        int shown = System.Text.RegularExpressions.Regex.Matches(console.ToString() + stdout + stderr, "is not installed; using the bundled").Count;
+        if (OperatingSystem.IsLinux())
+        {
+            shown.Should().Be(1, "this build has no Bookman Old Style, so the fallback warning shows, once");
+        }
+        else
+        {
+            shown.Should().BeLessThanOrEqualTo(1);
+        }
     }
 
     [Fact]
@@ -361,7 +572,10 @@ public class GenerateCommandTests
         (order, padded).Should().Be((DateFieldOrder.DayMonthYear, true));
         GenerateCommand.TryParseDateFormat("m/d/yy", out order, out padded).Should().BeTrue();
         (order, padded).Should().Be((DateFieldOrder.MonthDayYear, false));
-        GenerateCommand.TryParseDateFormat("d/m/yy", out _, out _).Should().BeFalse();
+        GenerateCommand.TryParseDateFormat(" D/M/YY ", out order, out padded).Should().BeTrue("generate accepts every format render-only and the app accept");
+        (order, padded).Should().Be((DateFieldOrder.DayMonthYear, false));
+        GenerateCommand.TryParseDateFormat("yy/mm/dd", out _, out _).Should().BeFalse();
+        GenerateCommand.TryParseDateFormat(null, out _, out _).Should().BeFalse();
 
         GenerateCommand.TryParseWeeksRemaining("as-printed", out WeeksRemainingMode mode).Should().BeTrue();
         mode.Should().Be(WeeksRemainingMode.AsPrinted);
@@ -375,6 +589,69 @@ public class GenerateCommandTests
         GenerateCommand.TryParseTimeBlocks("8-8", out _).Should().BeFalse();
         GenerateCommand.TryParseTimeBlocks("6-25", out _).Should().BeFalse();
         GenerateCommand.TryParseTimeBlocks("", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void The_production_orchestrator_reports_the_log_path_it_was_composed_with()
+    {
+        // The app composes this orchestrator with its run log's path (finding 2); the failure view shows and Save log
+        // copies whatever path the result reports, so it must be the one passed in.
+        string png = Path.Combine(Root, "png-logpath");
+        string logPath = Path.Combine(Root, "logs", "20261020-093000-generate.log");
+        GenerateCommand.TryBuildOptions(Args() with { RenderOnly = png }, new StringWriter(), out GenerateOptions? options, out string templates).Should().BeTrue();
+        GenerateRequest request = new(options!, TestManifest.Shipped, templates, RenderOnly: true, RenderOutputDir: png);
+
+        IGenerateOrchestrator orchestrator = GenerateCommand.CreateProductionOrchestrator(request, Serilog.Core.Logger.None, logPath);
+        GenerateResult result;
+        try
+        {
+            result = orchestrator.Run(request, null, CancellationToken.None);
+        }
+        finally
+        {
+            (orchestrator as IDisposable)?.Dispose();
+        }
+
+        result.ExitCode.Should().Be(ExitCodes.ValidationError, "the placeholder PDF is not the planner");
+        result.LogPath.Should().Be(logPath);
+    }
+
+    [Fact]
+    public void The_refresh_composition_loads_fonts_before_it_opens_onenote()
+    {
+        // RefreshCommand.Compose (the CLI's tests live in this file): a missing fallback font must fail before a COM
+        // session, with its STA thread inside OneNote, exists; on success the orchestrator owns the session.
+        RefreshRequest request = new("SFP Q1 2027", null, false, 14, true, false, new DateOnly(2027, 1, 4));
+        FakeOneNoteApp app = new();
+        int opened = 0;
+        IOneNoteApp Open()
+        {
+            opened++;
+            return app;
+        }
+
+        Action fontsMissing = () => RefreshCommand.Compose(
+            request, TestManifest.Shipped, TestPaths.TemplatesDir, Serilog.Core.Logger.None, "run.log",
+            () => throw new FileNotFoundException("Fallback font file not found: TeXGyreBonum-Regular.otf"),
+            Open);
+
+        fontsMissing.Should().Throw<FileNotFoundException>();
+        opened.Should().Be(0, "the fonts load first, so a font failure never opens a COM session");
+
+        IRefreshOrchestrator orchestrator = RefreshCommand.Compose(
+            request, TestManifest.Shipped, TestPaths.TemplatesDir, Serilog.Core.Logger.None, "run.log",
+            () => FontService.Load(TestManifest.Shipped.Font, TestPaths.TemplatesDir),
+            Open);
+        opened.Should().Be(1);
+        app.Disposed.Should().BeFalse();
+        ((IDisposable)orchestrator).Dispose();
+        app.Disposed.Should().BeTrue("the orchestrator owns the session it was composed with");
+
+        Action sessionFails = () => RefreshCommand.Compose(
+            request, TestManifest.Shipped, TestPaths.TemplatesDir, Serilog.Core.Logger.None, "run.log",
+            () => FontService.Load(TestManifest.Shipped.Font, TestPaths.TemplatesDir),
+            () => throw new InvalidOperationException("OneNote could not be started"));
+        sessionFails.Should().Throw<InvalidOperationException>("the fonts are released and the failure reaches the verb");
     }
 
     [Fact]

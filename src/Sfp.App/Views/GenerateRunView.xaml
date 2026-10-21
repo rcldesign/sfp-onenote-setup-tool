@@ -16,6 +16,7 @@
     <StackPanel Visibility="{Binding ShowSuccess, Converter={StaticResource BoolToVisibility}}">
       <TextBlock Style="{StaticResource SectionHeading}" Text="Done" />
       <TextBlock Text="{Binding SummaryText}" TextWrapping="Wrap" />
+      <TextBlock Style="{StaticResource MessageText}" Text="{Binding NextQuarterLinkText}" AutomationProperties.Name="Next quarter link" />
       <TextBox Text="{Binding NotebookPath, Mode=OneWay}" IsReadOnly="True" Margin="0,4" AutomationProperties.Name="Notebook path" />
       <StackPanel Orientation="Horizontal">
         <Button Content="_Open in OneNote" Command="{Binding OpenInOneNoteCommand}" AutomationProperties.Name="Open in OneNote" />
@@ -26,10 +27,11 @@
       <TextBlock Style="{StaticResource WarningText}" Text="{Binding WarningsText}" />
     </StackPanel>
 
-    <!-- Cancelled -->
+    <!-- Cancelled: a partial notebook that could not be deleted is named in the warnings below the line. -->
     <StackPanel Visibility="{Binding ShowCancelled, Converter={StaticResource BoolToVisibility}}">
       <TextBlock Style="{StaticResource SectionHeading}" Text="Cancelled" />
       <TextBlock Text="{Binding SummaryText}" TextWrapping="Wrap" />
+      <TextBlock Style="{StaticResource WarningText}" Text="{Binding WarningsText}" />
     </StackPanel>
 
     <!-- Failure -->

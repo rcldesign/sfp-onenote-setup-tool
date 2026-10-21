@@ -3,12 +3,19 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Serilog;
 using Sfp.App.ViewModels.Services;
+using Sfp.Core.Options;
 using Sfp.OneNote.Generate;
 
 namespace Sfp.App.ViewModels.Generate;
 
-/// <summary>Creates the orchestrator for one run, writing to that run's log.</summary>
-public delegate IGenerateOrchestrator GenerateOrchestratorFactory(ILogger logger);
+/// <summary>
+/// Creates the orchestrator for one run, writing to that run's log. <paramref name="logPath"/> is the run log's file,
+/// which the orchestrator reports as <see cref="GenerateResult.LogPath"/> (shown and copied by Save log) and beside
+/// which it saves rejected page XML.
+/// </summary>
+/// <param name="logger">The run log's logger.</param>
+/// <param name="logPath">The run log's file path.</param>
+public delegate IGenerateOrchestrator GenerateOrchestratorFactory(ILogger logger, string logPath);
 
 /// <summary>
 /// The Generate flow below the fields: the phased progress bar with Cancel while a run is on, then the success view
@@ -25,6 +32,9 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         + "notebooks placed inside the OneDrive sync folder, which is why the notebook was created at the path above. After the move, "
         + "open OneNote on the iPad and the notebook appears under your account.";
 
+    /// <summary>The phase line from the moment Cancel is pressed until the run has stopped.</summary>
+    public const string CancellingText = "Cancelling after the current page";
+
     /// <summary>Exit code reported when the orchestrator throws instead of returning a result (the contract says it never does).</summary>
     private const int UnexpectedErrorExitCode = 5;
 
@@ -34,6 +44,20 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     private readonly IShellService _shell;
     private readonly IDialogService _dialogs;
     private CancellationTokenSource? _cts;
+
+    /// <summary>The run in progress, or the last one (completed); a window close awaits it after cancelling.</summary>
+    private Task _running = Task.CompletedTask;
+
+    /// <summary>The run has reached its write phase: render reports from the workers ahead of the writer no longer drive the bar.</summary>
+    private bool _writingStarted;
+
+    /// <summary>Cancel was pressed: the phase line keeps saying so until the run stops.</summary>
+    private bool _cancelRequested;
+
+    /// <summary>The highest page counts the run reported, for the cancelled summary (the orchestrator's cancelled result carries none).</summary>
+    private int _pagesRenderedSeen;
+
+    private int _pagesWrittenSeen;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(CancelCommand))]
@@ -71,6 +95,13 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string? _summaryText;
+
+    /// <summary>
+    /// The success summary's line about the previous notebook ("Next quarter link added to the quarterly review of SFP Q4
+    /// 2026."), or null when no previous notebook was given or the link was not written (a warning then says why).
+    /// </summary>
+    [ObservableProperty]
+    private string? _nextQuarterLinkText;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(OpenInOneNoteCommand))]
@@ -151,14 +182,40 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>Runs the request to completion; returns when the result views are set. A second call while running does nothing.</summary>
-    public async Task StartAsync(GenerateRequest request)
+    public Task StartAsync(GenerateRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (IsRunning)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        _running = RunAsync(request);
+        return _running;
+    }
+
+    /// <summary>
+    /// Cancels the run in progress and completes once it has stopped and the cancelled view is shown: the orchestrator
+    /// stops after the current page and deletes the partial notebook before it returns. Completes at once when no run is on.
+    /// </summary>
+    public Task CancelAndWaitAsync()
+    {
+        if (IsRunning)
+        {
+            Cancel();
+        }
+
+        return _running;
+    }
+
+    public void Dispose()
+    {
+        _cts?.Dispose();
+        _cts = null;
+    }
+
+    private async Task RunAsync(GenerateRequest request)
+    {
         ResetViews();
         IsRunning = true;
         IsIndeterminate = true;
@@ -171,7 +228,7 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         GenerateResult result;
         try
         {
-            IGenerateOrchestrator orchestrator = _orchestrators(log.Logger);
+            IGenerateOrchestrator orchestrator = _orchestrators(log.Logger, log.Path);
             UiProgress<GenerateProgress> progress = new(_ui, OnProgress);
             result = await Task.Run(() => orchestrator.Run(request, progress, token), CancellationToken.None);
         }
@@ -205,16 +262,11 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         Completed?.Invoke(this, result);
     }
 
-    public void Dispose()
-    {
-        _cts?.Dispose();
-        _cts = null;
-    }
-
     [RelayCommand(CanExecute = nameof(IsRunning))]
     private void Cancel()
     {
-        PhaseText = "Cancelling after the current page";
+        _cancelRequested = true;
+        PhaseText = CancellingText;
         _cts?.Cancel();
     }
 
@@ -279,7 +331,29 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
             return;
         }
 
-        PhaseText = ProgressText(progress);
+        // Page counts for the cancelled summary, whichever report drives the bar.
+        if (progress.Phase == GeneratePhase.Rendering)
+        {
+            _pagesRenderedSeen = Math.Max(_pagesRenderedSeen, progress.Current);
+        }
+        else if (progress.Phase == GeneratePhase.WritingPages)
+        {
+            _pagesWrittenSeen = Math.Max(_pagesWrittenSeen, progress.Current);
+            _writingStarted = true;
+        }
+
+        // Pages render on other threads ahead of the writer. Once writing has started the bar follows the writer only;
+        // it would otherwise flip between "Rendering pages (40 of 143)" and "Writing pages (12 of 143)".
+        if (_writingStarted && progress.Phase == GeneratePhase.Rendering)
+        {
+            return;
+        }
+
+        if (!_cancelRequested)
+        {
+            PhaseText = ProgressText(progress);
+        }
+
         Current = progress.Current;
         Total = progress.Total;
         IsIndeterminate = progress.Total <= 0;
@@ -289,11 +363,16 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
 
     private void ResetViews()
     {
+        _writingStarted = false;
+        _cancelRequested = false;
+        _pagesRenderedSeen = 0;
+        _pagesWrittenSeen = 0;
         Result = null;
         ShowSuccess = false;
         ShowFailure = false;
         ShowCancelled = false;
         SummaryText = null;
+        NextQuarterLinkText = null;
         NotebookPath = null;
         ElapsedText = null;
         WarningsText = null;
@@ -326,16 +405,16 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
                 result.PagesWritten,
                 result.NotebookName ?? result.OutputPath ?? "the notebook",
                 ElapsedText);
+            NextQuarterLinkText = string.IsNullOrWhiteSpace(result.NextQuarterLink) ? null : result.NextQuarterLink;
             ShowSuccess = true;
         }
         else if (result.Cancelled)
         {
             PhaseText = PhaseName(GeneratePhase.Cancelled);
-            SummaryText = string.Format(
-                CultureInfo.InvariantCulture,
-                "Cancelled after {0} pages rendered and {1} written; the partial notebook was deleted.",
-                result.PagesRendered,
-                result.PagesWritten);
+            SummaryText = CancelledTextFor(
+                result,
+                Math.Max(result.PagesRendered, _pagesRenderedSeen),
+                Math.Max(result.PagesWritten, _pagesWrittenSeen));
             ShowCancelled = true;
         }
         else
@@ -347,6 +426,31 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         }
 
         OnPropertyChanged(nameof(HasResult));
+    }
+
+    /// <summary>
+    /// The cancelled view's line, from the result: it says the partial notebook was deleted only when the result carries
+    /// no warning that the deletion failed (that warning is shown under the line), and says nothing was written when the
+    /// run stopped before the notebook existed.
+    /// </summary>
+    /// <param name="result">The cancelled result.</param>
+    /// <param name="pagesRendered">Pages rendered before the cancel (the result's count, or the progress reports').</param>
+    /// <param name="pagesWritten">Pages written before the cancel.</param>
+    public static string CancelledTextFor(GenerateResult result, int pagesRendered, int pagesWritten)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        string after = string.Format(CultureInfo.InvariantCulture, "Cancelled after {0} pages rendered and {1} written", pagesRendered, pagesWritten);
+        if (result.Warnings.Any(GenerateMessages.IsPartialNotebookNotDeleted))
+        {
+            return after + "; the partial notebook could not be deleted (see the note below).";
+        }
+
+        if (result.NotebookName is null && pagesRendered == 0 && pagesWritten == 0)
+        {
+            return "Cancelled before the notebook was created; nothing was written.";
+        }
+
+        return after + "; the partial notebook was deleted.";
     }
 
     /// <summary>"Failed while writing pages, page Mon Jan 4: 0x80042001 invalid XML. The partial notebook at ... is left in place for inspection."</summary>

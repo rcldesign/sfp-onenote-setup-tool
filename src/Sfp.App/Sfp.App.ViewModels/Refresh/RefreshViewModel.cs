@@ -9,8 +9,13 @@ using Sfp.Refresh;
 
 namespace Sfp.App.ViewModels.Refresh;
 
-/// <summary>Creates the Refresh orchestrator for one run, writing to that run's log.</summary>
-public delegate IRefreshOrchestrator RefreshOrchestratorFactory(ILogger logger);
+/// <summary>
+/// Creates the Refresh orchestrator for one run, writing to that run's log. <paramref name="logPath"/> is the run log's
+/// file, which the orchestrator reports as <see cref="RefreshResult.LogPath"/> and the tab shows with a failure.
+/// </summary>
+/// <param name="logger">The run log's logger.</param>
+/// <param name="logPath">The run log's file path.</param>
+public delegate IRefreshOrchestrator RefreshOrchestratorFactory(ILogger logger, string logPath);
 
 /// <summary>
 /// The Refresh tab: the notebooks the tool built (from their sidecars under the known output folders plus the default
@@ -150,7 +155,20 @@ public sealed partial class RefreshViewModel : ObservableObject
         SelectedNotebook = Notebooks.FirstOrDefault(n => n.Name == selectedName) ?? Notebooks.FirstOrDefault();
     }
 
-    /// <summary>The request for the selected notebook.</summary>
+    /// <summary>
+    /// The folder that holds a notebook's sidecar: what the orchestrator's NotebooksFolder and the verb's --folder mean.
+    /// It comes from the sidecar's own path, never from the notebook path, which turns into a OneDrive URL
+    /// (https://d.docs.live.net/...) once the notebook is moved while the sidecar stays in the local output folder.
+    /// Null when the sidecar path is unknown (the orchestrator then searches the default folders).
+    /// </summary>
+    public static string? NotebooksFolderOf(KnownNotebook notebook)
+    {
+        ArgumentNullException.ThrowIfNull(notebook);
+        string? folder = string.IsNullOrWhiteSpace(notebook.SidecarPath) ? null : PathText.ParentOf(notebook.SidecarPath);
+        return string.IsNullOrEmpty(folder) ? null : folder;
+    }
+
+    /// <summary>The request for the selected notebook, dated by the clock at the moment it is built (never the app's start date).</summary>
     public RefreshRequest? ToRequest(bool dryRun)
     {
         if (SelectedNotebook is not { } notebook)
@@ -158,15 +176,14 @@ public sealed partial class RefreshViewModel : ObservableObject
             return null;
         }
 
-        string? folder = PathText.ParentOf(notebook.Path);
         return new RefreshRequest(
             notebook.Name,
-            string.IsNullOrEmpty(folder) ? null : folder,
+            NotebooksFolderOf(notebook.Notebook),
             IncludeCalendar,
             Math.Max(0, HorizonDays),
             dryRun,
             WriteInkedValues,
-            _env.Today);
+            _env.CurrentDate());
     }
 
     /// <summary>Runs a dry run or a real refresh and fills the listing and the summary.</summary>
@@ -190,7 +207,7 @@ public sealed partial class RefreshViewModel : ObservableObject
         RefreshResult result;
         try
         {
-            IRefreshOrchestrator orchestrator = _orchestrators(log.Logger);
+            IRefreshOrchestrator orchestrator = _orchestrators(log.Logger, log.Path);
             UiProgress<string> progress = new(_ui, text => ProgressText = text);
             result = await Task.Run(() => orchestrator.Run(request, progress, CancellationToken.None), CancellationToken.None);
         }
@@ -235,7 +252,8 @@ public sealed partial class RefreshViewModel : ObservableObject
         {
             if (value)
             {
-                _tasks.Register(notebook.Name, _env.RefreshExecutablePath, Math.Max(0, HorizonDays));
+                // --folder lets the 05:00 run find the sidecar of a notebook generated outside Documents\OneNote Notebooks.
+                _tasks.Register(notebook.Name, _env.RefreshExecutablePath, Math.Max(0, HorizonDays), NotebooksFolderOf(notebook.Notebook));
                 ScheduleStatus = string.Format(CultureInfo.InvariantCulture, "Scheduled: {0} is refreshed every day at 05:00.", notebook.Name);
             }
             else

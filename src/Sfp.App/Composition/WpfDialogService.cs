@@ -1,10 +1,11 @@
 using System.IO;
+using System.Windows;
 using Microsoft.Win32;
 using Sfp.App.ViewModels.Services;
 
 namespace Sfp.App.Composition;
 
-/// <summary>The standard WPF file dialogs and the .NET 8 folder dialog.</summary>
+/// <summary>The standard WPF file dialogs, the .NET 8 folder dialog and a yes/no message box.</summary>
 public sealed class WpfDialogService : IDialogService
 {
     public string? PickFile(string title, string filter, string? initialPath)
@@ -57,5 +58,14 @@ public sealed class WpfDialogService : IDialogService
             OverwritePrompt = true,
         };
         return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public bool Confirm(string title, string question)
+    {
+        Window? owner = Application.Current?.MainWindow;
+        MessageBoxResult answer = owner is null
+            ? MessageBox.Show(question, title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No)
+            : MessageBox.Show(owner, question, title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+        return answer == MessageBoxResult.Yes;
     }
 }

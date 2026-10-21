@@ -44,6 +44,22 @@ public class GenerateViewModelTests
     }
 
     [Fact]
+    public void The_fallback_font_warning_is_a_banner_before_anything_is_generated()
+    {
+        const string warning = "Font 'Bookman Old Style' is not installed; using the bundled 'TeX Gyre Bonum' instead. The date glyphs will differ slightly from the printed labels.";
+        using (GenerateViewModel installed = _h.NewGenerate())
+        {
+            installed.FontWarning.Should().BeNull("no banner when the template typeface is installed");
+        }
+
+        _h.Env = _h.Env with { FontWarnings = new[] { warning } };
+        using GenerateViewModel vm = _h.NewGenerate();
+
+        vm.FontWarning.Should().Be(warning);
+        _h.Generator.Runs.Should().Be(0, "the banner shows on the form, before any run");
+    }
+
+    [Fact]
     public async Task Saved_settings_fill_every_field_and_the_pdf_check_starts()
     {
         AppSettings saved = new()
@@ -113,6 +129,39 @@ public class GenerateViewModelTests
     }
 
     [Fact]
+    public async Task A_saved_start_before_the_next_quarter_is_not_restored()
+    {
+        using GenerateViewModel vm = _h.NewGenerate();
+
+        // Today is October 20, 2026: the next quarter starts in January 2027; October 2026 is already under way.
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2026, 10), NotebookName = "SFP Q4 2026", Dpi = 144 });
+        await Settle(vm);
+
+        vm.Start.Should().Be(new QuarterSpec(2027, 1), "the form opens on the next quarter, not on last time's");
+        vm.NotebookName.Should().Be("SFP Q1 2027", "a saved name that was the old start's default follows the new default");
+        vm.Dpi.Should().Be(144, "the other saved values still apply");
+        vm.Month = 4;
+        vm.NotebookName.Should().Be("SFP Q2 2027", "the name keeps following the start");
+
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2026, 7), NotebookName = "My planner" });
+        vm.Start.Should().Be(new QuarterSpec(2027, 1));
+        vm.NotebookName.Should().Be("My planner", "a name the user typed is kept");
+
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2027, 1), NotebookName = "SFP Q1 2027" });
+        vm.Start.Should().Be(new QuarterSpec(2027, 1), "the next quarter itself is restored");
+
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2027, 7), NotebookName = "SFP Q3 2027" });
+        vm.Start.Should().Be(new QuarterSpec(2027, 7), "a later quarter planned ahead is restored");
+        vm.NotebookName.Should().Be("SFP Q3 2027");
+
+        _h.Now = new DateOnly(2027, 1, 5);
+        vm.LoadFrom(new AppSettings { Start = new QuarterSpec(2027, 1), NotebookName = "SFP Q1 2027" });
+        vm.Start.Should().Be(new QuarterSpec(2027, 4), "the clock is read when the settings load");
+        vm.NotebookName.Should().Be("SFP Q2 2027");
+        await Settle(vm);
+    }
+
+    [Fact]
     public async Task Notebook_name_follows_the_default_until_the_user_edits_it()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -156,6 +205,44 @@ public class GenerateViewModelTests
         vm.StartError.Should().BeNull();
         vm.NotebookName.Should().Be("SFP Q1 2199");
         vm.CanGenerate.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("1899")]
+    [InlineData("2200")]
+    [InlineData("1")]
+    [InlineData("202")]
+    public async Task A_year_outside_1900_to_2199_shows_the_start_message_and_blocks_generate_without_throwing(string year)
+    {
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+        vm.CanGenerate.Should().BeTrue();
+
+        Action type = () => vm.YearText = year;
+
+        type.Should().NotThrow("the date engine refuses these years, so the form must never hand them to it");
+        vm.Start.Should().BeNull();
+        vm.StartError.Should().Be("Year must be a whole number between 1900 and 2199.");
+        vm.CanGenerate.Should().BeFalse();
+        vm.GenerateCommand.CanExecute(null).Should().BeFalse();
+        vm.NotebookName.Should().Be("SFP Q1 2027", "the name keeps the default of the last valid start");
+        vm.SizeEstimate.Should().Be("About 42 MB for 144 pages at 220 DPI", "the estimate keeps the last valid start");
+        vm.ToOptions().Start.Should().Be(new QuarterSpec(2027, 1));
+        vm.Previews.Day.Status.Should().Be("Fix the start month to see previews.");
+
+        await vm.GenerateCommand.ExecuteAsync(null);
+        _h.Generator.Runs.Should().Be(0, "clicking Generate does nothing while the year is out of range");
+
+        Action other = () => vm.Month = 4;
+        other.Should().NotThrow();
+        vm.StartError.Should().Be("Year must be a whole number between 1900 and 2199.");
+
+        vm.YearText = "2027";
+        vm.Start.Should().Be(new QuarterSpec(2027, 4));
+        vm.StartError.Should().BeNull();
+        vm.CanGenerate.Should().BeTrue();
+        await Settle(vm);
     }
 
     [Fact]
@@ -335,6 +422,37 @@ public class GenerateViewModelTests
     }
 
     [Fact]
+    public async Task The_previous_notebook_field_maps_to_the_option_the_browse_button_and_the_run()
+    {
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+        vm.ToOptions().PreviousNotebook.Should().BeNull("an empty field means no previous notebook");
+
+        vm.PreviousNotebook = @"  D:\Notebooks\SFP Q4 2026  ";
+        vm.ToOptions().PreviousNotebook.Should().Be(@"D:\Notebooks\SFP Q4 2026");
+        vm.ToRequest().Options.PreviousNotebook.Should().Be(@"D:\Notebooks\SFP Q4 2026");
+        SettingsStore.Serialize(vm.ToSettings(Array.Empty<string>())).Should().NotContain("SFP Q4 2026", "the previous notebook changes every quarter, so it is not a saved setting");
+
+        _h.Dialogs.NextFolder = null;
+        vm.BrowsePreviousCommand.Execute(null);
+        vm.PreviousNotebook.Should().Be(@"  D:\Notebooks\SFP Q4 2026  ", "a cancelled dialog changes nothing");
+        _h.Dialogs.LastInitialPath.Should().Be(@"  D:\Notebooks\SFP Q4 2026  ");
+        _h.Dialogs.NextFolder = @"E:\Old\SFP Q4 2026";
+        vm.BrowsePreviousCommand.Execute(null);
+        vm.PreviousNotebook.Should().Be(@"E:\Old\SFP Q4 2026");
+
+        await vm.GenerateCommand.ExecuteAsync(null);
+        _h.Generator.LastRequest!.Options.PreviousNotebook.Should().Be(@"E:\Old\SFP Q4 2026");
+
+        vm.PreviousNotebook = "   ";
+        vm.ToOptions().PreviousNotebook.Should().BeNull();
+        _h.Dialogs.NextFolder = null;
+        vm.BrowsePreviousCommand.Execute(null);
+        _h.Dialogs.LastInitialPath.Should().Be(Harness.DefaultFolder, "with the field empty the dialog starts in the output folder");
+    }
+
+    [Fact]
     public async Task Generate_runs_the_orchestrator_with_the_request_and_locks_the_fields_meanwhile()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -383,6 +501,92 @@ public class GenerateViewModelTests
 
         vm.NameError.Should().Contain("already exists");
         vm.CanGenerate.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Closing_with_nothing_running_is_allowed_at_once_without_a_question()
+    {
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+
+        Task<bool> closing = vm.PrepareToCloseAsync();
+
+        closing.IsCompleted.Should().BeTrue("the window's Closing handler can answer synchronously");
+        (await closing).Should().BeTrue();
+        _h.Dialogs.Questions.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Closing_during_a_run_asks_first_and_no_keeps_the_window_and_the_run()
+    {
+        _h.Generator.WaitForCancel = true;
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+        Task generating = vm.GenerateCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        _h.Dialogs.ConfirmAnswer = false;
+
+        bool close = await vm.PrepareToCloseAsync();
+
+        close.Should().BeFalse();
+        _h.Dialogs.Questions.Should().Equal(GenerateViewModel.CloseWhileRunningQuestion);
+        vm.Run.IsRunning.Should().BeTrue("the user chose to keep the run going");
+        _h.Generator.SawCancel.Should().BeFalse();
+
+        vm.Run.CancelCommand.Execute(null);
+        await generating;
+    }
+
+    [Fact]
+    public async Task Closing_during_a_run_on_yes_cancels_and_waits_until_the_run_has_stopped()
+    {
+        using ManualResetEventSlim deleting = new(false);
+        _h.Generator.WaitForCancel = true;
+        _h.Generator.AfterCancelGate = deleting;
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await Settle(vm);
+        Task generating = vm.GenerateCommand.ExecuteAsync(null);
+        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        Task<bool> closing = vm.PrepareToCloseAsync();
+
+        _h.Dialogs.Questions.Should().ContainSingle();
+        SpinWait.SpinUntil(() => _h.Generator.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("yes cancels the run");
+        vm.Run.PhaseText.Should().Be(GenerateRunViewModel.CancellingText);
+        closing.IsCompleted.Should().BeFalse("the window stays open while the orchestrator deletes the partial notebook");
+
+        deleting.Set();
+        (await closing).Should().BeTrue();
+        vm.Run.IsRunning.Should().BeFalse();
+        vm.Run.ShowCancelled.Should().BeTrue();
+        await generating;
+    }
+
+    [Fact]
+    public async Task Closing_waits_for_a_preview_render_in_flight_and_no_render_starts_after()
+    {
+        using ManualResetEventSlim gate = new(false);
+        _h.Renderer.Gate = gate;
+        using GenerateViewModel vm = _h.NewGenerate();
+        vm.PdfPath = Harness.Pdf;
+        await vm.PendingPdfCheck;
+        vm.Previews.IsBusy.Should().BeTrue("the PDF check started a preview render that waits at the gate");
+        vm.Month = 4;
+
+        Task<bool> closing = vm.PrepareToCloseAsync();
+
+        closing.IsCompleted.Should().BeFalse("a render is still inside the renderer the app disposes on exit");
+        gate.Set();
+        (await closing).Should().BeTrue();
+        vm.Previews.IsBusy.Should().BeFalse("both the superseded render and the newest one have left the renderer");
+        int renders = vm.Previews.RenderCount;
+        vm.Month = 7;
+        vm.Previews.RenderCount.Should().Be(renders, "nothing renders once the window is closing");
+        vm.Previews.IsBusy.Should().BeFalse();
+        _h.Dialogs.Questions.Should().BeEmpty();
     }
 
     [Fact]

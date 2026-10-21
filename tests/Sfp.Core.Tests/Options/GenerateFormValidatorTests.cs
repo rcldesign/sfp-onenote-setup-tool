@@ -1,5 +1,6 @@
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
+using Sfp.OneNote.Generate;
 using Sfp.TestSupport;
 
 namespace Sfp.Core.Tests.Options;
@@ -241,9 +242,22 @@ public class GenerateFormValidatorTests
 
         GenerateFormValidation v = _validator.Validate(Good() with { OutputFolder = underOneDrive }, ValidationResult.Ok);
 
+        v.WarningFor(GenerateFormFields.OutputFolder).Should().Be(GenerateMessages.OneDriveWarning(underOneDrive));
         v.WarningFor(GenerateFormFields.OutputFolder).Should().Contain("OneDrive").And.Contain("refuses");
         v.ErrorFor(GenerateFormFields.OutputFolder).Should().BeNull();
         v.CanGenerate.Should().BeTrue();
+    }
+
+    [Fact]
+    public void The_form_and_the_preflight_word_the_onedrive_warning_the_same_way()
+    {
+        const string underOneDrive = @"C:\Users\me\OneDrive\Notebooks";
+
+        string? form = _validator.Validate(Good() with { OutputFolder = " " + underOneDrive + " " }, ValidationResult.Ok).WarningFor(GenerateFormFields.OutputFolder);
+
+        form.Should().Be(GenerateText.OneDriveWarning(underOneDrive), "the error matrix asks for one text in both places");
+        GenerateText.OneDriveWarningReason.Should().Be(GenerateMessages.OneDriveWarningReason);
+        form.Should().Be(@"The output folder C:\Users\me\OneDrive\Notebooks is under the OneDrive sync folder: OneNote desktop refuses local notebooks placed under the OneDrive sync folder. Generate elsewhere, then move the notebook to OneDrive from inside OneNote.");
     }
 
     [Fact]

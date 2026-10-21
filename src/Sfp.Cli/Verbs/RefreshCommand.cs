@@ -54,6 +54,8 @@ public sealed record RefreshArgs
 /// </summary>
 public static class RefreshCommand
 {
+    private const string WindowsOnlyMessage = OneNoteUnavailableException.UserMessage + " Refresh runs on Windows only.";
+
     /// <summary>Creates the orchestrator for a run: the production composition, or a test double.</summary>
     /// <param name="request">The run's request.</param>
     /// <param name="manifest">The merged manifest.</param>
@@ -147,7 +149,8 @@ public static class RefreshCommand
             return ExitCodes.ValidationError;
         }
 
-        using RunLog log = RunLog.Start("refresh", args.Quiet, logDirectory);
+        // The verb prints its own progress, listing and summary, so the log's console sink keeps to warnings and errors.
+        using RunLog log = RunLog.Start("refresh", args.Quiet, logDirectory, printsOwnProgress: true);
         log.Logger.Information("refresh --notebook {Notebook} calendar {Calendar} horizon {Horizon} dry-run {DryRun} today {Today}", request.NotebookName, request.Calendar, request.HorizonDays, request.DryRun, request.Today);
         IRefreshOrchestrator orchestrator;
         try
@@ -304,47 +307,80 @@ public static class RefreshCommand
         ArgumentNullException.ThrowIfNull(log);
         if (!OperatingSystem.IsWindows())
         {
-            throw new OneNoteUnavailableException(OneNoteUnavailableException.UserMessage + " Refresh runs on Windows only.");
+            throw new OneNoteUnavailableException(WindowsOnlyMessage);
         }
 
-        OneNoteApp app = new(log);
-        FontService fonts = FontService.Load(manifest.Font, templatesDir);
-        foreach (string warning in fonts.Warnings)
-        {
-            log.Warning("{Warning}", warning);
-        }
+        return Compose(request, manifest, templatesDir, log, logPath, () => FontService.Load(manifest.Font, templatesDir), () => OpenOneNote(log));
+    }
 
-        PageXmlOptions xml = new()
+    /// <summary>The production COM session; Windows only (the caller has already refused other platforms).</summary>
+    private static IOneNoteApp OpenOneNote(ILogger log) =>
+        OperatingSystem.IsWindows() ? new OneNoteApp(log) : throw new OneNoteUnavailableException(WindowsOnlyMessage);
+
+    /// <summary>
+    /// The composition behind <see cref="CreateProductionOrchestrator"/> with its two disposable resources injectable
+    /// (tests). The fonts load first, so a missing fallback font fails before any COM session (and its STA thread)
+    /// exists; a failure after the session opened disposes the session and the fonts before it propagates. On success
+    /// the returned orchestrator owns both.
+    /// </summary>
+    internal static IRefreshOrchestrator Compose(
+        RefreshRequest request,
+        Manifest manifest,
+        string templatesDir,
+        ILogger log,
+        string logPath,
+        Func<FontService> loadFonts,
+        Func<IOneNoteApp> openOneNote)
+    {
+        FontService fonts = loadFonts();
+        IOneNoteApp? app = null;
+        try
         {
-            OneNote = manifest.OneNote,
-            SheetWidthPt = manifest.PageWidthPt,
-            SheetHeightPt = manifest.PageHeightPt,
-            FontFamily = fonts.FamilyInUse,
-            InkHex = manifest.Colors.Ink,
-            BackgroundHex = manifest.Colors.Background,
-            TimeZone = TimeZoneInfo.Local,
-        };
-        TextWidthMeasure measure = (text, sizePt) => fonts.TextWidth(text, sizePt);
-        DateEngine dates = new();
-        RefreshServices services = new()
+            foreach (string warning in fonts.Warnings)
+            {
+                log.Warning("{Warning}", warning);
+            }
+
+            app = openOneNote();
+            PageXmlOptions xml = new()
+            {
+                OneNote = manifest.OneNote,
+                SheetWidthPt = manifest.PageWidthPt,
+                SheetHeightPt = manifest.PageHeightPt,
+                FontFamily = fonts.FamilyInUse,
+                InkHex = manifest.Colors.Ink,
+                BackgroundHex = manifest.Colors.Background,
+                TimeZone = TimeZoneInfo.Local,
+            };
+            TextWidthMeasure measure = (text, sizePt) => fonts.TextWidth(text, sizePt);
+            DateEngine dates = new();
+            RefreshServices services = new()
+            {
+                App = app,
+                Sidecars = new SidecarStore(),
+                Manifest = manifest,
+                Dates = dates,
+                Plans = new PlanBuilder(dates),
+                SetupReader = new SetupReader(),
+                Propagators = (catalog, reader) => new Propagator(catalog, reader, measure),
+                Writer = new AnchorWriter(app, xml, log),
+                Measure = measure,
+                Log = log,
+                CalendarSources = new CalendarSourceFactory(templatesDir),
+                Notifier = new WindowsToastNotifier(log),
+                SearchFolders = DefaultSearchFolders(),
+                ToolVersion = typeof(RefreshCommand).Assembly.GetName().Version?.ToString() ?? "unknown",
+                LogPath = logPath,
+            };
+            return new DisposingOrchestrator(new RefreshOrchestrator(services), app, fonts);
+        }
+        catch
         {
-            App = app,
-            Sidecars = new SidecarStore(),
-            Manifest = manifest,
-            Dates = dates,
-            Plans = new PlanBuilder(dates),
-            SetupReader = new SetupReader(),
-            Propagators = (catalog, reader) => new Propagator(catalog, reader, measure),
-            Writer = new AnchorWriter(app, xml, log),
-            Measure = measure,
-            Log = log,
-            CalendarSources = new CalendarSourceFactory(templatesDir),
-            Notifier = new WindowsToastNotifier(log),
-            SearchFolders = DefaultSearchFolders(),
-            ToolVersion = typeof(RefreshCommand).Assembly.GetName().Version?.ToString() ?? "unknown",
-            LogPath = logPath,
-        };
-        return new DisposingOrchestrator(new RefreshOrchestrator(services), app, fonts);
+            // Composition failed after a resource was acquired: release it, then let the verb report the failure.
+            app?.Dispose();
+            fonts.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Prints progress lines unless quiet.</summary>

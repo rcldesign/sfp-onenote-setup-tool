@@ -148,6 +148,22 @@ public class RefreshViewModelTests
     }
 
     [Fact]
+    public async Task Each_run_is_dated_by_the_clock_when_it_starts_not_by_the_day_the_app_opened()
+    {
+        _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() };
+        RefreshViewModel vm = await Loaded();
+
+        await vm.PreviewChangesCommand.ExecuteAsync(null);
+        _h.Refresher.LastRequest!.Today.Should().Be(new DateOnly(2026, 10, 20));
+
+        _h.Now = new DateOnly(2026, 10, 21);
+        await vm.RefreshNowCommand.ExecuteAsync(null);
+
+        _h.Refresher.LastRequest!.Today.Should().Be(new DateOnly(2026, 10, 21), "the window stayed open past midnight, so yesterday is frozen now");
+        _h.Env.Today.Should().Be(new DateOnly(2026, 10, 20), "the start date itself does not move");
+    }
+
+    [Fact]
     public async Task Refresh_now_writes_and_reloads_the_list_afterwards()
     {
         _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() with { Values = SetupValues.Empty }, Elapsed = TimeSpan.FromSeconds(30) };
@@ -184,6 +200,39 @@ public class RefreshViewModelTests
     }
 
     [Fact]
+    public async Task The_orchestrator_is_given_the_run_log_and_a_failure_names_that_file()
+    {
+        FakeRunLogFactory logs = new();
+        Serilog.ILogger? givenLogger = null;
+        string? givenPath = null;
+        _h.Registry.Notebooks.Add(Q1);
+        RefreshViewModel vm = new(
+            _h.Registry,
+            _h.Tasks,
+            logs,
+            (logger, logPath) =>
+            {
+                givenLogger = logger;
+                givenPath = logPath;
+
+                // As the production orchestrator does: the result reports the log path it was composed with.
+                _h.Refresher.Result = new RefreshResult { Success = false, ExitCode = 5, Error = "Writing page 'Mon Jan 4' failed", LogPath = logPath };
+                return _h.Refresher;
+            },
+            _h.Ui,
+            _h.Env);
+        vm.SetKnownFolders(Array.Empty<string>());
+        await vm.PendingReload;
+
+        await vm.RefreshNowCommand.ExecuteAsync(null);
+
+        FakeRunLog log = logs.Started.Should().ContainSingle().Subject;
+        givenLogger.Should().BeSameAs(log.Logger);
+        givenPath.Should().Be(log.Path);
+        vm.ErrorText.Should().Be("Writing page 'Mon Jan 4' failed Log: " + log.Path);
+    }
+
+    [Fact]
     public async Task An_orchestrator_that_throws_is_reported_not_rethrown()
     {
         _h.Refresher.Throw = new InvalidOperationException("OneNote is busy");
@@ -205,11 +254,36 @@ public class RefreshViewModelTests
 
         vm.DailyRefreshEnabled = true;
         _h.Tasks.Registrations.Should().Equal(("SFP Q1 2027", Harness.Exe, 10));
+        _h.Tasks.Folders.Should().Equal(new[] { Harness.DefaultFolder }, "the task runs refresh with --folder set to the sidecar's folder");
         vm.ScheduleStatus.Should().Be("Scheduled: SFP Q1 2027 is refreshed every day at 05:00.");
 
         vm.DailyRefreshEnabled = false;
         _h.Tasks.Removals.Should().Equal("SFP Q1 2027");
         vm.ScheduleStatus.Should().Be("The daily refresh task was removed.");
+
+        vm.SelectedNotebook = vm.Notebooks[1];
+        vm.DailyRefreshEnabled = true;
+        _h.Tasks.Folders.Should().Equal(Harness.DefaultFolder, @"D:\Notebooks");
+    }
+
+    [Fact]
+    public async Task A_notebook_moved_to_onedrive_is_refreshed_and_scheduled_from_the_folder_of_its_sidecar()
+    {
+        // After File, Share, Move Notebook the sidecar's notebook path is the OneDrive URL; the sidecar itself stays put.
+        KnownNotebook moved = Q1 with { Path = "https://d.docs.live.net/0123456789abcdef/Documents/SFP Q1 2027" };
+        _h.Registry.Notebooks.Add(moved);
+        _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() };
+        RefreshViewModel vm = _h.NewRefresh();
+        vm.SetKnownFolders(Array.Empty<string>());
+        await vm.PendingReload;
+
+        await vm.PreviewChangesCommand.ExecuteAsync(null);
+        vm.DailyRefreshEnabled = true;
+
+        _h.Refresher.LastRequest!.NotebooksFolder.Should().Be(Harness.DefaultFolder, "the sidecar lives there, not under the OneDrive URL");
+        _h.Tasks.Folders.Should().Equal(Harness.DefaultFolder);
+        RefreshViewModel.NotebooksFolderOf(moved).Should().Be(Harness.DefaultFolder);
+        RefreshViewModel.NotebooksFolderOf(moved with { SidecarPath = "" }).Should().BeNull("no sidecar path means the default folders are searched");
     }
 
     [Fact]

@@ -14,4 +14,9 @@ public interface IDialogService
 
     /// <summary>Save-file dialog; returns the chosen path or null when cancelled.</summary>
     string? PickSaveFile(string title, string filter, string suggestedFileName);
+
+    /// <summary>A yes/no question; true when the user answers yes.</summary>
+    /// <param name="title">Dialog title.</param>
+    /// <param name="question">The question, worded so that yes is the action named.</param>
+    bool Confirm(string title, string question);
 }

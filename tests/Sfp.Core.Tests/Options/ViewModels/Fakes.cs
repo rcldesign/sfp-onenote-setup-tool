@@ -57,6 +57,19 @@ public sealed class FakeDialogService : IDialogService
         LastInitialPath = suggestedFileName;
         return NextSaveFile;
     }
+
+    /// <summary>The answer every yes/no question gets.</summary>
+    public bool ConfirmAnswer { get; set; } = true;
+
+    /// <summary>The questions asked, in order.</summary>
+    public List<string> Questions { get; } = new();
+
+    public bool Confirm(string title, string question)
+    {
+        Titles.Add(title);
+        Questions.Add(question);
+        return ConfirmAnswer;
+    }
 }
 
 public sealed class FakeShellService : IShellService
@@ -93,6 +106,42 @@ public sealed class FakeShellService : IShellService
         {
             throw Throw;
         }
+    }
+}
+
+/// <summary>A run log with a fixed path and its own logger instance, so a test can tell which log an orchestrator was given.</summary>
+public sealed class FakeRunLog : IRunLog
+{
+    private readonly Serilog.Core.Logger _logger = new Serilog.LoggerConfiguration().CreateLogger();
+
+    public FakeRunLog(string path)
+    {
+        Path = path;
+    }
+
+    public Serilog.ILogger Logger => _logger;
+
+    public string Path { get; }
+
+    public bool Disposed { get; private set; }
+
+    public void Dispose()
+    {
+        Disposed = true;
+        _logger.Dispose();
+    }
+}
+
+/// <summary>Starts <see cref="FakeRunLog"/>s with paths like the real log folder's, keeping every one started.</summary>
+public sealed class FakeRunLogFactory : IRunLogFactory
+{
+    public List<FakeRunLog> Started { get; } = new();
+
+    public IRunLog Start(string verb)
+    {
+        FakeRunLog log = new(@"C:\Users\me\AppData\Local\sfp2onenote\logs\20261020-0930" + Started.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + "-" + verb + ".log");
+        Started.Add(log);
+        return log;
     }
 }
 
@@ -213,8 +262,20 @@ public sealed class FakeGenerateOrchestrator : IGenerateOrchestrator
 
     public Exception? Throw { get; set; }
 
-    /// <summary>When true the run waits for cancellation and then returns a cancelled result.</summary>
+    /// <summary>When true the run waits for cancellation and then returns <see cref="CancelledResult"/>.</summary>
     public bool WaitForCancel { get; set; }
+
+    /// <summary>What a cancelled run returns.</summary>
+    public GenerateResult CancelledResult { get; set; } = new() { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, PagesRendered = 10, PagesWritten = 3 };
+
+    /// <summary>Reported after the cancel was seen (the page in flight finishing, then the Cancelled phase).</summary>
+    public List<GenerateProgress> ProgressAfterCancel { get; } = new();
+
+    /// <summary>When set, a cancelled run waits here before returning, as the real one does while it deletes the partial notebook.</summary>
+    public ManualResetEventSlim? AfterCancelGate { get; set; }
+
+    /// <summary>True once the run saw the cancellation.</summary>
+    public bool SawCancel { get; private set; }
 
     /// <summary>Called inside Run, on the worker thread, before anything else.</summary>
     public Action? OnRun { get; set; }
@@ -239,7 +300,14 @@ public sealed class FakeGenerateOrchestrator : IGenerateOrchestrator
         if (WaitForCancel)
         {
             cancellationToken.WaitHandle.WaitOne();
-            return new GenerateResult { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, PagesRendered = 10, PagesWritten = 3 };
+            SawCancel = true;
+            foreach (GenerateProgress p in ProgressAfterCancel)
+            {
+                progress?.Report(p);
+            }
+
+            AfterCancelGate?.Wait();
+            return CancelledResult;
         }
 
         return Result;
@@ -348,15 +416,22 @@ public sealed class Harness
     {
         Paths.Files.Add(Pdf);
         Paths.Directories.Add(DefaultFolder);
-        Env = new AppEnvironment(new DateOnly(2026, 10, 20), TestPaths.TemplatesDir, DefaultFolder, new[] { @"C:\Users\me\OneDrive" }, Exe);
+        Env = new AppEnvironment(new DateOnly(2026, 10, 20), TestPaths.TemplatesDir, DefaultFolder, new[] { @"C:\Users\me\OneDrive" }, Exe)
+        {
+            Clock = () => Now,
+        };
         Validator = new GenerateFormValidator(PdfValidator, Paths, Env.OneDriveRoots);
     }
+
+    /// <summary>The date <see cref="Env"/>'s clock reads; a test moves it to simulate the window staying open past midnight.</summary>
+    public DateOnly Now { get; set; } = new(2026, 10, 20);
 
     public Manifest Manifest { get; } = TestManifest.Shipped;
 
     public DateEngine Dates { get; } = new();
 
-    public AppEnvironment Env { get; }
+    /// <summary>The machine facts the view models get; a test may replace it (with <c>with</c>) before creating them.</summary>
+    public AppEnvironment Env { get; set; }
 
     public FakePathProbe Paths { get; } = new();
 
@@ -389,12 +464,12 @@ public sealed class Harness
     public PreviewStripViewModel NewPreviews(TimeSpan? debounce = null) =>
         new(Plans, Renderer, Manifest, Dates, Ui, debounce ?? TimeSpan.Zero);
 
-    public GenerateRunViewModel NewRun() => new(Logs, _ => Generator, Ui, Shell, Dialogs);
+    public GenerateRunViewModel NewRun() => new(Logs, (_, _) => Generator, Ui, Shell, Dialogs);
 
     public GenerateViewModel NewGenerate(TimeSpan? debounce = null) =>
         new(Manifest, Dates, Validator, NewPreviews(debounce), NewRun(), Dialogs, Ui, Env);
 
-    public RefreshViewModel NewRefresh() => new(Registry, Tasks, Logs, _ => Refresher, Ui, Env);
+    public RefreshViewModel NewRefresh() => new(Registry, Tasks, Logs, (_, _) => Refresher, Ui, Env);
 
     public MainViewModel NewMain() => new(NewGenerate(), NewRefresh(), Settings);
 }

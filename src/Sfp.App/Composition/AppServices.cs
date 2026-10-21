@@ -5,7 +5,6 @@ using Sfp.App.ViewModels;
 using Sfp.App.ViewModels.Generate;
 using Sfp.App.ViewModels.Refresh;
 using Sfp.App.ViewModels.Services;
-using Sfp.Cli.Logging;
 using Sfp.Cli.Verbs;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
@@ -50,20 +49,30 @@ public sealed class AppServices : IDisposable
 
     public Manifest Manifest { get; }
 
-    /// <summary>Builds every service from the machine: templates beside the executable, settings under %APPDATA%, today's date.</summary>
+    /// <summary>Builds every service from the machine: templates beside the executable, settings under %APPDATA%, the local clock.</summary>
     public static AppServices Create(Dispatcher dispatcher)
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
         string baseDir = AppContext.BaseDirectory;
         string templatesDir = Path.Combine(baseDir, "templates");
         AppEnvironment env = new(
-            DateOnly.FromDateTime(DateTime.Today),
+            LocalDate(),
             templatesDir,
             GenerateFormDefaults.OutputFolder(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments)),
             OneDriveRoots(),
-            RefreshExecutable(baseDir));
+            RefreshExecutable(baseDir))
+        {
+            // Read per request: the window may stay open past midnight, and Refresh freezes the days before today.
+            Clock = LocalDate,
+        };
 
         Manifest manifest = new ManifestLoader().LoadShipped(templatesDir);
+        List<IDisposable> owned = new();
+        FontService fonts = FontService.Load(manifest.Font, templatesDir);
+        owned.Add(fonts);
+
+        // The Generate tab shows the fallback-font warning as a banner before anything is generated.
+        env = env with { FontWarnings = fonts.Warnings };
         IDateEngine dates = new DateEngine();
         IManifestValidator pdfValidator = new ManifestValidator();
         IPathProbe paths = new PathProbe();
@@ -74,16 +83,15 @@ public sealed class AppServices : IDisposable
         IRunLogFactory logs = new RunLogFactory();
         ISettingsStore settings = new SettingsStore();
 
-        List<IDisposable> owned = new();
-        IPageRenderer previewRenderer = CreatePageRenderer(manifest, templatesDir, dates, owned);
+        IPageRenderer previewRenderer = CreatePageRenderer(manifest, fonts, dates, owned);
         PreviewStripViewModel previews = new(new PlanBuilder(dates), previewRenderer, manifest, dates, ui);
-        GenerateRunViewModel run = new(logs, logger => CreateGenerateOrchestrator(logger), ui, shell, dialogs);
+        GenerateRunViewModel run = new(logs, CreateGenerateOrchestrator, ui, shell, dialogs);
         GenerateViewModel generate = new(manifest, dates, validator, previews, run, dialogs, ui, env);
         RefreshViewModel refresh = new(
             new NotebookRegistry(new SidecarStore()),
             new ScheduledTaskService(new ProcessRunner(), Serilog.Core.Logger.None),
             logs,
-            logger => CreateRefreshOrchestrator(logger, manifest, templatesDir),
+            (logger, logPath) => CreateRefreshOrchestrator(logger, logPath, manifest, templatesDir),
             ui,
             env);
         MainViewModel main = new(generate, refresh, settings);
@@ -101,33 +109,44 @@ public sealed class AppServices : IDisposable
     /// <summary>The sfp2onenote.exe beside the app that the daily scheduled task runs (M6.6 packaging places it there).</summary>
     public static string RefreshExecutable(string baseDir) => Path.Combine(baseDir, "sfp2onenote.exe");
 
+    /// <summary>The machine's local date: the composition root is the one place that reads the system clock.</summary>
+    private static DateOnly LocalDate() => DateOnly.FromDateTime(DateTime.Today);
+
     public void Dispose()
     {
+        // The window's close flow stops the preview render first (MainViewModel.PrepareToCloseAsync). Should a render
+        // still be inside the renderer here (the app ending some other way), its fonts and rasterizer are left to the
+        // process exit rather than disposed under it.
+        bool previewsIdle = !Main.Generate.Previews.IsBusy;
         Main.Dispose();
+        if (!previewsIdle)
+        {
+            return;
+        }
+
         foreach (IDisposable d in _owned)
         {
             d.Dispose();
         }
     }
 
-    /// <summary>The preview renderer: the fallback font warning is shown by the form, so it is only logged here.</summary>
-    private static IPageRenderer CreatePageRenderer(Manifest manifest, string templatesDir, IDateEngine dates, List<IDisposable> owned)
+    /// <summary>The preview renderer over the app's font service (its fallback warning is the Generate tab's banner).</summary>
+    private static IPageRenderer CreatePageRenderer(Manifest manifest, FontService fonts, IDateEngine dates, List<IDisposable> owned)
     {
-        FontService fonts = FontService.Load(manifest.Font, templatesDir);
-        owned.Add(fonts);
         Rasterizer rasterizer = new(ColorParser.Parse(manifest.Colors.Background));
         owned.Add(rasterizer);
         return new PageRenderer(manifest, rasterizer, fonts, dates);
     }
 
-    /// <summary>Rejected page XML is saved beside the run logs; the run's own file name is not known to the factory.</summary>
-    private static string RejectedXmlLogPath() => Path.Combine(RunLog.DefaultDirectory, "rejected-page.log");
+    /// <summary>
+    /// The run's own log file is the orchestrator's log path: the result reports it (the failure view shows it and Save
+    /// log copies it) and rejected page XML is saved beside it.
+    /// </summary>
+    private static IGenerateOrchestrator CreateGenerateOrchestrator(ILogger logger, string logPath) =>
+        new DeferredGenerateOrchestrator(request => GenerateCommand.CreateProductionOrchestrator(request, logger, logPath));
 
-    private static IGenerateOrchestrator CreateGenerateOrchestrator(ILogger logger) =>
-        new DeferredGenerateOrchestrator(request => GenerateCommand.CreateProductionOrchestrator(request, logger, RejectedXmlLogPath()));
-
-    private static IRefreshOrchestrator CreateRefreshOrchestrator(ILogger logger, Manifest manifest, string templatesDir) =>
-        new DeferredRefreshOrchestrator(request => RefreshCommand.CreateProductionOrchestrator(request, manifest, templatesDir, logger, RejectedXmlLogPath()));
+    private static IRefreshOrchestrator CreateRefreshOrchestrator(ILogger logger, string logPath, Manifest manifest, string templatesDir) =>
+        new DeferredRefreshOrchestrator(request => RefreshCommand.CreateProductionOrchestrator(request, manifest, templatesDir, logger, logPath));
 
     /// <summary>Builds the production orchestrator when the request is known, runs it once and disposes it (the COM session and fonts).</summary>
     private sealed class DeferredGenerateOrchestrator : IGenerateOrchestrator

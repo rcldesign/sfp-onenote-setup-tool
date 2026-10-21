@@ -29,8 +29,12 @@ public sealed partial class PreviewStripViewModel : ObservableObject, IDisposabl
     private readonly IUiThread _ui;
     private readonly TimeSpan _debounce;
     private readonly int _previewDpi;
+
+    /// <summary>Every render task not yet seen complete: a superseded render can still be inside the renderer after its cancel.</summary>
+    private readonly List<Task> _renders = new();
     private CancellationTokenSource? _cts;
     private int _generation;
+    private bool _stopped;
 
     [ObservableProperty]
     private string? _status;
@@ -69,10 +73,18 @@ public sealed partial class PreviewStripViewModel : ObservableObject, IDisposabl
     /// <summary>Number of renders started so far (each request that reached the render stage).</summary>
     public int RenderCount { get; private set; }
 
-    /// <summary>Re-renders the three thumbnails for the options after the debounce, cancelling any render in flight.</summary>
+    /// <summary>True while any render, including a cancelled one still inside the renderer, has not finished.</summary>
+    public bool IsBusy => _renders.Exists(t => !t.IsCompleted);
+
+    /// <summary>Re-renders the three thumbnails for the options after the debounce, cancelling any render in flight. Ignored once stopped.</summary>
     public void Request(GenerateOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        if (_stopped)
+        {
+            return;
+        }
+
         CancellationToken token = Restart();
         Status = null;
         foreach (PreviewThumbnail thumbnail in Thumbnails)
@@ -81,6 +93,8 @@ public sealed partial class PreviewStripViewModel : ObservableObject, IDisposabl
         }
 
         Pending = RenderAsync(options, token);
+        _renders.RemoveAll(t => t.IsCompleted);
+        _renders.Add(Pending);
     }
 
     /// <summary>Cancels any render in flight and shows one placeholder line in every slot.</summary>
@@ -106,8 +120,23 @@ public sealed partial class PreviewStripViewModel : ObservableObject, IDisposabl
         return (day, calendar, cover);
     }
 
+    /// <summary>
+    /// Stops the strip for good because the window is closing: cancels the render in flight and completes when every
+    /// render has left the renderer (a superseded one included), so its fonts and rasterizer are idle and the
+    /// composition root can dispose them. Later requests (a PDF check finishing during the close) are ignored. Never
+    /// faults: each render task catches everything.
+    /// </summary>
+    public Task StopAsync()
+    {
+        _stopped = true;
+        _cts?.Cancel();
+        _renders.RemoveAll(t => t.IsCompleted);
+        return _renders.Count == 0 ? Task.CompletedTask : Task.WhenAll(_renders.ToList());
+    }
+
     public void Dispose()
     {
+        _stopped = true;
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;

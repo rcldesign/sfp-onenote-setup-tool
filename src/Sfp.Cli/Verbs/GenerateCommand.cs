@@ -56,7 +56,7 @@ public sealed record GenerateArgs
 }
 
 /// <summary>
-/// sfp2onenote generate --pdf PATH --start YYYY-MM [--name N] [--out DIR] [--date-format mm/dd/yy|dd/mm/yy|m/d/yy]
+/// sfp2onenote generate --pdf PATH --start YYYY-MM [--name N] [--out DIR] [--date-format mm/dd/yy|dd/mm/yy|m/d/yy|d/m/yy]
 /// [--weeks-remaining corrected|as-printed] [--dpi 144|220|300] [--render-only DIR] [--manifest FILE] [--quiet]
 /// [--no-links] [--hide-title] [--group-weeks] [--include-out-of-quarter-days] [--time-blocks 6-22] [--previous PATH]
 /// [--templates DIR]. Validates the arguments (exit 2), loads the manifest, composes the services and runs the
@@ -77,7 +77,7 @@ public static class GenerateCommand
         Option<string> start = new("--start") { Description = "First month of the quarter as YYYY-MM, for example 2027-01.", Required = true };
         Option<string?> name = new("--name") { Description = "Notebook name (default SFP {Qn} {YYYY}, for example SFP Q1 2027)." };
         Option<string?> output = new("--out") { Description = "Output folder (default Documents\\OneNote Notebooks)." };
-        Option<string> dateFormat = new("--date-format") { Description = "Date slot format: mm/dd/yy (default), dd/mm/yy or m/d/yy.", DefaultValueFactory = _ => "mm/dd/yy" };
+        Option<string> dateFormat = new("--date-format") { Description = "Date slot format: " + string.Join(", ", RenderOnlyCommand.DateFormats.Keys) + ". Default " + RenderOnlyCommand.DefaultDateFormat + ".", DefaultValueFactory = _ => RenderOnlyCommand.DefaultDateFormat };
         Option<string> weeksRemaining = new("--weeks-remaining") { Description = "Weeks-remaining strip: corrected (default) or as-printed.", DefaultValueFactory = _ => "corrected" };
         Option<int> dpi = new("--dpi") { Description = "Render DPI: 144, 220 (default) or 300.", DefaultValueFactory = _ => 220 };
         Option<string?> renderOnly = new("--render-only") { Description = "Write the PNG files and pages.json to this folder and do not touch OneNote." };
@@ -89,7 +89,7 @@ public static class GenerateCommand
         Option<bool> outOfQuarter = new("--include-out-of-quarter-days") { Description = "Add the days of the first and last week that fall outside the quarter." };
         Option<string> timeBlocks = new("--time-blocks") { Description = "Time Blocks window as START-END in 24-hour clock (default 6-22).", DefaultValueFactory = _ => "6-22" };
         Option<string?> previous = new("--previous") { Description = "Path of the previous quarter's notebook, for its Next quarter link." };
-        Option<string?> templates = new("--templates") { Description = "Templates folder (default: the templates folder beside the executable)." };
+        Option<string?> templates = new("--templates") { Description = "The templates folder. Default: the one beside the executable, else the nearest one above it." };
 
         Command command = new("generate", "Builds the dated OneNote notebook for a quarter from the planner PDF.");
         foreach (Option option in new Option[] { pdf, start, name, output, dateFormat, weeksRemaining, dpi, renderOnly, manifest, quiet, noLinks, hideTitle, groupWeeks, outOfQuarter, timeBlocks, previous, templates })
@@ -104,7 +104,7 @@ public static class GenerateCommand
                 Start = parseResult.GetValue(start) ?? "",
                 Name = parseResult.GetValue(name),
                 Out = parseResult.GetValue(output),
-                DateFormat = parseResult.GetValue(dateFormat) ?? "mm/dd/yy",
+                DateFormat = parseResult.GetValue(dateFormat) ?? RenderOnlyCommand.DefaultDateFormat,
                 WeeksRemaining = parseResult.GetValue(weeksRemaining) ?? "corrected",
                 Dpi = parseResult.GetValue(dpi),
                 RenderOnly = parseResult.GetValue(renderOnly),
@@ -164,7 +164,8 @@ public static class GenerateCommand
         bool renderOnly = !string.IsNullOrWhiteSpace(args.RenderOnly);
         GenerateRequest request = new(options, manifest, templatesDir, renderOnly, renderOnly ? Path.GetFullPath(args.RenderOnly!) : null);
 
-        using RunLog log = RunLog.Start("generate", args.Quiet, logDirectory);
+        // The verb prints its own progress and summary, so the log's console sink keeps to warnings and errors.
+        using RunLog log = RunLog.Start("generate", args.Quiet, logDirectory, printsOwnProgress: true);
         log.Logger.Information("generate --pdf {Pdf} --start {Start} --dpi {Dpi} render-only {RenderOnly}", options.PdfPath, options.Start, options.Dpi, renderOnly);
         IGenerateOrchestrator orchestrator;
         try
@@ -208,22 +209,32 @@ public static class GenerateCommand
         return result.ExitCode;
     }
 
-    /// <summary>Validates the arguments into <see cref="GenerateOptions"/>; writes the first problem to <paramref name="stderr"/>.</summary>
+    /// <summary>
+    /// Validates the arguments into <see cref="GenerateOptions"/>; writes the first problem to <paramref name="stderr"/>.
+    /// The date formats and the templates lookup are the render-only and refresh verbs' own
+    /// (<see cref="RenderOnlyCommand.DateFormats"/>, <see cref="PlanCommand.FindTemplatesDir"/>), so the verbs accept the
+    /// same values and find the same folder.
+    /// </summary>
     public static bool TryBuildOptions(GenerateArgs args, TextWriter stderr, [NotNullWhen(true)] out GenerateOptions? options, out string templatesDir)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(stderr);
         options = null;
-        templatesDir = string.IsNullOrWhiteSpace(args.Templates) ? Path.Combine(AppContext.BaseDirectory, "templates") : Path.GetFullPath(args.Templates);
+        string? foundTemplates = PlanCommand.FindTemplatesDir(args.Templates);
+        templatesDir = foundTemplates is not null ? Path.GetFullPath(foundTemplates) : args.Templates ?? "";
 
         QuarterSpec start;
         try
         {
             start = QuarterSpec.Parse(args.Start);
         }
-        catch (FormatException ex)
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
         {
-            stderr.WriteLine(ex.Message);
+            // A blank --start ("" or spaces) reaches the parser as an ArgumentException; it is the same mistake as a
+            // malformed month, so it gets the same kind of line and exit 2 instead of escaping as an exception.
+            stderr.WriteLine(ex is FormatException
+                ? ex.Message
+                : "Start month must be YYYY-MM, for example 2027-01; got '" + args.Start + "'.");
             return false;
         }
 
@@ -247,7 +258,7 @@ public static class GenerateCommand
 
         if (!TryParseDateFormat(args.DateFormat, out DateFieldOrder order, out bool padded))
         {
-            stderr.WriteLine("Date format must be mm/dd/yy, dd/mm/yy or m/d/yy; got '" + args.DateFormat + "'.");
+            stderr.WriteLine("Date format must be one of " + string.Join(", ", RenderOnlyCommand.DateFormats.Keys) + "; got '" + args.DateFormat + "'.");
             return false;
         }
 
@@ -263,9 +274,11 @@ public static class GenerateCommand
             return false;
         }
 
-        if (!File.Exists(Path.Combine(templatesDir, ManifestLoader.ShippedFileName)))
+        if (foundTemplates is null)
         {
-            stderr.WriteLine("Templates folder not found or missing " + ManifestLoader.ShippedFileName + ": " + templatesDir);
+            stderr.WriteLine(string.IsNullOrWhiteSpace(args.Templates)
+                ? $"Templates folder not found: no '{PlanCommand.TemplatesFolderName}/{ManifestLoader.ShippedFileName}' beside the executable or above it. Pass --templates."
+                : $"Templates folder not found or has no {ManifestLoader.ShippedFileName}: {args.Templates}");
             return false;
         }
 
@@ -303,24 +316,22 @@ public static class GenerateCommand
         return true;
     }
 
-    /// <summary>"mm/dd/yy" (padded, month first), "dd/mm/yy" (padded, day first) or "m/d/yy" (unpadded, month first).</summary>
+    /// <summary>
+    /// One of <see cref="RenderOnlyCommand.DateFormats"/>, case-insensitive: "mm/dd/yy" (padded, month first),
+    /// "dd/mm/yy" (padded, day first), "m/d/yy" (unpadded, month first) or "d/m/yy" (unpadded, day first), the four the
+    /// app's dropdown offers too.
+    /// </summary>
     public static bool TryParseDateFormat(string? text, out DateFieldOrder order, out bool padded)
     {
+        if (RenderOnlyCommand.DateFormats.TryGetValue(text?.Trim() ?? "", out (DateFieldOrder Order, bool Padded) format))
+        {
+            (order, padded) = format;
+            return true;
+        }
+
         order = DateFieldOrder.MonthDayYear;
         padded = true;
-        switch (text?.Trim().ToUpperInvariant())
-        {
-            case "MM/DD/YY":
-                return true;
-            case "DD/MM/YY":
-                order = DateFieldOrder.DayMonthYear;
-                return true;
-            case "M/D/YY":
-                padded = false;
-                return true;
-            default:
-                return false;
-        }
+        return false;
     }
 
     public static bool TryParseWeeksRemaining(string? text, out WeeksRemainingMode mode)
@@ -379,11 +390,27 @@ public static class GenerateCommand
         ArgumentNullException.ThrowIfNull(stderr);
         if (result.Cancelled)
         {
+            // The partial notebook is said to be deleted only when the run reports no failed deletion. A notebook left
+            // on disk is reported even with --quiet: the user has to remove it before the name can be used again.
+            List<string> notDeleted = result.Warnings.Where(GenerateMessages.IsPartialNotebookNotDeleted).ToList();
+            if (notDeleted.Count > 0)
+            {
+                stderr.WriteLine("Cancelled, but the partial notebook could not be deleted.");
+                foreach (string warning in notDeleted)
+                {
+                    stderr.WriteLine("Warning: " + warning);
+                }
+
+                return;
+            }
+
             if (!quiet)
             {
                 stdout.WriteLine(request.RenderOnly
                     ? "Cancelled. The rendered files so far were left in " + request.RenderOutputDir + "."
-                    : "Cancelled. The partial notebook was deleted.");
+                    : result.NotebookName is null
+                        ? "Cancelled before the notebook was created; nothing was written."
+                        : "Cancelled. The partial notebook was deleted.");
             }
 
             return;
@@ -461,12 +488,17 @@ public static class GenerateCommand
     private static string Elapsed(TimeSpan elapsed) =>
         string.Format(CultureInfo.InvariantCulture, "{0}:{1:00}", (int)elapsed.TotalMinutes, elapsed.Seconds);
 
-    /// <summary>Prints one line per progress report, synchronously (reports arrive from render workers too).</summary>
+    /// <summary>
+    /// Prints one line per progress report, synchronously (reports arrive from render workers too). A page count is
+    /// printed once per phase and only moving forward: render-only reports each page from its render worker and again
+    /// from the loop that writes the file, and workers finish out of order.
+    /// </summary>
     private sealed class ProgressPrinter : IProgress<GenerateProgress>
     {
         private readonly TextWriter _out;
         private readonly bool _quiet;
         private readonly object _gate = new();
+        private readonly Dictionary<GeneratePhase, int> _lastCount = new();
         private GeneratePhase? _lastPhase;
 
         public ProgressPrinter(TextWriter output, bool quiet)
@@ -486,7 +518,11 @@ public static class GenerateCommand
             {
                 if (value.Total > 0)
                 {
-                    _out.WriteLine(string.Format(CultureInfo.InvariantCulture, "{0} ({1} of {2}){3}", GenerateOrchestrator.PhaseLabel(value.Phase), value.Current, value.Total, string.IsNullOrEmpty(value.Detail) ? "" : ": " + value.Detail));
+                    if (!_lastCount.TryGetValue(value.Phase, out int last) || value.Current > last)
+                    {
+                        _lastCount[value.Phase] = value.Current;
+                        _out.WriteLine(string.Format(CultureInfo.InvariantCulture, "{0} ({1} of {2}){3}", GenerateOrchestrator.PhaseLabel(value.Phase), value.Current, value.Total, string.IsNullOrEmpty(value.Detail) ? "" : ": " + value.Detail));
+                    }
                 }
                 else if (value.Phase != _lastPhase || !string.IsNullOrEmpty(value.Detail))
                 {
@@ -537,9 +573,12 @@ public static class GenerateCommand
             OneNoteLocator? oneNote = null;
             try
             {
+                // The fallback-font warning reaches the user once, in the run's warnings (the preflight carries
+                // fonts.Warnings) printed with the summary; logged here at Information so the console, which shows the
+                // log's warnings, does not print it a second time.
                 foreach (string warning in fonts.Warnings)
                 {
-                    log.Warning("{Warning}", warning);
+                    log.Information("Font fallback (reported with the summary): {Warning}", warning);
                 }
 
                 rasterizer = new Rasterizer(ColorParser.Parse(manifest.Colors.Background));

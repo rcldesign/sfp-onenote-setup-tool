@@ -4,6 +4,9 @@
              xmlns:local="clr-namespace:Sfp.App.Views">
   <ScrollViewer VerticalScrollBarVisibility="Auto">
     <StackPanel Margin="8">
+    <!-- PRD error table: "Font missing: warning banner, fallback font in use". Hidden when the typeface is installed. -->
+    <TextBlock Style="{StaticResource WarningText}" Text="{Binding FontWarning}" Margin="0,0,0,8"
+               AutomationProperties.Name="Fallback font in use" />
     <!-- Fields, Advanced and previews lock while a run is on; the Cancel button below stays live. -->
     <StackPanel IsEnabled="{Binding FieldsEnabled}">
 
@@ -108,6 +111,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
           </Grid.RowDefinitions>
 
           <CheckBox Grid.Row="0" Grid.ColumnSpan="2" Margin="0,4" IsChecked="{Binding GroupWeeks}"
@@ -152,6 +156,17 @@
                          Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
             </StackPanel>
             <TextBlock Style="{StaticResource ErrorText}" Text="{Binding TimeBlocksError}" />
+          </StackPanel>
+
+          <TextBlock Grid.Row="10" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Previous notebook" />
+          <StackPanel Grid.Row="10" Grid.Column="1" Margin="0,4">
+            <DockPanel>
+              <Button DockPanel.Dock="Right" Content="Bro_wse..." Command="{Binding BrowsePreviousCommand}" Margin="8,0,0,0"
+                      AutomationProperties.Name="Browse for the previous quarter's notebook" />
+              <TextBox Text="{Binding PreviousNotebook, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="Previous notebook" />
+            </DockPanel>
+            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}"
+                       Text="Optional: the last quarter's notebook folder. Its Quarterly Review gets a Next quarter link to this notebook." />
           </StackPanel>
         </Grid>
       </Expander>

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -17,12 +18,19 @@ namespace Sfp.App.ViewModels.Generate;
 /// </summary>
 public sealed partial class GenerateViewModel : ObservableObject, IDisposable
 {
+    /// <summary>Title of the question asked when the window is closed during a run.</summary>
+    public const string CloseWhileRunningTitle = "Generate is running";
+
+    /// <summary>The question asked when the window is closed during a run; yes cancels the run and closes.</summary>
+    public const string CloseWhileRunningQuestion =
+        "A notebook is being generated. Cancel the run and close the window? The run stops after the current page and the partial notebook is deleted.";
+
     private static readonly HashSet<string> InputProperties = new(StringComparer.Ordinal)
     {
         nameof(PdfPath), nameof(Month), nameof(YearText), nameof(NotebookName), nameof(OutputFolder), nameof(DateFormat),
         nameof(WeeksRemaining), nameof(Dpi), nameof(GroupWeeks), nameof(Links), nameof(HideTitle), nameof(CustomPageSize),
         nameof(PageScaleText), nameof(SixthRow), nameof(OutOfMonthDays), nameof(ReflectionDateIsWeekStart),
-        nameof(IncludeOutOfQuarterDays), nameof(TimeBlockStart), nameof(TimeBlockEnd),
+        nameof(IncludeOutOfQuarterDays), nameof(TimeBlockStart), nameof(TimeBlockEnd), nameof(PreviousNotebook),
     };
 
     /// <summary>Properties whose change re-renders the previews (the date, the formats, everything drawn on the sheet; not the name, folder or DPI).</summary>
@@ -105,6 +113,14 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private int _timeBlockEnd = TimeBlockWindow.Default.EndHour;
 
+    /// <summary>
+    /// Advanced: the previous quarter's notebook folder (or its .sfp-state.json), whose Quarterly Review gets a Next quarter
+    /// link to the new notebook (GenerateOptions.PreviousNotebook, the CLI's --previous). Empty for none. Not saved in the
+    /// settings: it names a different notebook every quarter.
+    /// </summary>
+    [ObservableProperty]
+    private string _previousNotebook = "";
+
     [ObservableProperty]
     private string? _pdfError;
 
@@ -161,7 +177,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         Previews = previews;
         Run = run;
         PendingPdfCheck = Task.CompletedTask;
-        _lastValidStart = GenerateFormDefaults.NextQuarterStart(env.Today);
+        _lastValidStart = GenerateFormDefaults.NextQuarterStart(env.CurrentDate());
         Run.PropertyChanged += OnRunPropertyChanged;
         LoadFrom(new AppSettings());
     }
@@ -197,8 +213,18 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     /// <summary>The fields unlock when no run is on.</summary>
     public bool FieldsEnabled => !Run.IsRunning;
 
-    /// <summary>The start month when the year parses and is in range, else null.</summary>
-    public QuarterSpec? Start => ParseYear() is int year && Month is >= 1 and <= 12 ? new QuarterSpec(year, Month) : null;
+    /// <summary>
+    /// The PRD's "fallback font in use" banner: the font service's warnings, one per line, or null when the template
+    /// typeface is installed. Shown before Generate so the user knows the dates will use the bundled face.
+    /// </summary>
+    public string? FontWarning => _env.FontWarnings.Count > 0 ? string.Join("\n", _env.FontWarnings) : null;
+
+    /// <summary>
+    /// The start month when the year parses and lies in 1900 to 2199 (the date engine's range) and the month is 1 to 12,
+    /// else null. Every year the user can type passes through here ("2", "20", "202" while typing 2027), so nothing
+    /// downstream ever hands the date engine a year it refuses.
+    /// </summary>
+    public QuarterSpec? Start => ParseYear() is int year && IsSupported(year, Month) ? new QuarterSpec(year, Month) : null;
 
     /// <summary>The default name for the current start ("SFP Q1 2027"), kept while the user has not edited the name.</summary>
     public string DefaultNotebookName => _defaultName;
@@ -209,21 +235,27 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     /// <summary>The last validation pass, with every message.</summary>
     public GenerateFormValidation Validation => _validation;
 
-    /// <summary>Fills every field from saved settings, with the PRD defaults where a value is missing, then starts the PDF check.</summary>
+    /// <summary>
+    /// Fills every field from saved settings, with the PRD defaults where a value is missing, then starts the PDF check.
+    /// The saved start month is restored only when it is not before the next calendar quarter (as of the clock now):
+    /// last quarter's start would otherwise greet the user every time. A saved name that was the default of the saved
+    /// start follows the default of the start shown; a name the user typed is kept.
+    /// </summary>
     public void LoadFrom(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _loading = true;
         try
         {
-            QuarterSpec start = settings.Start is { } s && s.Year >= QuarterSpec.MinYear && s.Year <= QuarterSpec.MaxYear && s.Month is >= 1 and <= 12
-                ? s
-                : GenerateFormDefaults.NextQuarterStart(_env.Today);
+            QuarterSpec next = GenerateFormDefaults.NextQuarterStart(_env.CurrentDate());
+            QuarterSpec? saved = settings.Start;
+            QuarterSpec start = IsSupported(saved) && !IsBefore(saved, next) ? saved : next;
             _lastValidStart = start;
             Month = start.Month;
             YearText = start.Year.ToString(CultureInfo.InvariantCulture);
-            _defaultName = GenerateFormDefaults.NotebookName(_manifest.Notebook.NamePattern, _dates.Build(start));
-            NotebookName = string.IsNullOrWhiteSpace(settings.NotebookName) ? _defaultName : settings.NotebookName;
+            _defaultName = DefaultNameFor(start);
+            string? savedDefault = IsSupported(saved) ? DefaultNameFor(saved) : null;
+            NotebookName = string.IsNullOrWhiteSpace(settings.NotebookName) || settings.NotebookName == savedDefault ? _defaultName : settings.NotebookName;
             _nameFollowsDefault = NotebookName == _defaultName;
             OutputFolder = string.IsNullOrWhiteSpace(settings.OutputFolder) ? _env.DefaultOutputFolder : settings.OutputFolder;
             DateFormat = DateFormatChoice.For(settings.DateOrder, settings.PadDateFields);
@@ -273,6 +305,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         ReflectionDateIsWeekStart = ReflectionDateIsWeekStart,
         IncludeOutOfQuarterDays = IncludeOutOfQuarterDays,
         TimeBlocks = new TimeBlockWindow(TimeBlockStart, TimeBlockEnd),
+        PreviousNotebook = string.IsNullOrWhiteSpace(PreviousNotebook) ? null : PreviousNotebook.Trim(),
     };
 
     /// <summary>The settings to save for the current fields.</summary>
@@ -291,6 +324,29 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         Dpi,
         ParsePageScale(),
         new TimeBlockWindow(TimeBlockStart, TimeBlockEnd));
+
+    /// <summary>
+    /// Readies the tab for the window to close; true when it may close. During a run the user is asked whether to cancel
+    /// it: no keeps the window open (false); yes cancels the run and completes only once the run has stopped, after the
+    /// orchestrator deleted the partial notebook, so closing never leaves one behind. The preview render is stopped and
+    /// awaited too, so the composition root can dispose the renderer's fonts and rasterizer afterwards. Completes at once
+    /// when nothing is running.
+    /// </summary>
+    public async Task<bool> PrepareToCloseAsync()
+    {
+        if (Run.IsRunning)
+        {
+            if (!_dialogs.Confirm(CloseWhileRunningTitle, CloseWhileRunningQuestion))
+            {
+                return false;
+            }
+
+            await Run.CancelAndWaitAsync();
+        }
+
+        await Previews.StopAsync();
+        return true;
+    }
 
     public void Dispose()
     {
@@ -352,6 +408,17 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         }
     }
 
+    [RelayCommand]
+    private void BrowsePrevious()
+    {
+        string start = string.IsNullOrWhiteSpace(PreviousNotebook) ? OutputFolder : PreviousNotebook;
+        string? chosen = _dialogs.PickFolder("Choose the previous quarter's notebook folder", start);
+        if (chosen is not null)
+        {
+            PreviousNotebook = chosen;
+        }
+    }
+
     [RelayCommand(CanExecute = nameof(CanGenerate))]
     private async Task GenerateAsync()
     {
@@ -381,12 +448,27 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         }
 
         _lastValidStart = start;
-        _defaultName = GenerateFormDefaults.NotebookName(_manifest.Notebook.NamePattern, _dates.Build(start));
+        _defaultName = DefaultNameFor(start);
         if (_nameFollowsDefault && NotebookName != _defaultName)
         {
             NotebookName = _defaultName;
         }
     }
+
+    /// <summary>True for a year and month the date engine accepts (1900 to 2199, 1 to 12).</summary>
+    private static bool IsSupported(int year, int month) => year is >= QuarterSpec.MinYear and <= QuarterSpec.MaxYear && month is >= 1 and <= 12;
+
+    private static bool IsSupported([NotNullWhen(true)] QuarterSpec? spec) => spec is not null && IsSupported(spec.Year, spec.Month);
+
+    /// <summary>True when <paramref name="a"/> is an earlier month than <paramref name="b"/>.</summary>
+    private static bool IsBefore(QuarterSpec a, QuarterSpec b) => a.Year < b.Year || (a.Year == b.Year && a.Month < b.Month);
+
+    /// <summary>The quarter of a supported start, else null. Every date engine call goes through here because <see cref="IDateEngine.Build"/> throws outside 1900 to 2199.</summary>
+    private Quarter? QuarterOf(QuarterSpec? spec) => IsSupported(spec) ? _dates.Build(spec) : null;
+
+    /// <summary>"SFP Q1 2027" for a supported start; empty when the start is outside the supported years.</summary>
+    private string DefaultNameFor(QuarterSpec start) =>
+        QuarterOf(start) is { } quarter ? GenerateFormDefaults.NotebookName(_manifest.Notebook.NamePattern, quarter) : "";
 
     private int? ParseYear() =>
         int.TryParse(YearText.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int year) ? year : null;
@@ -444,8 +526,8 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         DpiError = _validation.ErrorFor(GenerateFormFields.Dpi);
         PageScaleError = _validation.ErrorFor(GenerateFormFields.PageScale);
         TimeBlocksError = _validation.ErrorFor(GenerateFormFields.TimeBlocks);
-        SizeEstimate = GenerateOptions.AllowedDpis.Contains(Dpi)
-            ? NotebookSizeEstimate.Describe(Dpi, GenerateFormDefaults.PageCount(_dates.Build(Start ?? _lastValidStart)))
+        SizeEstimate = GenerateOptions.AllowedDpis.Contains(Dpi) && QuarterOf(Start ?? _lastValidStart) is { } quarter
+            ? NotebookSizeEstimate.Describe(Dpi, GenerateFormDefaults.PageCount(quarter))
             : "";
         CanGenerate = _validation.CanGenerate && !Run.IsRunning;
         OnPropertyChanged(nameof(Start));
