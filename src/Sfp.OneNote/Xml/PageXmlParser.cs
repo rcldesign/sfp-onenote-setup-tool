@@ -14,8 +14,12 @@ namespace Sfp.OneNote.Xml;
 /// </summary>
 public static partial class PageXmlParser
 {
-    /// <summary>The content objects that can sit on a page outside any outline and are read into <see cref="PageXml.PageObjects"/>.</summary>
-    private static readonly HashSet<string> PageObjectKinds = new(StringComparer.Ordinal) { "Image", "InsertedFile", "MediaFile" };
+    /// <summary>
+    /// The content objects that can sit on a page outside any outline and are read into <see cref="PageXml.PageObjects"/>:
+    /// pictures, attached and media files, and one:FutureObject (content from a later OneNote version, which the 2013
+    /// schema allows on the page).
+    /// </summary>
+    private static readonly HashSet<string> PageObjectKinds = new(StringComparer.Ordinal) { "Image", "InsertedFile", "MediaFile", "FutureObject" };
 
     public static PageXml Parse(string xml)
     {

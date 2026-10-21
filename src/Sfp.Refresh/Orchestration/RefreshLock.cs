@@ -89,6 +89,20 @@ public sealed class RefreshLock : IDisposable
         }
     }
 
+    /// <summary>
+    /// True when the lock file beside <paramref name="sidecarPath"/> is still there although it is stale (by the rules in
+    /// the class summary). After <see cref="TryAcquire"/> refused a run, that means the stale lock could not be taken over
+    /// (deleting it failed), so every run of the notebook is refused until the file goes. False when a live run holds the
+    /// lock or no lock file is there.
+    /// </summary>
+    public static bool IsStuck(string sidecarPath, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sidecarPath);
+        string path = PathBeside(sidecarPath);
+        LockOwner? owner = Read(path);
+        return (owner is not null || File.Exists(path)) && StaleReason(path, owner, now) is not null;
+    }
+
     /// <summary>Deletes the lock file while it is still this run's lock (a lock taken over after it went stale is another run's).</summary>
     public void Dispose()
     {

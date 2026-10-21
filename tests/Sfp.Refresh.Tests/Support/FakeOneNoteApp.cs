@@ -19,8 +19,8 @@ namespace Sfp.Refresh.Tests.Support;
 /// </summary>
 public sealed class FakeOneNoteApp : IOneNoteApp
 {
-    /// <summary>Top-level page children that are content objects, merged by objectID; every other child (Meta, PageSettings, Title ...) is replaced by name.</summary>
-    private static readonly HashSet<string> ContentObjects = new(StringComparer.Ordinal) { "Outline", "Image", "InkDrawing", "InsertedFile", "MediaFile" };
+    /// <summary>Top-level page children that are content objects (the 2013 schema's page content choice), merged by objectID; every other child (Meta, PageSettings, Title ...) is replaced by name.</summary>
+    private static readonly HashSet<string> ContentObjects = new(StringComparer.Ordinal) { "Outline", "Image", "InkDrawing", "InsertedFile", "MediaFile", "FutureObject" };
 
     private readonly Dictionary<string, Notebook> notebooks = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Section> sections = new(StringComparer.Ordinal);
@@ -141,6 +141,18 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         }
 
         return nb.Id;
+    }
+
+    /// <summary>
+    /// Moves a notebook to <paramref name="newPath"/> (a OneDrive URL, say) the way moving it in OneNote does: every ID
+    /// changes (see <see cref="RenumberIds"/>) and GetHierarchy and OpenHierarchy know the notebook by its new path only.
+    /// Returns the notebook's new ID.
+    /// </summary>
+    public string MoveNotebook(string notebookId, string newPath)
+    {
+        string id = RenumberIds(notebookId);
+        notebooks[id].Path = newPath;
+        return id;
     }
 
     public string GetHierarchy(string? startId, HierarchyScope scope)
@@ -603,7 +615,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
         public string Name { get; }
 
-        public string Path { get; }
+        public string Path { get; set; }
 
         public bool Open { get; set; } = true;
 
