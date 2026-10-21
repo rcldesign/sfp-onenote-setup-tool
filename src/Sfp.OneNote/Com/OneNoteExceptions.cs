@@ -32,8 +32,8 @@ public class OneNoteException : Exception
 }
 
 /// <summary>
-/// OneNote desktop is not installed, not registered, or its COM server could not be reached: at activation (the
-/// install message, <see cref="UserMessage"/>) or because it went away during the run (<see cref="DisconnectedMessage"/>).
+/// OneNote desktop is not installed or not registered (the install message, <see cref="UserMessage"/>), is installed but
+/// could not be started (<see cref="NotStartedMessage"/>), or went away during the run (<see cref="DisconnectedMessage"/>).
 /// </summary>
 public sealed class OneNoteUnavailableException : OneNoteException
 {
@@ -45,6 +45,12 @@ public sealed class OneNoteUnavailableException : OneNoteException
 
     /// <summary>OneNote was running when the run reached it, then its COM server went away (closed, crashed or hung).</summary>
     public const string DisconnectedMessage = "OneNote stopped responding or was closed during the run.";
+
+    /// <summary>
+    /// The OneNote.Application ProgID resolved, so OneNote is installed, but creating it failed: most often the tool and
+    /// OneNote run at different elevations, or OneNote hung while starting.
+    /// </summary>
+    public const string NotStartedMessage = "OneNote is installed but could not be started. Close OneNote, run this tool and OneNote at the same elevation (both as administrator or neither), then retry.";
 
     public OneNoteUnavailableException()
         : base(UserMessage)

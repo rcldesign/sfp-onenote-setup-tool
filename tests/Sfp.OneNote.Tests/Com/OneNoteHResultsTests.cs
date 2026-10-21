@@ -156,20 +156,34 @@ public class OneNoteHResultsTests
     }
 
     [Theory]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x800706BA))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x80010108))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x800706BE))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x80040154))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x80080005))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x800401E3))]
-    [InlineData("GetHierarchy", unchecked((int)0x80040154))]
-    [InlineData("GetHierarchy", unchecked((int)0x80080005))]
-    public void Activation_and_registration_failures_carry_the_install_message(string call, int hresult)
+    [InlineData(unchecked((int)0x80080005))]
+    [InlineData(unchecked((int)0x800706BA))]
+    [InlineData(unchecked((int)0x80010108))]
+    [InlineData(unchecked((int)0x800706BE))]
+    [InlineData(unchecked((int)0x80040154))]
+    [InlineData(unchecked((int)0x800401E3))]
+    [InlineData(unchecked((int)0x80070005))]
+    [InlineData(unchecked((int)0x80004005))]
+    public void An_activation_failure_says_onenote_is_installed_but_could_not_be_started_with_the_hresult(int hresult)
     {
-        OneNoteException mapped = OneNoteHResults.Map(call, new COMException("boom", hresult), null);
+        OneNoteException mapped = OneNoteHResults.Map(OneNoteHResults.ActivateCall, new COMException("boom", hresult), null);
+
+        mapped.Should().BeOfType<OneNoteUnavailableException>("an OneNote that does not start still exits with 3");
+        mapped.HResult.Should().Be(hresult);
+        mapped.Message.Should().StartWith(OneNoteUnavailableException.NotStartedMessage + " activate failed with " + OneNoteHResults.Describe(hresult));
+        mapped.Message.Should().NotContain(OneNoteUnavailableException.InstallUrl, "the ProgID resolved, so OneNote is installed");
+        mapped.Message.Should().NotContain(OneNoteUnavailableException.DisconnectedMessage);
+    }
+
+    [Theory]
+    [InlineData(unchecked((int)0x80040154))]
+    [InlineData(unchecked((int)0x80080005))]
+    public void Registration_failures_of_a_later_call_carry_the_install_message(int hresult)
+    {
+        OneNoteException mapped = OneNoteHResults.Map("GetHierarchy", new COMException("boom", hresult), null);
 
         mapped.Should().BeOfType<OneNoteUnavailableException>();
-        mapped.Message.Should().StartWith(OneNoteUnavailableException.UserMessage + " " + call + " failed with " + OneNoteHResults.Describe(hresult));
+        mapped.Message.Should().StartWith(OneNoteUnavailableException.UserMessage + " GetHierarchy failed with " + OneNoteHResults.Describe(hresult));
         mapped.Message.Should().NotContain(OneNoteUnavailableException.DisconnectedMessage);
     }
 
@@ -181,6 +195,8 @@ public class OneNoteHResultsTests
         OneNoteUnavailableException.InstallUrl.Should().Be("https://www.onenote.com/download");
         new OneNoteUnavailableException().Message.Should().Be(OneNoteUnavailableException.UserMessage);
         OneNoteUnavailableException.DisconnectedMessage.Should().Be("OneNote stopped responding or was closed during the run.");
+        OneNoteUnavailableException.NotStartedMessage.Should().Be(
+            "OneNote is installed but could not be started. Close OneNote, run this tool and OneNote at the same elevation (both as administrator or neither), then retry.");
         OneNoteHResults.IsDisconnected(OneNoteHResults.ClassNotRegistered).Should().BeFalse();
         OneNoteHResults.IsDisconnected(OneNoteHResults.ServerExecFailed).Should().BeFalse();
         OneNoteHResults.IsDisconnected(OneNoteHResults.InvalidXml).Should().BeFalse();

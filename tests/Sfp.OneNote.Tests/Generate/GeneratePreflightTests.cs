@@ -3,6 +3,7 @@ using Sfp.Core.Manifests;
 using Sfp.Core.Options;
 using Sfp.OneNote.Com;
 using Sfp.OneNote.Generate;
+using Sfp.OneNote.Tests.Com;
 using Sfp.OneNote.Tests.Writer;
 using Sfp.OneNote.Writer;
 using Sfp.TestSupport;
@@ -79,6 +80,25 @@ public class GeneratePreflightTests
         result.Errors.Should().BeEmpty();
         result.NoOpenNotebooks.Should().BeTrue();
         result.Warnings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void An_installed_onenote_that_fails_to_start_is_told_to_match_elevation_not_to_install_onenote()
+    {
+        FakeActivator activator = new(new FakeOneNoteTarget())
+        {
+            Failure = new System.Runtime.InteropServices.COMException("Server execution failed", OneNoteHResults.ServerExecFailed),
+        };
+        using OneNoteSession session = new(activator, new Support.CapturingSink().CreateLogger(), TimeSpan.Zero);
+        Harness h = new() { Locator = new FakeOneNoteLocator(true, session) };
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        (string message, int exitCode) = result.Errors.Should().ContainSingle().Subject;
+        exitCode.Should().Be(3);
+        message.Should().StartWith(OneNoteUnavailableException.NotStartedMessage).And.Contain("CO_E_SERVER_EXEC_FAILURE (0x80080005)");
+        message.Should().NotContain(OneNoteUnavailableException.InstallUrl, "the ProgID resolved, so OneNote is installed");
+        activator.ActivationCount.Should().Be(1);
     }
 
     [Fact]

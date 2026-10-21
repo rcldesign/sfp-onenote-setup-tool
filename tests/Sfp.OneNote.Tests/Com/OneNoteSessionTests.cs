@@ -195,7 +195,7 @@ public class OneNoteSessionTests
     }
 
     [Fact]
-    public void An_activation_that_cannot_reach_the_com_server_carries_the_install_message()
+    public void An_activation_that_cannot_reach_the_com_server_says_onenote_is_installed_but_could_not_be_started()
     {
         (OneNoteSession session, _, FakeActivator activator, _) = Create();
         using (session)
@@ -206,7 +206,8 @@ public class OneNoteSessionTests
 
             OneNoteUnavailableException ex = act.Should().Throw<OneNoteUnavailableException>().Which;
             ex.Call.Should().Be(OneNoteHResults.ActivateCall);
-            ex.Message.Should().StartWith(OneNoteUnavailableException.UserMessage).And.Contain(OneNoteUnavailableException.InstallUrl);
+            ex.Message.Should().StartWith(OneNoteUnavailableException.NotStartedMessage).And.Contain("RPC_S_SERVER_UNAVAILABLE (0x800706BA)");
+            ex.Message.Should().NotContain(OneNoteUnavailableException.InstallUrl, "the activator only creates OneNote after its ProgID resolved");
             ex.Message.Should().NotContain(OneNoteUnavailableException.DisconnectedMessage);
         }
     }

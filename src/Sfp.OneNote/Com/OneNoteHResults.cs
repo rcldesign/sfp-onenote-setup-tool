@@ -178,20 +178,29 @@ public static class OneNoteHResults
 
     /// <summary>
     /// Maps a COM failure of <paramref name="call"/> to the typed exception the orchestrator handles. The busy results
-    /// are not mapped here (the caller retries them and raises <see cref="OneNoteBusyException"/> itself). An unavailable
-    /// result opens with the install message when it comes from activation (<see cref="ActivateCall"/>) or from a missing
-    /// registration, and with <see cref="OneNoteUnavailableException.DisconnectedMessage"/> when OneNote went away during
-    /// a later call (<see cref="IsDisconnected"/>), since OneNote is installed then.
+    /// are not mapped here (the caller retries them and raises <see cref="OneNoteBusyException"/> itself). Any failure of
+    /// activation (<see cref="ActivateCall"/>) opens with <see cref="OneNoteUnavailableException.NotStartedMessage"/>: the
+    /// activator resolves the ProgID first and keeps the install message for that lookup, so OneNote is installed here.
+    /// A later unavailable result opens with <see cref="OneNoteUnavailableException.DisconnectedMessage"/> when OneNote
+    /// went away (<see cref="IsDisconnected"/>), else with the install message (a missing registration).
     /// </summary>
     public static OneNoteException Map(string call, COMException error, string? xml)
     {
         ArgumentNullException.ThrowIfNull(error);
         int hr = error.HResult;
         string detail = string.IsNullOrWhiteSpace(error.Message) ? "" : ": " + error.Message.Trim();
+        if (string.Equals(call, ActivateCall, StringComparison.Ordinal))
+        {
+            return new OneNoteUnavailableException(
+                call,
+                hr,
+                string.Format(CultureInfo.InvariantCulture, "{0} {1} failed with {2}{3}", OneNoteUnavailableException.NotStartedMessage, call, Describe(hr), detail),
+                error);
+        }
+
         if (IsUnavailable(hr))
         {
-            bool disconnected = !string.Equals(call, ActivateCall, StringComparison.Ordinal) && IsDisconnected(hr);
-            string lead = disconnected ? OneNoteUnavailableException.DisconnectedMessage : OneNoteUnavailableException.UserMessage;
+            string lead = IsDisconnected(hr) ? OneNoteUnavailableException.DisconnectedMessage : OneNoteUnavailableException.UserMessage;
             return new OneNoteUnavailableException(
                 call,
                 hr,
