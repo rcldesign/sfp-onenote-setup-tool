@@ -37,6 +37,24 @@ public sealed class SidecarStore : ISidecarStore
         return System.IO.Path.Combine(parent, name + "." + Sidecar.FileName);
     }
 
+    /// <summary>
+    /// A file kept beside a sidecar for the same notebook: "{NotebookFolder}.{suffix}" in the sidecar's folder, the
+    /// sidecar's own name with ".sfp-state.json" swapped for the suffix (a sidecar named otherwise keeps its name without
+    /// the extension), so two notebooks in one folder never share it.
+    /// </summary>
+    public static string CompanionPath(string sidecarPath, string suffix)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sidecarPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(suffix);
+        string full = System.IO.Path.GetFullPath(sidecarPath);
+        string name = System.IO.Path.GetFileName(full);
+        string ending = "." + Sidecar.FileName;
+        string stem = name.Length > ending.Length && name.EndsWith(ending, StringComparison.OrdinalIgnoreCase)
+            ? name[..^ending.Length]
+            : System.IO.Path.GetFileNameWithoutExtension(name);
+        return System.IO.Path.Combine(System.IO.Path.GetDirectoryName(full) ?? ".", stem + "." + suffix);
+    }
+
     public Sidecar? Load(string path)
     {
         if (!File.Exists(path))

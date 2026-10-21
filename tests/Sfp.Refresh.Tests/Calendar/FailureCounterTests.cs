@@ -17,11 +17,47 @@ public sealed class FailureCounterTests : IDisposable
     }
 
     [Fact]
-    public void Counter_lives_beside_the_sidecar()
+    public void Each_notebook_has_its_own_counter_beside_its_sidecar()
     {
-        string sidecar = Path.Combine(dir, "SFP Q1 2027", "sfp-state.json");
+        string q1 = Path.Combine(dir, "SFP Q1 2027.sfp-state.json");
+        string q2 = Path.Combine(dir, "SFP Q2 2027.sfp-state.json");
 
-        FailureCounter.PathBeside(sidecar).Should().Be(Path.Combine(dir, "SFP Q1 2027", "sfp-refresh-failures.json"));
+        FailureCounter.PathBeside(q1).Should().Be(Path.Combine(dir, "SFP Q1 2027.sfp-refresh-failures.json"));
+        FailureCounter.PathBeside(q2).Should().Be(Path.Combine(dir, "SFP Q2 2027.sfp-refresh-failures.json"));
+        FailureCounter.PathBeside(Path.Combine(dir, "elsewhere.json")).Should().Be(Path.Combine(dir, "elsewhere.sfp-refresh-failures.json"));
+        FailureCounter first = FailureCounter.LoadBeside(q1);
+        first.RecordTotalFailure(T0, "Work: timeout");
+        first.Save();
+
+        FailureCounter.LoadBeside(q2).ConsecutiveTotalFailures.Should().Be(0, "two notebooks in one folder never share a streak");
+        FailureCounter.LoadBeside(q1).ConsecutiveTotalFailures.Should().Be(1);
+    }
+
+    [Fact]
+    public void Save_replaces_the_counter_through_a_temp_file_and_leaves_none_behind()
+    {
+        string path = Path.Combine(dir, "SFP Q1 2027." + FailureCounter.FileName);
+        File.WriteAllText(path, "{ \"consecutiveTotalFailures\": 7, \"lastMessage\": \"a long message from an earlier run\" }");
+        FailureCounter counter = FailureCounter.Load(path);
+        counter.Reset(T0);
+        FileStream? reader = OperatingSystem.IsWindows() ? null : new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+        try
+        {
+            counter.Save();
+            if (reader is not null)
+            {
+                new StreamReader(reader).ReadToEnd().Should().Contain("\"consecutiveTotalFailures\": 7", "the file is replaced by a new one, never rewritten in place under a reader");
+            }
+        }
+        finally
+        {
+            reader?.Dispose();
+        }
+
+        Directory.GetFiles(dir).Should().Equal(path);
+        FailureCounter.Load(path).ConsecutiveTotalFailures.Should().Be(0);
+        File.ReadAllText(path).Should().NotContain("earlier run");
     }
 
     [Fact]

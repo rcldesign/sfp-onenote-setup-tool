@@ -4,13 +4,16 @@ using System.Text.Json.Serialization;
 namespace Sfp.Refresh.Calendar;
 
 /// <summary>
-/// Counts consecutive failed Refresh runs, persisted as sfp-refresh-failures.json next to the sidecar so the count
-/// survives between scheduled runs: a run in which every Setup calendar source failed, or one that OneNote failed (exit
-/// 3 or 5). <see cref="ShouldToast"/> turns on at <see cref="ToastThreshold"/>; a run that succeeds resets it (the
-/// orchestrator decides once per run, from how the run ended). Timestamps are passed in; nothing here reads the clock.
+/// Counts consecutive failed Refresh runs of one notebook, persisted beside its sidecar as
+/// "{NotebookFolder}.sfp-refresh-failures.json" so the count survives between scheduled runs and two notebooks in one
+/// folder keep their own streaks: a run in which every Setup calendar source failed, or one that OneNote failed (exit 3
+/// or 5). <see cref="ShouldToast"/> turns on at <see cref="ToastThreshold"/>; a run that succeeds resets it (the
+/// orchestrator decides once per run, from how the run ended). The file is written atomically (a temp file in the same
+/// folder, then moved over it). Timestamps are passed in; nothing here reads the clock.
 /// </summary>
 public sealed class FailureCounter
 {
+    /// <summary>The counter file's suffix after the notebook name.</summary>
     public const string FileName = "sfp-refresh-failures.json";
 
     /// <summary>Consecutive total failures that raise the toast (PRD: three).</summary>
@@ -47,9 +50,8 @@ public sealed class FailureCounter
     /// <summary>True once the count reaches <see cref="ToastThreshold"/>.</summary>
     public bool ShouldToast => state.ConsecutiveTotalFailures >= ToastThreshold;
 
-    /// <summary>The counter file beside a sidecar file (same folder).</summary>
-    public static string PathBeside(string sidecarPath) =>
-        System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(sidecarPath)) ?? ".", FileName);
+    /// <summary>The counter file of the notebook a sidecar file belongs to: same folder, named after the notebook.</summary>
+    public static string PathBeside(string sidecarPath) => Sfp.OneNote.SidecarStore.CompanionPath(sidecarPath, FileName);
 
     /// <summary>Loads the counter at <paramref name="path"/>; a missing or unreadable file starts at zero.</summary>
     public static FailureCounter Load(string path)
@@ -91,7 +93,10 @@ public sealed class FailureCounter
         state = state with { ConsecutiveTotalFailures = 0, LastSuccess = when, LastMessage = null };
     }
 
-    /// <summary>Writes the counter file, creating its folder when needed.</summary>
+    /// <summary>
+    /// Writes the counter file, creating its folder when needed: to a temp file in the same folder first, then moved over
+    /// the counter, so a reader never sees a half-written file and a crash leaves the previous count.
+    /// </summary>
     public void Save()
     {
         string? dir = System.IO.Path.GetDirectoryName(Path);
@@ -100,7 +105,19 @@ public sealed class FailureCounter
             Directory.CreateDirectory(dir);
         }
 
-        File.WriteAllText(Path, JsonSerializer.Serialize(state, JsonOptions));
+        string tmp = Path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(tmp, JsonSerializer.Serialize(state, JsonOptions));
+            File.Move(tmp, Path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tmp))
+            {
+                File.Delete(tmp);
+            }
+        }
     }
 
     /// <summary>The persisted shape.</summary>
