@@ -86,6 +86,8 @@
       "columnX": [28.8, 149.9, 271.1, 392.2, 513.3, 634.5, 755.6],
       "rowY": [113.2, 233.2, 353.1, 473.0, 592.9],
       "boxPt": 30.3,
+      "$comment": "stackedInsetPt is the air kept between a stacked sixth-row string ('23 / 30') and each side of its day box; the string is set smaller when it would not fit.",
+      "stackedInsetPt": 1.5,
       "columnPitch": 121.1,
       "rowPitch": 120,
       "dayHeaderY": 92,

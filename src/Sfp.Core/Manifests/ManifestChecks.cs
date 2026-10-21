@@ -5,9 +5,9 @@ namespace Sfp.Core.Manifests;
 /// <summary>
 /// Structural sanity and token validation run on every loaded manifest: no null where the record needs a value, page
 /// size and count, the nine-page week run, PDF page numbers inside the document, known page names in every
-/// <c>appliesTo</c> list and page template, every erase rectangle containing the printed extent it removes, and the PRD
-/// token set in every section name and page title pattern. Each failure is a <see cref="ManifestException"/> naming the
-/// manifest and the offending value.
+/// <c>appliesTo</c> list and page template, every erase rectangle containing the printed extent it removes, a stacked
+/// day inset that leaves room in the day box, and the PRD token set in every section name and page title pattern. Each
+/// failure is a <see cref="ManifestException"/> naming the manifest and the offending value.
 /// </summary>
 public static class ManifestChecks
 {
@@ -132,6 +132,12 @@ public static class ManifestChecks
         CheckEraseCovers(source, "slots.date.slashErase", slots.Date.SlashErase, "slots.date.slashPrinted", slots.Date.SlashPrinted);
         CheckEraseCovers(source, "slots.weeksRemaining.erase", slots.WeeksRemaining.Erase, "slots.weeksRemaining.printed", slots.WeeksRemaining.Printed);
         CheckEraseCovers(source, "slots.timeBlocks.erase", slots.TimeBlocks.Erase, "slots.timeBlocks.printed", slots.TimeBlocks.Printed);
+
+        DayGridSlot grid = slots.DayGrid;
+        if (grid.StackedInsetPt < 0 || 2 * grid.StackedInsetPt >= grid.BoxPt)
+        {
+            Fail(source, $"slots.dayGrid.stackedInsetPt must be at least 0 and leave room inside the {Pt(grid.BoxPt)} pt day box (slots.dayGrid.boxPt) on both sides, found {Pt(grid.StackedInsetPt)}.");
+        }
     }
 
     /// <summary>

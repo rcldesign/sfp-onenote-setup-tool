@@ -233,6 +233,7 @@ public class ManifestLoaderTests : IDisposable
     [InlineData("slots.date", "slashPrinted")]
     [InlineData("slots.weeksRemaining", "printed")]
     [InlineData("slots.timeBlocks", "printed")]
+    [InlineData("slots.dayGrid", "stackedInsetPt")]
     public void Calibrated_geometry_has_no_code_default_so_a_missing_key_is_a_load_error(string parent, string key)
     {
         string path = WriteModified(root =>
@@ -268,6 +269,19 @@ public class ManifestLoaderTests : IDisposable
         m.Slots.Date.SlashPrinted.Should().Be(new RectPt(899.7, 16.5, 71.5, 24.9));
         m.Slots.WeeksRemaining.Printed.Should().Be(new RectPt(536.6, 28.9, 189.7, 13.9));
         m.Slots.TimeBlocks.Printed.Should().Be(new RectPt(886.3, 92.4, 196.5, 548.3));
+        m.Slots.DayGrid.StackedInsetPt.Should().Be(1.5);
+    }
+
+    [Theory]
+    [InlineData(-0.5)]
+    [InlineData(15.15)]
+    public void The_stacked_day_inset_must_leave_room_in_the_day_box(double inset)
+    {
+        string path = WriteModified(root => root["slots"]!["dayGrid"]!["stackedInsetPt"] = inset);
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage("*slots.dayGrid.stackedInsetPt must be at least 0 and leave room inside the 30.3 pt day box*");
     }
 
     /// <summary>

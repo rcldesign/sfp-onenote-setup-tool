@@ -11,7 +11,8 @@ namespace Sfp.Render.Pages;
 /// M2.5: the Monthly Calendar page. The month name goes at slots.monthName; each cell of the engine's 5 by 7 grid gets
 /// its day number: an in-month quarter day is a calendarDay link (never baked), an out-of-month day is baked at the
 /// greyed opacity or left blank (GenerateOptions.OutOfMonthDays), and a stacked sixth-row day is baked as " / 30"
-/// beside the linked "23" so the box reads "23 / 30". The "Week NN" labels are calendarWeek link placements, or baked
+/// beside the linked "23" so the box reads "23 / 30", set smaller when needed so the whole string fits inside the day
+/// box less slots.dayGrid.stackedInsetPt on each side. The "Week NN" labels are calendarWeek link placements, or baked
 /// text when the page has no link for them (links off); the habit legend band and the event lines under each quarter
 /// day box are placements only.
 /// </summary>
@@ -70,7 +71,8 @@ internal static class CalendarPage
         string iso = cell.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         string day = cell.Date.Day.ToString(CultureInfo.InvariantCulture);
         string text = BoxText(cell);
-        double baseline = box.CenterY + (c.CapHeight(grid.SizePt) / 2);
+        double size = cell.StackedDay is null ? grid.SizePt : StackedSize(c, grid, text);
+        double baseline = box.CenterY + (c.CapHeight(size) / 2);
 
         LinkSpec? link = cell.InMonth && cell.InQuarter ? c.Link(CalendarDayAnchor + ":" + iso) : null;
         if (link is not null)
@@ -83,22 +85,25 @@ internal static class CalendarPage
             }
             else
             {
-                // "23 / 30": the linked day number sits where it would in the centered string, the stacked part is baked after it.
-                double width = c.TextWidth(text, grid.SizePt);
-                double dayWidth = c.TextWidth(day, grid.SizePt);
+                // "23 / 30": the linked day number covers the "23" of the centered string as drawn at its fitted size, in
+                // that size, with a point of air either side for OneNote's text (no more than the inset, so the link stays
+                // inside the box); the stacked part is baked after it.
+                double width = c.TextWidth(text, size);
+                double dayWidth = c.TextWidth(day, size);
                 double left = box.CenterX - (width / 2);
-                c.AddLink(link.AnchorId, new RectPt(left - 1, rect.Y, dayWidth + 2, rect.H), link.Text, TextAlign.Center, anchor.SizePt);
-                c.Text(text[day.Length..], left + dayWidth, baseline, TextAlign.Left, grid.SizePt);
+                double pad = Math.Min(1, grid.StackedInsetPt);
+                c.AddLink(link.AnchorId, new RectPt(left - pad, rect.Y, dayWidth + (2 * pad), rect.H), link.Text, TextAlign.Center, size);
+                c.Text(text[day.Length..], left + dayWidth, baseline, TextAlign.Left, size);
             }
         }
         else if (cell.InMonth)
         {
             // Links are off for this day (GenerateOptions.Links false, or no page for it): the number is baked like the printed planner.
-            c.Text(text, box.CenterX, baseline, TextAlign.Center, grid.SizePt);
+            c.Text(text, box.CenterX, baseline, TextAlign.Center, size);
         }
         else if (c.Generate.OutOfMonthDays == OutOfMonthDayStyle.Greyed)
         {
-            c.Text(text, box.CenterX, baseline, TextAlign.Center, grid.SizePt, m.Colors.GreyedInkOpacity);
+            c.Text(text, box.CenterX, baseline, TextAlign.Center, size, m.Colors.GreyedInkOpacity);
         }
 
         CalendarEventLinesSlot events = m.Slots.CalendarEventLines;
@@ -107,6 +112,17 @@ internal static class CalendarPage
             RectPt lines = new(box.X + events.XOffset, box.Bottom + events.OffsetBelowBox, events.W, events.LineHeight * events.MaxLines);
             c.AddPropagated(CalendarEventsSlot + ":" + iso, lines, events.SizePt, m.Colors.EventInkOpacity);
         }
+    }
+
+    /// <summary>
+    /// The size of a stacked string ("23 / 30"): the day grid's size, or, when the string is wider than the day box less
+    /// slots.dayGrid.stackedInsetPt on each side, the size that makes it exactly that wide (text widths scale linearly).
+    /// </summary>
+    private static double StackedSize(RenderContext c, DayGridSlot grid, string text)
+    {
+        double room = grid.BoxPt - (2 * grid.StackedInsetPt);
+        double width = c.TextWidth(text, grid.SizePt);
+        return width <= room ? grid.SizePt : grid.SizePt * room / width;
     }
 
     /// <summary>

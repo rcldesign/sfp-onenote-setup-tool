@@ -186,14 +186,91 @@ public sealed class CalendarPageTests
         page.Anchors.Should().NotContain(a => a.AnchorId == "calendarDay:2026-11-30", "one anchor per box");
         RectPt box = grid.Box(4, 0);
         link.W.Should().BeLessThan((float)box.W, "the link covers only the 23 part of the box");
+        link.X.Should().BeGreaterThanOrEqualTo((float)box.X, "the link starts inside the box");
+        (link.X + link.W).Should().BeLessThanOrEqualTo((float)box.Right, "the link ends inside the box");
         double inside = Math.Max(link.X, box.X + 1.5);
         f.HasInk(sheet, new RectPt(inside, box.Y + 2, link.X + link.W - inside, box.H - 4)).Should().BeFalse("nothing is baked under the link (the probe starts right of the printed grid line)");
         f.HasInk(sheet, new RectPt(link.X + link.W, box.Y + 2, box.Right - link.X - link.W - 1.5, box.H - 4)).Should().BeTrue("/ 30 is baked to its right");
+        f.HasInk(sheet, new RectPt(box.Right + 1.5, box.Y + 2, 4, box.H - 4)).Should().BeFalse("/ 30 ends inside the box, short of its right edge");
 
         RenderedPage dropped = f.Renderer.Render(plan.Page(november), plan, f.Options(q4 with { SixthRow = SixthRowMode.Drop }));
         using SKBitmap droppedSheet = RenderFixture.Decode(dropped);
         ColorParser.MaxChannelDistance(Pixels.Mean(droppedSheet, BoxInterior(4, 0), RenderFixture.Dpi), DayBox).Should().BeLessThanOrEqualTo(2, "with Drop the box holds only the link");
         dropped.Anchors.Single(a => a.AnchorId == "calendarDay:2026-11-23").W.Should().BeApproximately((float)M.Links.CalendarDay.W, 0.01f);
+    }
+
+    /// <summary>
+    /// Adversarial review render-2: on the real planner a stacked sixth-row box keeps its ink and its link inside the day
+    /// box, so nothing crosses the printed grid rules: November 2026 (the PRD's example, "23 / 30") and August 2027 in Q3
+    /// 2027 ("23 / 30" and "24 / 31"), links on and off. The next box of that row is an ordinary one and keeps the
+    /// anchor's own rectangle and size, or its full-size number centered on the usual baseline.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData(2026, 10, 11, true)]
+    [InlineData(2026, 10, 11, false)]
+    [InlineData(2027, 7, 8, true)]
+    [InlineData(2027, 7, 8, false)]
+    public void On_the_real_planner_stacked_boxes_keep_their_ink_and_links_inside_the_day_box(int year, int startMonth, int month, bool links)
+    {
+        string pdf = SfpPdf.RequireOrSkip();
+        GenerateOptions options = f.Q1Options with { Start = new QuarterSpec(year, startMonth), Links = links };
+        NotebookPlan plan = f.Plan(options);
+        PageSpec spec = plan.Page(PageKey.Calendar(year, month));
+        RenderedPage page = f.Renderer.Render(spec, plan, new RenderOptions(pdf, RenderFixture.Dpi, options));
+        using SKBitmap sheet = RenderFixture.Decode(page);
+        using SKBitmap raw = f.Rasterizer.Render(pdf, spec.PdfPage!.Value, RenderFixture.Dpi);
+        DayGridSlot grid = M.Slots.DayGrid;
+        CalendarDayAnchor anchor = M.Links.CalendarDay;
+        MonthGrid cells = f.Engine.Grid(year, month, plan.Quarter);
+        int last = cells.Rows.Count - 1;
+        IReadOnlyList<DayCell> row = cells.Rows[last];
+        int stacked = row.Count(c => c.StackedDay is not null);
+        stacked.Should().Be(month == 8 ? 2 : 1, "August 2027 stacks 30 and 31 into its last row, November 2026 stacks 30");
+
+        for (int column = 0; column < stacked; column++)
+        {
+            RectPt box = grid.Box(last, column);
+            string label = CalendarPage.BoxText(row[column]);
+
+            // The render changes no pixel within 5 pt of a day box but the box's own number: the week label and the
+            // neighboring boxes sit further away, and links and event lines are not baked.
+            RectPt ink = Pixels.ChangedBounds(raw, sheet, Grow(box, 5), RenderFixture.Dpi) ?? throw new InvalidOperationException($"Nothing drawn in the box of '{label}'.");
+            Inside(ink, box).Should().BeTrue($"the ink of '{label}' ({Describe(ink)}) stays inside its day box ({Describe(box)})");
+
+            if (links)
+            {
+                AnchorPlacement link = page.Anchors.Single(a => a.AnchorId == "calendarDay:" + Iso(row[column].Date));
+                RectPt rect = new(link.X, link.Y, link.W, link.H);
+                Inside(rect, box).Should().BeTrue($"the link of '{label}' ({Describe(rect)}) stays inside its day box ({Describe(box)})");
+                Pixels.HasInk(raw, rect, RenderFixture.Dpi, DayBox).Should().BeFalse($"no printed grid rule lies under the link of '{label}'");
+            }
+        }
+
+        DayCell ordinary = row[stacked];
+        ordinary.StackedDay.Should().BeNull();
+        RectPt plain = grid.Box(last, stacked);
+        RectPt? drawn = Pixels.ChangedBounds(raw, sheet, Grow(plain, 5), RenderFixture.Dpi);
+        if (links)
+        {
+            AnchorPlacement link = page.Anchors.Single(a => a.AnchorId == "calendarDay:" + Iso(ordinary.Date));
+            RectPt expected = anchor.Rect(grid, last, stacked);
+            new[] { link.X, link.Y, link.W, link.H }.Should().Equal(new[] { (float)expected.X, (float)expected.Y, (float)expected.W, (float)expected.H }, "an ordinary box's link is the anchor's own rectangle");
+            link.SizePt.Should().Be((float)anchor.SizePt);
+            link.Align.Should().Be(anchor.Align);
+            drawn.Should().BeNull("nothing is baked in an ordinary box with links on");
+        }
+        else
+        {
+            string day = ordinary.Date.Day.ToString(CultureInfo.InvariantCulture);
+            RectPt expected = InkOf(day, grid.SizePt, plain.CenterX, plain.CenterY + (CapHeight(grid.SizePt) / 2));
+            drawn.Should().NotBeNull($"{day} is baked with links off");
+            RectPt found = drawn!.Value;
+            string seen = $"{day} is drawn at {Describe(found)}, its glyphs at the grid size centered in the box ink {Describe(expected)}";
+            found.X.Should().BeApproximately(expected.X, 0.7, seen);
+            found.Right.Should().BeApproximately(expected.Right, 0.7, seen);
+            found.Y.Should().BeApproximately(expected.Y, 0.7, seen);
+            found.Bottom.Should().BeApproximately(expected.Bottom, 0.7, seen);
+        }
     }
 
     [Fact]
@@ -210,6 +287,35 @@ public sealed class CalendarPageTests
         page.Anchors.Where(a => a.AnchorId.StartsWith("calendarDay:", StringComparison.Ordinal)).Should().HaveCount(31);
         page.Anchors.Should().Contain(a => a.AnchorId == "prevCalendar" && a.Text == "‹ February 2027");
         page.Anchors.Should().NotContain(a => a.AnchorId == "nextCalendar");
+    }
+
+    private static RectPt Grow(RectPt r, double by) => new(r.X - by, r.Y - by, r.W + (2 * by), r.H + (2 * by));
+
+    private static bool Inside(RectPt inner, RectPt outer) =>
+        inner.X >= outer.X && inner.Y >= outer.Y && inner.Right <= outer.Right && inner.Bottom <= outer.Bottom;
+
+    private static string Describe(RectPt r) =>
+        string.Create(CultureInfo.InvariantCulture, $"x {r.X:0.##} to {r.Right:0.##}, y {r.Y:0.##} to {r.Bottom:0.##}");
+
+    private static string Iso(DateOnly date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    private double CapHeight(double sizePt)
+    {
+        using SKFont font = f.Fonts.Font(sizePt);
+        return font.Metrics.CapHeight;
+    }
+
+    /// <summary>
+    /// Where a text run centered on <paramref name="centerX"/> inks, in points: the tight bounds of its glyph outlines at
+    /// the size (the measured glyph boxes overshoot curved digits by most of a point).
+    /// </summary>
+    private RectPt InkOf(string text, double sizePt, double centerX, double baseline)
+    {
+        using SKFont font = f.Fonts.Font(sizePt);
+        double left = centerX - (font.MeasureText(text) / 2);
+        using SKPath outline = font.GetTextPath(text, new SKPoint((float)left, (float)baseline));
+        SKRect ink = outline.TightBounds;
+        return new RectPt(ink.Left, ink.Top, ink.Width, ink.Height);
     }
 
     /// <summary>Renders a page of the Q1 2027 plan (adjusted) from another PDF, the real planner for instance.</summary>

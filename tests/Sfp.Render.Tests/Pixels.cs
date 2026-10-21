@@ -337,7 +337,26 @@ internal static class Pixels
     /// background by more than <paramref name="tolerance"/> in some channel, or null when there are none. Only whole
     /// pixels inside the region are checked.
     /// </summary>
-    public static RectPt? InkBounds(SKBitmap bitmap, RectPt region, int dpi, SKColor background, int tolerance = 3)
+    public static RectPt? InkBounds(SKBitmap bitmap, RectPt region, int dpi, SKColor background, int tolerance = 3) =>
+        Bounds(bitmap, region, dpi, (x, y) => !Near(bitmap.GetPixel(x, y), background, tolerance));
+
+    /// <summary>
+    /// Bounds in points (pixel edges) of the pixels inside <paramref name="region"/> that differ between two bitmaps of the
+    /// same page at the same DPI by more than <paramref name="tolerance"/> in some channel (what a render drew over the
+    /// raw page), or null when none do. Only whole pixels inside the region are compared.
+    /// </summary>
+    public static RectPt? ChangedBounds(SKBitmap before, SKBitmap after, RectPt region, int dpi, int tolerance = 3)
+    {
+        if (before.Width != after.Width || before.Height != after.Height)
+        {
+            throw new ArgumentException($"The bitmaps are {before.Width}x{before.Height} and {after.Width}x{after.Height}; compare them at the same DPI.", nameof(after));
+        }
+
+        return Bounds(before, region, dpi, (x, y) => !Near(before.GetPixel(x, y), after.GetPixel(x, y), tolerance));
+    }
+
+    /// <summary>Bounds in points (pixel edges) of the whole pixels inside a region that a predicate marks, or null when it marks none.</summary>
+    private static RectPt? Bounds(SKBitmap bitmap, RectPt region, int dpi, Func<int, int, bool> marked)
     {
         double s = dpi / 72.0;
         SKRectI r = WholePixels(region, dpi, bitmap);
@@ -346,7 +365,7 @@ internal static class Pixels
         {
             for (int x = r.Left; x < r.Right; x++)
             {
-                if (Near(bitmap.GetPixel(x, y), background, tolerance))
+                if (!marked(x, y))
                 {
                     continue;
                 }

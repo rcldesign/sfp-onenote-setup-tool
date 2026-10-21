@@ -321,6 +321,12 @@ public sealed record DayGridSlot
 
     public required double BoxPt { get; init; }
 
+    /// <summary>
+    /// Air kept between a stacked sixth-row string ("23 / 30") and each side of its day box: the string is set smaller
+    /// when it is wider than <see cref="BoxPt"/> less this on both sides.
+    /// </summary>
+    public required double StackedInsetPt { get; init; }
+
     /// <summary>Width of one grid cell (the distance between column origins).</summary>
     public required double ColumnPitch { get; init; }
 
