@@ -143,6 +143,57 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
     }
 
+    /// <summary>
+    /// Error of a run stopped because its sidecar, read again once the run held the lock, names another notebook than the
+    /// one the run opened and than the sidecar it first read ({0}: the sidecar path, {1}: the notebook path it now names,
+    /// {2}: the notebook name, {3}: the opened notebook's path): another run rebuilt it from another notebook, or the
+    /// notebook was generated again, while this run was opening the notebook. Exit 2, and the sidecar is left as it is.
+    /// </summary>
+    public const string SidecarChangedFormat = "The sidecar at {0} changed while this run was opening '{2}' and now describes the notebook at {1}, not the open notebook at {3}; it was left as it is. Run Refresh again.";
+
+    /// <summary>
+    /// The opened notebook with its sidecar read again once the run holds the lock beside it, so a run that saved the
+    /// sidecar while this one was opening the notebook (COM start, OpenHierarchy and its wait) is not undone by this
+    /// run's save of an older copy. The save guard is applied to that copy: one that names another notebook ID than the
+    /// opened notebook and than the first read stops the run (false, with the reason), since this run cannot tell which
+    /// of the two it describes. A copy that cannot be read leaves the first read in use (logged); a sidecar gone since
+    /// the first read is gone for the run too (it rebuilds).
+    /// </summary>
+    private bool TryReadAgainUnderLock(
+        OpenedNotebook opened,
+        string name,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out OpenedNotebook? locked,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out string? problem)
+    {
+        problem = null;
+        Sidecar? again;
+        try
+        {
+            again = services.Sidecars.Load(opened.SidecarPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            services.Log.Warning(ex, "Sidecar {Path} could not be read again once the lock was taken; the first read is used", opened.SidecarPath);
+            locked = opened;
+            return true;
+        }
+
+        if (again is not null
+            && !string.Equals(again.NotebookId, opened.Notebook.Id, StringComparison.Ordinal)
+            && !(opened.Sidecar is { } first
+                && string.Equals(again.NotebookId, first.NotebookId, StringComparison.Ordinal)
+                && string.Equals(again.NotebookPath, first.NotebookPath, StringComparison.Ordinal)))
+        {
+            problem = string.Format(CultureInfo.InvariantCulture, SidecarChangedFormat, opened.SidecarPath, again.NotebookPath, name, opened.Notebook.Path);
+            services.Log.Warning("{Problem}", problem);
+            locked = null;
+            return false;
+        }
+
+        locked = opened with { Sidecar = again };
+        return true;
+    }
+
     private RefreshResult RunCore(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken, Stopwatch clock, RunState state)
     {
         List<string> warnings = new();
@@ -167,6 +218,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             return Fail(WriteFailureExitCode, string.Format(CultureInfo.InvariantCulture, AlreadyRunningFormat, request.NotebookName, holder), clock);
         }
 
+        // From here on the run uses the sidecar as read under the lock; the first read only found the path and chose the notebook.
+        if (!TryReadAgainUnderLock(opened, request.NotebookName, out OpenedNotebook? locked, out string? changed))
+        {
+            return Fail(NotFoundExitCode, changed, clock);
+        }
+
+        opened = locked;
         progress?.Report("Checking the sidecar");
         SidecarRecovery recovery = new(services.App, manifest, services.Dates, services.Plans, services.Log);
         RecoveryResult recovered = recovery.Recover(opened.Notebook, opened.Sidecar, services.ToolVersion);
