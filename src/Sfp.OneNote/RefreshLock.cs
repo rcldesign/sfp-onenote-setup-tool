@@ -2,13 +2,14 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using Serilog;
-using Sfp.OneNote;
 
-namespace Sfp.Refresh.Orchestration;
+namespace Sfp.OneNote;
 
 /// <summary>
 /// The lock file a Refresh run holds beside the notebook's sidecar ("{NotebookFolder}.sfp-refresh.lock") for the whole
-/// run, so two runs of one notebook (the 05:00 task and "Refresh now") never interleave their reads and sidecar saves.
+/// run, so two runs of one notebook (the 05:00 task and "Refresh now") do not run at once. Generate's Next quarter link
+/// writer takes the same lock around its read and save of the previous notebook's sidecar, so it never saves over a
+/// Refresh of that notebook (it lives here, beside <see cref="SidecarStore"/>, for both).
 /// It records the holder's process ID and start time, the machine and when it was taken. A lock is stale, and is taken
 /// over with a logged note, when its process is gone (on this machine; an ID that now belongs to another process counts
 /// as gone) or when it was taken more than <see cref="StaleAfter"/> ago; a lock file that cannot be read is stale once it
