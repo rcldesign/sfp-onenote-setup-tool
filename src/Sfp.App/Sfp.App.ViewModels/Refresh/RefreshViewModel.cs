@@ -69,6 +69,12 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     /// <summary>Pages the run reported writing, for the cancelled line (the orchestrator's cancelled result carries no summary).</summary>
     private int _pagesWrittenSeen;
 
+    /// <summary>
+    /// A reload is rebuilding the list: the selection changes it makes, and the null a WPF list pushes into the selection
+    /// while its items are cleared, leave the shown results alone; the reload itself decides once the list is rebuilt.
+    /// </summary>
+    private bool _reloading;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(PreviewChangesCommand))]
     [NotifyCanExecuteChangedFor(nameof(RefreshNowCommand))]
@@ -166,10 +172,14 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         PendingReload = ReloadAsync();
     }
 
-    /// <summary>Lists the notebooks again, keeping the selection by name when it still exists.</summary>
+    /// <summary>
+    /// Lists the notebooks again, keeping the selected notebook (the same sidecar file) when it still exists. The rows are
+    /// new records, since the registry reads each sidecar again (after a run, with the new Last refreshed), so the shown
+    /// results (summary, Setup values, changes) are cleared only when the selection ends up on another notebook.
+    /// </summary>
     public async Task ReloadAsync()
     {
-        string? selectedName = SelectedNotebook?.Name;
+        KnownNotebookItem? previous = SelectedNotebook;
         IReadOnlyList<string> folders = Folders;
         IReadOnlyList<KnownNotebook> found;
         try
@@ -186,13 +196,43 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
             NotebooksStatus = "Could not list notebooks: " + ex.Message;
         }
 
-        Notebooks.Clear();
-        foreach (KnownNotebook notebook in found.OrderByDescending(n => n.Quarter.Year).ThenByDescending(n => n.Quarter.Month).ThenBy(n => n.Name, StringComparer.Ordinal))
+        _reloading = true;
+        try
         {
-            Notebooks.Add(new KnownNotebookItem(notebook));
+            Notebooks.Clear();
+            foreach (KnownNotebook notebook in found.OrderByDescending(n => n.Quarter.Year).ThenByDescending(n => n.Quarter.Month).ThenBy(n => n.Name, StringComparer.Ordinal))
+            {
+                Notebooks.Add(new KnownNotebookItem(notebook));
+            }
+
+            SelectedNotebook = (previous is null ? null : Notebooks.FirstOrDefault(n => IsSameNotebook(n, previous))) ?? Notebooks.FirstOrDefault();
+        }
+        finally
+        {
+            _reloading = false;
         }
 
-        SelectedNotebook = Notebooks.FirstOrDefault(n => n.Name == selectedName) ?? Notebooks.FirstOrDefault();
+        if (!IsSameNotebook(SelectedNotebook, previous))
+        {
+            // The first load, or the notebook shown before is gone: the results on screen were not about this one.
+            ClearResults();
+            SyncScheduleFromService(SelectedNotebook);
+        }
+    }
+
+    /// <summary>The same notebook: the same sidecar file, or the same name when a sidecar path is unknown. Two nulls are the same.</summary>
+    public static bool IsSameNotebook(KnownNotebookItem? a, KnownNotebookItem? b)
+    {
+        if (a is null || b is null)
+        {
+            return a is null && b is null;
+        }
+
+        string sidecarA = a.Notebook.SidecarPath;
+        string sidecarB = b.Notebook.SidecarPath;
+        return !string.IsNullOrWhiteSpace(sidecarA) && !string.IsNullOrWhiteSpace(sidecarB)
+            ? string.Equals(sidecarA, sidecarB, StringComparison.OrdinalIgnoreCase)
+            : string.Equals(a.Name, b.Name, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -337,6 +377,18 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedNotebookChanged(KnownNotebookItem? value)
     {
+        if (_reloading)
+        {
+            return;
+        }
+
+        ClearResults();
+        SyncScheduleFromService(value);
+    }
+
+    /// <summary>Clears what the last run showed: it was about the notebook selected then.</summary>
+    private void ClearResults()
+    {
         Changes.Clear();
         SetupLines.Clear();
         Summary = null;
@@ -345,7 +397,6 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         InkNotice = null;
         ChangesHeading = null;
         ScheduleStatus = null;
-        SyncScheduleFromService(value);
     }
 
     partial void OnDailyRefreshEnabledChanged(bool value)
