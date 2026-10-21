@@ -107,7 +107,7 @@ public class StoppedRunStreakTests
     /// Keeps a file from being deleted until disposed, as a sync client holding it open or an access rule does: on Windows
     /// a handle open without delete sharing; elsewhere the immutable attribute (chattr +i), which needs root.
     /// </summary>
-    private sealed class Undeletable : IDisposable
+    internal sealed class Undeletable : IDisposable
     {
         private readonly string path;
         private readonly FileStream? handle;
