@@ -8,17 +8,18 @@ using System.Text.Json.Serialization;
 namespace Sfp.Core.Manifests;
 
 /// <summary>
-/// Finds members of a manifest that hold null although the record declares them non-nullable. System.Text.Json lets
-/// three such nulls through: an explicit <c>null</c> in a user manifest ({"slots": {"date": null}}, which
-/// <c>required</c> does not reject because the key is present), a null entry in a list or dictionary, and a member of a
-/// positional record (DateField, LabelSpec ...) that the file leaves out, for which the constructor receives null.
-/// Without this walk such a manifest loads and fails later with a NullReferenceException far from the cause.
+/// Finds members of a manifest that hold null although the record declares them non-nullable, and enum members that
+/// hold a value the enum does not define. System.Text.Json lets two such nulls through: an explicit <c>null</c> in a
+/// user manifest ({"slots": {"date": null}}, which <c>required</c> and [JsonRequired] do not reject because the key is
+/// present) and a null entry in a list or dictionary. It also reads "align": 7, or the string "7", as an undefined
+/// TextAlign. Without this walk such a manifest loads and fails later far from the cause. (A member that the file leaves
+/// out is a deserialization error: the records mark every member required.)
 /// </summary>
 /// <remarks>
 /// The walk is reflection over every public settable property that the JSON maps (not [JsonIgnore]), reading the C#
 /// nullable annotations, and it recurses into list entries, dictionary values and every record type of this assembly,
 /// so a member added to the manifest later is covered without a change here. Members declared nullable (a
-/// <c>string?</c> title, a <c>MonthRule?</c>) may hold null. The first null found is reported with its JSON path
+/// <c>string?</c> title, a <c>MonthRule?</c>) may hold null. The first problem found is reported with its JSON path
 /// ("$.slots.date.fields[0].name").
 /// </remarks>
 internal static class ManifestNullChecks
@@ -32,7 +33,10 @@ internal static class ManifestNullChecks
 
     private static readonly NullabilityInfoContext Nullability = new();
 
-    /// <summary>Throws <see cref="ManifestException"/> naming the JSON path of the first non-nullable member that holds null.</summary>
+    /// <summary>
+    /// Throws <see cref="ManifestException"/> naming the JSON path of the first non-nullable member that holds null, or
+    /// of the first enum member that holds an undefined value.
+    /// </summary>
     public static void Run(Manifest manifest, string source)
     {
         ArgumentNullException.ThrowIfNull(manifest);
@@ -67,7 +71,19 @@ internal static class ManifestNullChecks
         }
 
         Type runtime = value.GetType();
-        if (value is string || runtime.IsPrimitive || runtime.IsEnum)
+        if (runtime.IsEnum)
+        {
+            if (!Enum.IsDefined(runtime, value))
+            {
+                string names = string.Join(", ", Enum.GetNames(runtime).Select(JsonNamingPolicy.CamelCase.ConvertName));
+                throw new ManifestException(
+                    $"Manifest '{source}': {path} holds {Convert.ToString(value, CultureInfo.InvariantCulture)}, which is not one of {names}.");
+            }
+
+            return;
+        }
+
+        if (value is string || runtime.IsPrimitive)
         {
             return;
         }

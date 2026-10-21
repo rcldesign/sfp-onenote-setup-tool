@@ -238,6 +238,49 @@ public class ManifestLoaderTests : IDisposable
     }
 
     [Theory]
+    [InlineData("{ \"slots\": { \"date\": { \"fields\": [ { \"name\": \"month\", \"align\": \"right\" }, { \"name\": \"day\", \"align\": \"center\", \"x\": 935 }, { \"name\": \"year\", \"align\": \"left\", \"x\": 976 } ] } } }", "fields[0]", "x")]
+    [InlineData("{ \"slots\": { \"standingGoals\": { \"rows\": [ { \"x\": 111, \"y\": 92, \"w\": 234 } ] } } }", "rows[0]", "h")]
+    [InlineData("{ \"generated\": { \"setup\": { \"labels\": [ { \"text\": \"Objectives\", \"x\": 40 } ] } } }", "labels[0]", "baselineY")]
+    public void A_value_member_of_a_positional_record_left_out_of_the_file_is_a_load_error(string userJson, string where, string key)
+    {
+        // Arrays replace whole in a merge, so a user's array entry can leave a member out. DateField and LabelSpec are
+        // positional classes, RectPt is a positional struct: [JsonRequired] holds for both.
+        string user = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, user);
+
+        act.Should().Throw<ManifestException>()
+            .WithMessage($"*does not match the manifest schema at *{where}*")
+            .WithMessage($"*missing required properties, including the following: {key}*");
+    }
+
+    [Fact]
+    public void A_point_without_y_in_a_complete_manifest_is_a_load_error()
+    {
+        // Objects merge key by key, so only a complete manifest can leave out a member of a positional record held in an object.
+        string path = WriteModified(root => root["onenote"]!["anchorPaddingPt"]!.AsObject().Remove("y").Should().BeTrue());
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>()
+            .WithMessage("*does not match the manifest schema at *anchorPaddingPt*")
+            .WithMessage("*missing required properties, including the following: y*");
+    }
+
+    [Theory]
+    [InlineData("{ \"links\": { \"prev\": { \"align\": 7 } } }", "$.links.prev.align", "7")]
+    [InlineData("{ \"links\": { \"prev\": { \"align\": \"7\" } } }", "$.links.prev.align", "7")]
+    [InlineData("{ \"slots\": { \"date\": { \"fields\": [ { \"name\": \"month\", \"align\": -1, \"x\": 895 } ] } } }", "$.slots.date.fields[0].align", "-1")]
+    public void An_align_value_the_enum_does_not_define_is_a_load_error(string userJson, string path, string value)
+    {
+        string user = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, user);
+
+        act.Should().Throw<ManifestException>().WithMessage($"Manifest '*{Path.GetFileName(user)}': {path} holds {value}, which is not one of left, center, right.");
+    }
+
+    [Theory]
     [InlineData("colors", "greyedInkOpacity")]
     [InlineData("colors", "prefillInkOpacity")]
     [InlineData("colors", "eventInkOpacity")]
