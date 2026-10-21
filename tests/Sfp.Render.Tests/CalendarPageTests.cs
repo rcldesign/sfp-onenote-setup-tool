@@ -1,3 +1,4 @@
+using System.Globalization;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
@@ -82,6 +83,56 @@ public sealed class CalendarPageTests
     }
 
     [Fact]
+    public void Week_labels_are_baked_at_their_anchors_with_links_off_and_left_to_the_links_with_links_on()
+    {
+        RenderedPage off = f.Render(January, o => o with { Links = false });
+        RenderedPage on = f.Render(January);
+        using SKBitmap offSheet = RenderFixture.Decode(off);
+        using SKBitmap onSheet = RenderFixture.Decode(on);
+        CalendarWeekAnchor anchor = M.Links.CalendarWeek;
+
+        off.Anchors.Should().NotContain(a => a.Kind == AnchorKind.Link, "links are off");
+        for (int row = 0; row < 5; row++)
+        {
+            RectPt rect = anchor.Rect(M.Slots.DayGrid, row);
+            string nn = (row + 1).ToString("00", CultureInfo.InvariantCulture);
+            string label = "Week " + nn;
+            double width = f.Fonts.TextWidth(label, anchor.SizePt);
+            f.HasInk(offSheet, new RectPt(rect.X, rect.Y + 1, 6, rect.H - 2)).Should().BeTrue($"'{label}' starts at the anchor's left edge");
+            f.HasInk(offSheet, new RectPt(rect.X + width + 1, rect.Y + 1, rect.W - width - 1, rect.H - 2)).Should().BeFalse($"'{label}' is {anchor.SizePt} pt like the link text, no wider");
+
+            AnchorPlacement link = on.Anchors.Single(a => a.AnchorId == "calendarWeek:" + nn);
+            link.Kind.Should().Be(AnchorKind.Link);
+            link.Text.Should().Be(label);
+            link.X.Should().BeApproximately((float)rect.X, 0.01f);
+            link.Y.Should().BeApproximately((float)rect.Y, 0.01f);
+            f.HasInk(onSheet, rect).Should().BeFalse($"'{label}' is a link with links on; nothing is baked under it");
+        }
+    }
+
+    [SkippableFact]
+    public void On_the_real_planner_the_week_labels_read_with_links_off_and_stay_unbaked_with_links_on()
+    {
+        string pdf = SfpPdf.RequireOrSkip();
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        using SKBitmap off = RenderFixture.Decode(RenderReal(pdf, January, o => o with { Links = false }));
+        RenderedPage onPage = RenderReal(pdf, January);
+        using SKBitmap on = RenderFixture.Decode(onPage);
+        CalendarWeekAnchor anchor = M.Links.CalendarWeek;
+
+        for (int row = 0; row < 5; row++)
+        {
+            RectPt rect = anchor.Rect(M.Slots.DayGrid, row);
+            string nn = (row + 1).ToString("00", CultureInfo.InvariantCulture);
+            string label = "Week " + nn;
+            string text = RenderFixture.Read(off, rect, paddingPt: 2);
+            text.Should().Be(label, "OCR read '" + text + "'");
+            onPage.Anchors.Should().Contain(a => a.AnchorId == "calendarWeek:" + nn && a.Text == label);
+            f.HasInk(on, rect).Should().BeFalse($"the printed cell is empty where '{label}' sits as a link");
+        }
+    }
+
+    [Fact]
     public void Calendar_page_carries_week_labels_habit_legend_event_lines_and_navigation()
     {
         RenderedPage page = f.Render(January);
@@ -159,5 +210,13 @@ public sealed class CalendarPageTests
         page.Anchors.Where(a => a.AnchorId.StartsWith("calendarDay:", StringComparison.Ordinal)).Should().HaveCount(31);
         page.Anchors.Should().Contain(a => a.AnchorId == "prevCalendar" && a.Text == "‹ February 2027");
         page.Anchors.Should().NotContain(a => a.AnchorId == "nextCalendar");
+    }
+
+    /// <summary>Renders a page of the Q1 2027 plan (adjusted) from another PDF, the real planner for instance.</summary>
+    private RenderedPage RenderReal(string pdf, PageKey key, Func<GenerateOptions, GenerateOptions>? adjust = null)
+    {
+        GenerateOptions options = adjust is null ? f.Q1Options : adjust(f.Q1Options);
+        NotebookPlan plan = adjust is null ? f.Q1Plan : f.Plan(options);
+        return f.Renderer.Render(plan.Page(key), plan, new RenderOptions(pdf, RenderFixture.Dpi, options));
     }
 }

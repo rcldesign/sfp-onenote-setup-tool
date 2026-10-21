@@ -1,9 +1,13 @@
 using System.CommandLine;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Sfp.Cli;
 using Sfp.Cli.Verbs;
+using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
+using Sfp.Core.Plan;
+using Sfp.OneNote.Generate;
 using Sfp.Render.Colors;
 using Sfp.TestSupport;
 using SkiaSharp;
@@ -26,6 +30,14 @@ public sealed class RenderOnlyCommandTests
 
     private static RenderOnlyRequest Request(string outDir, string logDir) =>
         new(SyntheticTemplate.Build(), "2027-01", outDir, Dpi: 144, TemplatesDir: TestPaths.TemplatesDir, LogDirectory: logDir);
+
+    /// <summary>The plan the verb builds for <see cref="Request"/>: Q1 2027 with the default options.</summary>
+    private static NotebookPlan Q1Plan()
+    {
+        DateEngine engine = new();
+        GenerateOptions options = new() { Start = new QuarterSpec(2027, 1), PdfPath = SyntheticTemplate.Build() };
+        return new PlanBuilder(engine).Build(TestManifest.Shipped, engine.Build(options.Start), options);
+    }
 
     [Fact]
     public void Renders_the_synthetic_quarter_to_pngs_and_an_index()
@@ -134,7 +146,17 @@ public sealed class RenderOnlyCommandTests
             (int code, string output, string err) = Run(Request(outDir, dir) with { ManifestPath = manifest });
 
             code.Should().Be(ExitCodes.RenderError);
-            err.Should().StartWith("Render failed: slots.weeksRemaining.numberSpan (537 to 560, 23 pt) is too narrow for 14 numbers at 10 pt");
+
+            // The line names the page in Generate's sentence: page type, title and PDF page, then the renderer's message.
+            // Every daily page draws the strip, so which one fails first depends on the workers; it is one of them.
+            string line = err.Split('\n')[0];
+            Match named = Regex.Match(line, @"^Render failed: Rendering Day page '(?<title>[^']+)' \(PDF page \d+\) failed: ");
+            named.Success.Should().BeTrue("the failing page is named: " + line);
+            PageSpec page = Q1Plan().Pages.Single(p => p.Title == named.Groups["title"].Value);
+            page.Type.Should().Be(PageType.Day);
+            line.Should().StartWith(
+                "Render failed: " + GenerateText.RenderFailed(page, "slots.weeksRemaining.numberSpan (537 to 560, 23 pt) is too narrow for 14 numbers at 10 pt"),
+                "render-only prints the sentence Generate uses for a render error on a page");
             err.Should().Contain("\nLog: ");
             output.Should().NotContain("Rendered ", "there is no success summary");
             File.Exists(Path.Combine(outDir, RenderOnlyRunner.IndexFileName)).Should().BeFalse("a failed run writes no pages.json");

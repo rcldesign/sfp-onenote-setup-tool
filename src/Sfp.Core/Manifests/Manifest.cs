@@ -408,9 +408,11 @@ public sealed record HabitLegendSlot
 
     public required double SizePt { get; init; }
 
-    public int Columns { get; init; } = 8;
+    /// <summary>Habit entries per legend line.</summary>
+    public required int Columns { get; init; }
 
-    public double LineHeight { get; init; } = 11;
+    /// <summary>Distance between the legend's lines.</summary>
+    public required double LineHeight { get; init; }
 }
 
 public sealed record TimeBlocksSlot
@@ -446,7 +448,8 @@ public sealed record TimeBlocksSlot
 
     public required double EventSizePt { get; init; }
 
-    public double EventLineHeight { get; init; } = 10;
+    /// <summary>Height of one calendar event line in a Time Blocks row.</summary>
+    public required double EventLineHeight { get; init; }
 
     /// <summary>Row pitch for a window of <paramref name="rows"/> hourly rows.</summary>
     public double PitchFor(int rows) => (Bottom - Top) / rows;
@@ -800,7 +803,7 @@ public sealed record OneNoteSpec
     public bool AnchorUnderline { get; init; }
 
     /// <summary>Hour (local) used for one:Page dateTime on the planner date.</summary>
-    public int PageDateTimeHour { get; init; } = 6;
+    public required int PageDateTimeHour { get; init; }
 
     public required PointPt ContentsOutline { get; init; }
 
