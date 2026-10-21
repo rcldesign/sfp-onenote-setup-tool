@@ -230,6 +230,35 @@ public class OneNoteHResultsTests
         mapped.Message.Should().NotContain(OneNoteUnavailableException.DisconnectedMessage);
     }
 
+    /// <summary>
+    /// onenote-5: what the ProgID activator and the session catch from creating OneNote. The runtime raises
+    /// E_ACCESSDENIED as UnauthorizedAccessException and ERROR_FILE_NOT_FOUND as FileNotFoundException (other HRESULTs as
+    /// COMException), bare or inside a reflection wrapper; each maps to the not-started message with its HRESULT, keeping
+    /// the runtime's exception. An exception already mapped, or a fatal one, is not an activation failure.
+    /// </summary>
+    [Theory]
+    [InlineData(unchecked((int)0x80070005))]
+    [InlineData(unchecked((int)0x80070002))]
+    [InlineData(unchecked((int)0x80080005))]
+    public void An_activation_failure_of_any_exception_type_maps_to_the_not_started_message_with_its_hresult(int hresult)
+    {
+        Exception raised = Marshal.GetExceptionForHR(hresult)!;
+        foreach (Exception error in new[] { raised, new System.Reflection.TargetInvocationException(raised) })
+        {
+            OneNoteHResults.IsActivationFailure(error).Should().BeTrue();
+            OneNoteException mapped = OneNoteHResults.MapActivation(error);
+
+            mapped.Should().BeOfType<OneNoteUnavailableException>("an OneNote that does not start exits with 3");
+            mapped.HResult.Should().Be(hresult);
+            mapped.Call.Should().Be(OneNoteHResults.ActivateCall);
+            mapped.InnerException.Should().BeSameAs(raised, "the runtime's own exception is kept");
+            mapped.Message.Should().StartWith(OneNoteUnavailableException.NotStartedMessage + " activate failed with " + OneNoteHResults.Describe(hresult));
+        }
+
+        OneNoteHResults.IsActivationFailure(new OneNoteUnavailableException()).Should().BeFalse("the activator's own mapped exception passes through unchanged");
+        OneNoteHResults.IsActivationFailure(new OutOfMemoryException()).Should().BeFalse("a fatal runtime failure is not reported as OneNote not starting");
+    }
+
     [Theory]
     [InlineData(unchecked((int)0x80040154))]
     [InlineData(unchecked((int)0x80080005))]
