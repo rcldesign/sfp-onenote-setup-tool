@@ -21,7 +21,7 @@ public class StartupSettingsTests : IDisposable
 
     private string FilePath => Path.Combine(_dir, "settings.json");
 
-    [Fact]
+    [UiFact]
     public async Task A_store_that_hands_back_null_members_still_starts_with_their_defaults()
     {
         _h.Settings.Stored = new AppSettings { PdfPath = Harness.Pdf, Dpi = 144, KnownOutputFolders = null!, TimeBlocks = null! };
@@ -41,7 +41,7 @@ public class StartupSettingsTests : IDisposable
         _h.Settings.Stored.TimeBlocks.Should().Be(TimeBlockWindow.Default);
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_settings_file_with_null_members_starts_and_the_exit_save_keeps_the_other_values()
     {
         File.WriteAllText(FilePath, """{ "pdfPath": "C:\\planner\\SFP_No_Dates.pdf", "knownOutputFolders": null, "timeBlocks": null }""");
@@ -61,7 +61,7 @@ public class StartupSettingsTests : IDisposable
         saved.KnownOutputFolders.Should().BeEmpty();
     }
 
-    [Fact]
+    [UiFact]
     public void A_failed_start_never_saves_over_the_file()
     {
         const string original = """{ "pdfPath": "C:\\planner\\SFP_No_Dates.pdf", "dpi": 300 }""";
@@ -77,7 +77,7 @@ public class StartupSettingsTests : IDisposable
         File.ReadAllText(FilePath).Should().Be(original);
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_corrupt_file_is_named_in_the_notice_with_the_copy_kept_before_the_first_save()
     {
         const string corrupt = """{ "dpi": 144, oops""";
@@ -92,7 +92,7 @@ public class StartupSettingsTests : IDisposable
         File.ReadAllText(FilePath + ".bak").Should().Be(corrupt);
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_newer_versions_file_is_used_named_in_the_notice_and_copied_before_the_first_save()
     {
         const string newer = """{ "schemaVersion": 2, "dpi": 144, "cloudSync": true }""";

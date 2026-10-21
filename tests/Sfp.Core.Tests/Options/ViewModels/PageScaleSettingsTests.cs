@@ -10,7 +10,7 @@ public class PageScaleSettingsTests
 {
     private readonly Harness _h = new();
 
-    [Theory]
+    [UiTheory]
     [InlineData("NaN")]
     [InlineData("Infinity")]
     [InlineData("-Infinity")]
@@ -40,7 +40,7 @@ public class PageScaleSettingsTests
         main.Notice.Should().BeNull();
     }
 
-    [Fact]
+    [UiFact]
     public async Task Text_that_is_no_number_also_keeps_the_last_finite_scale()
     {
         using MainViewModel main = _h.NewMain();
@@ -54,7 +54,7 @@ public class PageScaleSettingsTests
         main.Current().PageScale.Should().Be(1.5);
     }
 
-    [Fact]
+    [UiFact]
     public async Task Any_exception_from_the_store_becomes_the_notice()
     {
         _h.Settings.ThrowOnSave = new InvalidOperationException("the settings folder is a file");

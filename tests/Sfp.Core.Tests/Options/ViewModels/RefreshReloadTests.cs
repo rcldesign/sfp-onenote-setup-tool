@@ -61,7 +61,7 @@ public class RefreshReloadTests
         _h.Ui,
         _h.Env);
 
-    [Fact]
+    [UiFact]
     public async Task Refresh_now_keeps_the_runs_results_through_the_reload_that_shows_the_new_time()
     {
         _h.Registry.Notebooks.Add(Q1(null));
@@ -86,7 +86,7 @@ public class RefreshReloadTests
         vm.ProgressText.Should().Be("Refresh complete.");
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_null_a_list_view_pushes_while_its_items_are_cleared_does_not_clear_the_results()
     {
         _h.Registry.Notebooks.Add(Q1(null));
@@ -111,7 +111,7 @@ public class RefreshReloadTests
         vm.Changes.Should().HaveCount(2);
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_reload_that_lands_on_another_notebook_clears_the_results()
     {
         _h.Registry.Notebooks.Add(Q1(null));
@@ -132,7 +132,7 @@ public class RefreshReloadTests
         vm.SetupLines.Should().BeEmpty();
     }
 
-    [Fact]
+    [UiFact]
     public void The_same_notebook_is_the_same_sidecar_file_or_the_same_name_without_one()
     {
         KnownNotebookItem q1 = new(Q1(null));

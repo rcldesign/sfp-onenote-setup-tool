@@ -26,7 +26,7 @@ public class OutputFolderResolutionTests
 
     private static GenerateFormInput Input(string folder) => new(Pdf, 2027, 1, "SFP Q1 2027", folder, 220, 1.0, TimeBlockWindow.Default);
 
-    [Theory]
+    [UiTheory]
     [InlineData(@"C:\Users\me\Notebooks", true)]
     [InlineData("C:/Users/me/Notebooks", true)]
     [InlineData(@"\\server\share\Notebooks", true)]
@@ -40,7 +40,7 @@ public class OutputFolderResolutionTests
         FolderPaths.IsFullyQualified(path).Should().Be(expected);
     }
 
-    [Fact]
+    [UiFact]
     public void Resolve_trims_keeps_fully_qualified_paths_and_makes_the_rest_absolute()
     {
         FolderPaths.Resolve(@"  C:\Users\me\Notebooks  ").Should().Be(@"C:\Users\me\Notebooks");
@@ -50,7 +50,7 @@ public class OutputFolderResolutionTests
         FolderPaths.Resolve("   ").Should().BeEmpty();
     }
 
-    [Fact]
+    [UiFact]
     public void A_relative_folder_is_checked_and_named_as_the_folder_it_resolves_to()
     {
         string full = Path.GetFullPath("Notebooks");
@@ -72,13 +72,13 @@ public class OutputFolderResolutionTests
             .Should().Contain("already exists", "the name collision is looked up in the resolved folder");
     }
 
-    [Fact]
+    [UiFact]
     public void A_fully_qualified_folder_gets_no_note()
     {
         _validator.Validate(Input(@"  D:\Notebooks "), ValidationResult.Ok).Messages.Should().BeEmpty();
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_options_carry_the_resolved_output_folder_and_previous_notebook()
     {
         using GenerateViewModel vm = _h.NewGenerate();

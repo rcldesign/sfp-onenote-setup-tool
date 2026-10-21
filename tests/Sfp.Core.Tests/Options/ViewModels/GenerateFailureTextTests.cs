@@ -21,7 +21,7 @@ public class GenerateFailureTextTests
         RenderOnly: false,
         RenderOutputDir: null);
 
-    [Fact]
+    [UiFact]
     public void An_orchestrator_error_is_shown_as_it_is_with_one_period_and_no_repeated_phase_or_page()
     {
         // Shaped as GenerateOrchestrator.Fail builds it: "{phase}, page {title}: {message}", the message ending in a period.
@@ -44,7 +44,7 @@ public class GenerateFailureTextTests
         text.Should().NotContain("Failed during");
     }
 
-    [Fact]
+    [UiFact]
     public void An_error_without_a_period_gets_one_and_a_missing_error_says_so()
     {
         GenerateResult result = new() { Success = false, ExitCode = 3, Phase = GeneratePhase.CheckingOneNote, Error = "OneNote is not installed" };
@@ -55,7 +55,7 @@ public class GenerateFailureTextTests
         GenerateRunViewModel.FailureTextFor(result with { Error = "  " }).Should().Be("Generate failed: no details were reported.");
     }
 
-    [Fact]
+    [UiFact]
     public async Task An_exception_the_view_model_caught_uses_the_same_neutral_prefix()
     {
         _h.Generator.Throw = new InsufficientExecutionStackException("Insufficient stack to continue the execution of the program.");

@@ -26,7 +26,7 @@ public class RefreshRunTargetTests
         Summary = new RefreshSummary { Values = SetupValues.Empty, Changes = Array.Empty<PlannedChange>() },
     };
 
-    [Fact]
+    [UiFact]
     public async Task The_headline_names_the_notebook_the_run_started_on_and_the_list_is_locked_meanwhile()
     {
         using ManualResetEventSlim started = new(false);
@@ -64,7 +64,7 @@ public class RefreshRunTargetTests
         vm.Summary!.Headline.Should().Be("Refreshed SFP Q1 2027.", "the headline names the notebook that was refreshed, not the one selected at the end");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Two_notebooks_with_one_name_keep_their_own_selection_across_the_reload_after_a_run()
     {
         _h.Registry.Notebooks.Add(Notebook("SFP Q1 2027", Q1Path, new QuarterSpec(2027, 1)));

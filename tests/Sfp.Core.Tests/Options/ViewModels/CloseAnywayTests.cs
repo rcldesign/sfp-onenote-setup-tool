@@ -37,7 +37,7 @@ public class CloseAnywayTests
         return main;
     }
 
-    [Fact]
+    [UiFact]
     public async Task After_the_delay_a_generate_that_never_returns_asks_and_yes_closes_naming_the_partial_notebook()
     {
         using ManualResetEventSlim neverReturns = new(false);
@@ -67,7 +67,7 @@ public class CloseAnywayTests
         }
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_second_close_request_asks_no_keeps_waiting_and_a_third_closes_on_yes()
     {
         using ManualResetEventSlim neverReturns = new(false);
@@ -102,7 +102,7 @@ public class CloseAnywayTests
         }
     }
 
-    [Fact]
+    [UiFact]
     public async Task After_a_no_the_close_completes_once_the_run_stops_without_asking_again()
     {
         using ManualResetEventSlim finishing = new(false);
@@ -125,7 +125,7 @@ public class CloseAnywayTests
         await generating;
     }
 
-    [Fact]
+    [UiFact]
     public void The_question_names_what_is_left_behind()
     {
         MainViewModel.CloseAnywayQuestion(true, @"D:\Notebooks\SFP Q1 2027", false).Should().Be(
@@ -136,7 +136,7 @@ public class CloseAnywayTests
             "The cancelled Generate run and refresh have not stopped yet. Close the window anyway? The partial notebook is left behind; delete it before you generate that notebook again. The refresh is cut off in the middle of a page; run Refresh again afterwards.");
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_close_request_without_a_waiting_close_does_nothing()
     {
         using MainViewModel main = await Window(TimeSpan.FromMilliseconds(100));

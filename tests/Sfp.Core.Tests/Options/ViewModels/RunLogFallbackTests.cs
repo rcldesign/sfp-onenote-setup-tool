@@ -28,7 +28,7 @@ public class RunLogFallbackTests
         RenderOnly: false,
         RenderOutputDir: null);
 
-    [Fact]
+    [UiFact]
     public async Task A_log_folder_that_cannot_be_used_falls_back_to_a_log_in_the_temp_folder()
     {
         FailingRunLogFactory logs = new() { FallbackWorks = true };
@@ -48,7 +48,7 @@ public class RunLogFallbackTests
         fallback.Disposed.Should().BeTrue();
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_generate_whose_log_cannot_be_started_anywhere_runs_without_a_log_file_and_says_so()
     {
         using GenerateRunViewModel run = new(new FailingRunLogFactory(), (_, _) => _h.Generator, _h.Ui, _h.Shell, _h.Dialogs);
@@ -63,7 +63,7 @@ public class RunLogFallbackTests
         run.CancelCommand.CanExecute(null).Should().BeFalse();
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_refresh_whose_log_cannot_be_started_anywhere_runs_and_names_no_log()
     {
         _h.Registry.Notebooks.Add(new KnownNotebook("SFP Q1 2027", Folder, new QuarterSpec(2027, 1), null, null, Folder + ".sfp-state.json"));
@@ -81,7 +81,7 @@ public class RunLogFallbackTests
         vm.ErrorText.Should().Be("All calendar sources failed", "there is no log to point at");
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_window_closes_normally_after_runs_without_a_log()
     {
         _h.Registry.Notebooks.Add(new KnownNotebook("SFP Q1 2027", Folder, new QuarterSpec(2027, 1), null, null, Folder + ".sfp-state.json"));
@@ -110,7 +110,7 @@ public class RunLogFallbackTests
         notice.Should().BeNull();
     }
 
-    [Fact]
+    [UiFact]
     public void A_close_preparation_that_failed_allows_the_close_with_a_notice()
     {
         MainViewModel.MayClose(Task.FromException<bool>(new IOException(FolderError)), out string? faulted).Should().BeTrue();

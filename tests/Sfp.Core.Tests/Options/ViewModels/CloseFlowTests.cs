@@ -55,7 +55,7 @@ public class CloseFlowTests
         return main;
     }
 
-    [Fact]
+    [UiFact]
     public async Task While_the_close_waits_for_a_refresh_no_generate_and_no_browse_can_start()
     {
         using ManualResetEventSlim finishing = new(false);
@@ -83,7 +83,7 @@ public class CloseFlowTests
         await refreshing;
     }
 
-    [Fact]
+    [UiFact]
     public async Task While_the_close_waits_for_a_generate_no_refresh_and_no_reload_can_start()
     {
         using ManualResetEventSlim deleting = new(false);
@@ -110,7 +110,7 @@ public class CloseFlowTests
         await generating;
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_run_that_started_during_the_wait_is_cancelled_and_awaited_before_the_close_completes()
     {
         using ManualResetEventSlim refreshFinishing = new(false);
@@ -140,7 +140,7 @@ public class CloseFlowTests
         await generating;
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_close_with_nothing_running_completes_at_once_and_leaves_the_tabs_as_they_are()
     {
         using MainViewModel main = await ReadyWindow();
