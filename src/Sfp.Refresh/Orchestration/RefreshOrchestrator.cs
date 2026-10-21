@@ -33,7 +33,8 @@ public enum TimeBlockWindowSource
 /// the Setup page's, see <see cref="CalendarWindow"/>), previous texts read from the tool-owned outlines, freeze and
 /// diff with the sidecar's FrozenThrough), then either lists every change (dry run, nothing written) or writes them
 /// page by page through the anchor writer, updates the sidecar (anchors, LastRefresh, FrozenThrough), syncs and fills
-/// the summary. Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every Setup
+/// the summary. The Creates and Updates are journaled in the sidecar before the first write, and an earlier run's journal
+/// is settled before planning (<see cref="PendingWrites"/>). Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every Setup
 /// calendar source failed. Every real run then updates the failure streak beside the sidecar (see <see cref="TrackStreak"/>).
 /// </summary>
 public sealed class RefreshOrchestrator : IRefreshOrchestrator
@@ -146,9 +147,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
 
         SetupValues values = services.SetupReader.Read(setupXml, manifest);
-        values = SetupReader.ApplyFallback(values, AnnualPageFallback.FromSidecar(manifest, pages.Read, sidecar));
         TimeBlockWindow window = ChooseWindow(sidecar, values);
         SlotCatalog catalog = new(manifest, services.Dates, quarter, window);
+
+        // Outlines an earlier run wrote and could not record are taken back before anything reads ownership.
+        sidecar = PendingWrites.Resolve(sidecar, plan, catalog, pages.Read, services.Log);
+        values = SetupReader.ApplyFallback(values, AnnualPageFallback.FromSidecar(manifest, pages.Read, sidecar));
 
         progress?.Report("Planning propagation");
         IPropagator propagator = services.Propagators(catalog, pages.Read);
@@ -192,6 +196,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
 
         progress?.Report("Writing changes");
+        (sidecar, bool journaled) = PendingWrites.Journal(sidecar, changes.Where(c => !c.Blocked && (!c.Inked || request.WriteInkedValues)));
+        if (journaled)
+        {
+            // Saved before the first write, so a run that cannot record what it wrote leaves the next run the way back.
+            services.Sidecars.Save(opened.SidecarPath, sidecar);
+        }
+
         WriteState writeState = new(sidecar);
         WriteOutcome written;
         try
@@ -825,11 +836,16 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         private readonly Dictionary<string, Dictionary<string, string>> anchors;
         private readonly Dictionary<string, Dictionary<string, string>> texts;
+        private readonly Dictionary<string, Dictionary<string, string>> pending;
 
         public WriteState(Sidecar sidecar)
         {
             anchors = sidecar.Pages.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value.Anchors, StringComparer.Ordinal), StringComparer.Ordinal);
             texts = sidecar.Pages.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value.AnchorTexts, StringComparer.Ordinal), StringComparer.Ordinal);
+            pending = sidecar.Pages.ToDictionary(
+                p => p.Key,
+                p => p.Value.PendingTexts is null ? new Dictionary<string, string>(StringComparer.Ordinal) : new Dictionary<string, string>(p.Value.PendingTexts, StringComparer.Ordinal),
+                StringComparer.Ordinal);
         }
 
         /// <summary>Slot id to object ID of the page's tool-owned outlines, as of now.</summary>
@@ -838,20 +854,26 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         /// <summary>Slot id to the text the tool last wrote there, as of now.</summary>
         public IReadOnlyDictionary<string, string> Texts(PageKey page) => texts.TryGetValue(page.Value, out Dictionary<string, string>? t) ? t : None;
 
-        /// <summary>Records one page write: created outlines get their ID and text, updated ones their text, removed ones lose both.</summary>
+        /// <summary>
+        /// Records one page write: created outlines get their ID and text, updated ones their text, removed ones lose both,
+        /// and the journal entries of what was recorded are dropped (a create not found again keeps its entry for the next run).
+        /// </summary>
         public void Record(PageKey page, AnchorWriteResult result, IReadOnlyList<AnchorWrite> writes)
         {
             Dictionary<string, string> pageAnchors = Get(anchors, page);
             Dictionary<string, string> pageTexts = Get(texts, page);
+            Dictionary<string, string> pagePending = Get(pending, page);
             foreach ((string slotId, string objectId) in result.Created)
             {
                 pageAnchors[slotId] = objectId;
                 pageTexts[slotId] = TextOf(writes, slotId);
+                pagePending.Remove(slotId);
             }
 
             foreach (string slotId in result.Updated)
             {
                 pageTexts[slotId] = TextOf(writes, slotId);
+                pagePending.Remove(slotId);
             }
 
             Forget(page, result.Removed);
@@ -876,6 +898,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             {
                 Anchors = anchors.TryGetValue(p.Key, out Dictionary<string, string>? a) ? new Dictionary<string, string>(a, StringComparer.Ordinal) : p.Value.Anchors,
                 AnchorTexts = texts.TryGetValue(p.Key, out Dictionary<string, string>? t) ? new Dictionary<string, string>(t, StringComparer.Ordinal) : p.Value.AnchorTexts,
+                PendingTexts = pending.TryGetValue(p.Key, out Dictionary<string, string>? q) ? (q.Count == 0 ? null : new Dictionary<string, string>(q, StringComparer.Ordinal)) : p.Value.PendingTexts,
             },
             StringComparer.Ordinal);
 

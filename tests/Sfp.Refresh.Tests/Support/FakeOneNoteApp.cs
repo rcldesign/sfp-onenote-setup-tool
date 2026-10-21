@@ -48,6 +48,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     /// </summary>
     public Action<string>? BeforeWrite { get; set; }
 
+    /// <summary>Decides whether a GetPageContent call fails: given the page ID, the exception to throw or null.</summary>
+    public Func<string, Exception?>? GetPageContentFailure { get; set; }
+
     /// <summary>Decides whether a GetHierarchy call fails: given the start ID and scope, the exception to throw or null.</summary>
     public Func<string?, HierarchyScope, Exception?>? GetHierarchyFailure { get; set; }
 
@@ -312,6 +315,12 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     {
         Guard();
         Record("GetPageContent", pageId);
+        Exception? failure = GetPageContentFailure?.Invoke(pageId);
+        if (failure is not null)
+        {
+            throw failure;
+        }
+
         if (!pages.TryGetValue(pageId, out Page? page))
         {
             throw new OneNoteException("GetPageContent", OneNoteHResults.PageDoesNotExist, "No page " + pageId, null);

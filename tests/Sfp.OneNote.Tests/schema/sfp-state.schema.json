@@ -85,6 +85,11 @@
           "description": "Slot id to the text Refresh last wrote in that slot's outline, so a later run can tell the user edited it; absent or empty in older files.",
           "type": "object",
           "additionalProperties": { "type": "string" }
+        },
+        "pendingTexts": {
+          "description": "Slot id to the text a Refresh run is writing in that slot's outline, saved before the write and dropped once it is recorded, so the next run can take back what a run that could not record its writes left; absent when nothing is pending.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
         }
       }
     }
