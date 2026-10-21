@@ -121,7 +121,7 @@
           <CheckBox Grid.Row="2" Grid.ColumnSpan="2" Margin="0,4" IsChecked="{Binding HideTitle}"
                     Content="Hide page titles (pages then show as Untitled page)" AutomationProperties.Name="Hide page titles" />
           <CheckBox Grid.Row="3" Grid.ColumnSpan="2" Margin="0,4" IsChecked="{Binding CustomPageSize}"
-                    Content="Custom page size, 1112 x 770 pt (for printing; the iPad ignores it)" AutomationProperties.Name="Custom page size" />
+                    Content="Custom page size, sized to fit the sheet exactly (for printing; the iPad ignores it)" AutomationProperties.Name="Custom page size" />
 
           <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource FieldLabel}" Text="Page scale" />
           <StackPanel Grid.Row="4" Grid.Column="1" Margin="0,4">
