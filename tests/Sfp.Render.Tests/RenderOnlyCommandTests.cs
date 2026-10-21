@@ -201,6 +201,34 @@ public sealed class RenderOnlyCommandTests
     }
 
     [Fact]
+    public void A_folder_another_render_is_using_exits_2_with_one_line_and_keeps_its_files()
+    {
+        // Another render-only or generate --render-only run holds the folder's lock file for its whole run; here the test
+        // holds it. The refused run stops before it deletes or writes anything.
+        string dir = TestPaths.NewTempDir("render-only-busy");
+        try
+        {
+            string outDir = Path.Combine(dir, "out");
+            IReadOnlyList<string> listed = PreviousRun(outDir);
+            using (new FileStream(Path.Combine(outDir, RenderOnlyRunner.LockFileName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose))
+            {
+                (int code, string output, string err) = Run(Request(outDir, dir) with { Quiet = true });
+
+                code.Should().Be(ExitCodes.ValidationError, err);
+                err.Should().Be($"Another render is using the folder {Path.GetFullPath(outDir)}: wait for it to finish, or render into another folder.\n");
+                output.Should().BeEmpty();
+            }
+
+            File.Exists(Path.Combine(outDir, RenderOnlyRunner.IndexFileName)).Should().BeTrue("the refused run deleted nothing");
+            listed.Should().OnlyContain(png => File.ReadAllBytes(Path.Combine(outDir, png)).SequenceEqual(new byte[] { 1, 2, 3 }), "and overwrote nothing");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void A_log_folder_that_cannot_be_used_moves_the_log_to_the_temp_folder()
     {
         // The log folder lies under a file, so it can never be created: the run goes on with its log in the temp folder
