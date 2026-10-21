@@ -46,8 +46,9 @@ public sealed record RenderOnlyRequest(
 /// [--weeks-remaining corrected] [--no-links] [--time-blocks 6-22] [--include-out-of-quarter-days]
 /// [--manifest user.json] [--templates DIR] [--quiet]: validates the PDF against the manifest, builds the plan and
 /// writes every page as a PNG plus pages.json without touching OneNote. This is how overlay positions are tuned and
-/// how the suite runs on a machine without Office. Exit codes: 0, 2 (bad option, manifest or PDF mismatch, or no folder,
-/// the temp folder included, can hold the run log), 4 (render failure). The integrator adds the command to Program.cs with <see cref="Build"/>.
+/// how the suite runs on a machine without Office. Exit codes: 0, 2 (bad option, manifest or PDF mismatch, no folder,
+/// the temp folder included, can hold the run log, or another render is using the output folder), 4 (render failure).
+/// The integrator adds the command to Program.cs with <see cref="Build"/>.
 /// </summary>
 public static class RenderOnlyCommand
 {
@@ -221,6 +222,14 @@ public static class RenderOnlyCommand
             Say(request, stdout, summary);
             Say(request, stdout, "Log: " + log.Path);
             return ExitCodes.Success;
+        }
+        catch (RenderFolderInUseException ex)
+        {
+            // Another run holds the output folder and this one deleted and wrote nothing: like a bad option, exit 2 with
+            // one line.
+            logger.Warning(ex, "The output folder is in use");
+            stderr.WriteLine(ex.Message);
+            return ExitCodes.ValidationError;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

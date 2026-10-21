@@ -12,8 +12,9 @@ namespace Sfp.Core.Manifests;
 /// hold a value the enum does not define. System.Text.Json lets two such nulls through: an explicit <c>null</c> in a
 /// user manifest ({"slots": {"date": null}}, which <c>required</c> and [JsonRequired] do not reject because the key is
 /// present) and a null entry in a list or dictionary. It also reads "align": 7, or the string "7", as an undefined
-/// TextAlign. Without this walk such a manifest loads and fails later far from the cause. (A member that the file leaves
-/// out is a deserialization error: the records mark every member required.)
+/// TextAlign. Without this walk such a manifest loads and fails later far from the cause. (A required member that the
+/// file leaves out is a deserialization error; a member with a C# default, such as slots.weeksRemaining.labelRect or a
+/// section's eachWeek, loads that default.)
 /// </summary>
 /// <remarks>
 /// The walk is reflection over every public settable property that the JSON maps (not [JsonIgnore]), reading the C#

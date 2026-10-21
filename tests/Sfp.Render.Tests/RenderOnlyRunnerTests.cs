@@ -208,6 +208,51 @@ public sealed class RenderOnlyRunnerTests
         }
     }
 
+    [Fact]
+    public async Task A_second_run_into_a_folder_in_use_stops_before_it_deletes_or_writes_anything()
+    {
+        // The second adversarial pass started two runs into one folder: both exited 0, and the index of the one that
+        // finished last listed PNGs the other had overwritten. Here the first run waits at Mon Jan 4 while a second starts.
+        string dir = TestPaths.NewTempDir("runner-busy");
+        using GatedRenderer gated = new(PageKey.Day(new DateOnly(2027, 1, 4)));
+        Task<RenderOnlyResult>? first = null;
+        try
+        {
+            first = Task.Run(() => new RenderOnlyRunner(gated, maxDegreeOfParallelism: 1).Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir));
+            gated.Reached.Wait(TimeSpan.FromMinutes(1)).Should().BeTrue("the first run gets to Mon Jan 4");
+            File.Exists(Path.Combine(dir, RenderOnlyRunner.LockFileName)).Should().BeTrue("the first run holds the folder");
+            string[] written = Directory.GetFiles(dir, "*.png");
+            written.Should().NotBeEmpty("the first run wrote the pages before Mon Jan 4");
+
+            Action second = () => new RenderOnlyRunner(new TinyImageRenderer()).Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir);
+
+            second.Should().Throw<RenderFolderInUseException>()
+                .WithMessage($"Another render is using the folder {Path.GetFullPath(dir)}: wait for it to finish, or render into another folder.");
+            Directory.GetFiles(dir, "*.png").Should().BeEquivalentTo(written, "the second run wrote no PNG")
+                .And.OnlyContain(png => File.ReadAllBytes(png).SequenceEqual(GatedRenderer.Png), "and overwrote none");
+            File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse("the second run wrote no index");
+
+            gated.Release();
+            RenderOnlyResult finished = await first.WaitAsync(TimeSpan.FromMinutes(1));
+            RenderIndex index = RenderIndex.Parse(File.ReadAllText(finished.IndexPath));
+            index.Pages.Should().HaveCount(144);
+            index.Pages.Select(p => p.Png).OfType<string>().Should().OnlyContain(png => File.ReadAllBytes(Path.Combine(dir, png)).SequenceEqual(GatedRenderer.Png), "every PNG the first run's index lists is its own");
+            File.Exists(Path.Combine(dir, RenderOnlyRunner.LockFileName)).Should().BeFalse("the lock file goes with the run that held it");
+            new RenderOnlyRunner(new TinyImageRenderer()).Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir).PagesRendered.Should().Be(144, "the folder is free once the first run ends");
+        }
+        finally
+        {
+            // The first run must be over before its folder goes; whether it failed is the body's to report.
+            gated.Release();
+            if (first is not null)
+            {
+                await Task.WhenAny(first, Task.Delay(TimeSpan.FromMinutes(1)));
+            }
+
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("day:2027-01-04", "Rendering Day page 'Mon Jan 4' (PDF page 26) failed: PDFium could not decode the page")]
     [InlineData("scorecard", "Rendering Scorecard page 'Quarter scorecard' (PDF page none) failed: PDFium could not decode the page")]
@@ -369,6 +414,47 @@ public sealed class RenderOnlyRunnerTests
 
         public RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions o) =>
             error is not null && page.Key == failing ? throw error : new RenderedPage(page.Key, new byte[] { 1, 2, 3 }, 1, 1, Array.Empty<AnchorPlacement>());
+    }
+
+    /// <summary>
+    /// A renderer that returns <see cref="Png"/> as every page's image but stops at one page until <see cref="Release"/>,
+    /// so a test can act while the run is still going; <see cref="Reached"/> is set when the run gets to that page.
+    /// </summary>
+    private sealed class GatedRenderer : IPageRenderer, IDisposable
+    {
+        public static readonly byte[] Png = { 4, 5, 6 };
+
+        private readonly PageKey gate;
+        private readonly ManualResetEventSlim released = new();
+
+        public GatedRenderer(PageKey gate)
+        {
+            this.gate = gate;
+        }
+
+        public ManualResetEventSlim Reached { get; } = new();
+
+        public void Release() => released.Set();
+
+        public RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions o)
+        {
+            if (page.Key == gate)
+            {
+                Reached.Set();
+                if (!released.Wait(TimeSpan.FromMinutes(1)))
+                {
+                    throw new TimeoutException("The test did not release the gated page within a minute.");
+                }
+            }
+
+            return new RenderedPage(page.Key, Png, 1, 1, Array.Empty<AnchorPlacement>());
+        }
+
+        public void Dispose()
+        {
+            Reached.Dispose();
+            released.Dispose();
+        }
     }
 
     /// <summary>Progress that records on the calling thread (Progress&lt;T&gt; would post to a context the test cannot wait on).</summary>

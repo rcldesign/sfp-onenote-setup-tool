@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Sfp.Core.Manifests;
+using Sfp.Core.Options;
 using Sfp.TestSupport;
 
 namespace Sfp.Core.Tests.Manifests;
@@ -410,6 +412,106 @@ public class ManifestLoaderTests : IDisposable
         static bool Contains(RectPt outer, RectPt inner) =>
             outer.X <= inner.X && outer.Y <= inner.Y && outer.Right >= inner.Right && outer.Bottom >= inner.Bottom;
     }
+
+    /// <summary>
+    /// The second adversarial pass's "tight" mutation: each erase set to its printed extent. The erase is painted without
+    /// antialiasing and the printed art's antialiased edge reaches past its extent, so such an erase leaves slivers of
+    /// that edge on the page. It is a load error naming the allowance and all four sides.
+    /// </summary>
+    [Theory]
+    [InlineData("slots.date", "slashErase", "slashPrinted")]
+    [InlineData("slots.weeksRemaining", "erase", "printed")]
+    [InlineData("slots.timeBlocks", "erase", "printed")]
+    public void An_erase_equal_to_its_printed_extent_is_a_load_error_naming_the_allowance(string parent, string eraseKey, string printedKey)
+    {
+        RectPt printed = default;
+        string path = WriteModified(root =>
+        {
+            JsonNode node = parent.Split('.').Aggregate(root, (n, part) => n[part]!);
+            printed = RectOf(node[printedKey]!);
+            node[eraseKey] = node[printedKey]!.DeepClone();
+        });
+
+        Action act = () => _loader.Load(path);
+
+        string r = $"(x {Pt(printed.X)}, y {Pt(printed.Y)}, w {Pt(printed.W)}, h {Pt(printed.H)})";
+        act.Should().Throw<ManifestException>()
+            .WithMessage($"*{parent}.{eraseKey} {r} must contain {parent}.{printedKey} {r}, the printed art it erases, with 0.5 pt to spare on every side*")
+            .WithMessage($"*its left edge {Pt(printed.X)} is less than 0.5 pt left of {Pt(printed.X)}*")
+            .WithMessage($"*its top {Pt(printed.Y)} is less than 0.5 pt above {Pt(printed.Y)}*")
+            .WithMessage($"*its right edge {Pt(printed.Right)} is less than 0.5 pt right of {Pt(printed.Right)}*")
+            .WithMessage($"*its bottom {Pt(printed.Bottom)} is less than 0.5 pt below {Pt(printed.Bottom)}.");
+    }
+
+    /// <summary>
+    /// The allowance is exactly <see cref="ManifestChecks.EraseAllowancePt"/>: erases reaching that far past their printed
+    /// extents on every side load although x + w carries binary rounding, and the time-block erase falling a twentieth
+    /// of a point short of it on any one side is a load error naming that side alone.
+    /// </summary>
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("left", "its left edge 885.85 is less than 0.5 pt left of 886.3")]
+    [InlineData("top", "its top 91.95 is less than 0.5 pt above 92.4")]
+    [InlineData("right", "its right edge 1083.25 is less than 0.5 pt right of 1082.8")]
+    [InlineData("bottom", "its bottom 641.15 is less than 0.5 pt below 640.7")]
+    public void Each_erase_must_reach_the_allowance_past_its_printed_extent(string? shortSide, string? miss)
+    {
+        const double Short = 0.05;
+        string path = WriteModified(root =>
+        {
+            foreach ((string parent, string eraseKey, string printedKey) in DailyErases)
+            {
+                JsonNode node = parent.Split('.').Aggregate(root, (n, part) => n[part]!);
+                RectPt p = RectOf(node[printedKey]!);
+                double a = ManifestChecks.EraseAllowancePt;
+                RectPt erase = new(p.X - a, p.Y - a, p.W + (2 * a), p.H + (2 * a));
+                if (parent == "slots.timeBlocks")
+                {
+                    erase = shortSide switch
+                    {
+                        "left" => erase with { X = erase.X + Short, W = erase.W - Short },
+                        "top" => erase with { Y = erase.Y + Short, H = erase.H - Short },
+                        "right" => erase with { W = erase.W - Short },
+                        "bottom" => erase with { H = erase.H - Short },
+                        _ => erase,
+                    };
+                }
+
+                node[eraseKey] = new JsonObject { ["x"] = erase.X, ["y"] = erase.Y, ["w"] = erase.W, ["h"] = erase.H };
+            }
+        });
+
+        Action act = () => _loader.Load(path);
+
+        if (miss is null)
+        {
+            act.Should().NotThrow("each erase reaches exactly the allowance past its printed extent");
+        }
+        else
+        {
+            act.Should().Throw<ManifestException>().WithMessage($"*slots.timeBlocks.erase (*) must contain slots.timeBlocks.printed (*), the printed art it erases, with 0.5 pt to spare on every side*: {miss}.");
+        }
+    }
+
+    [Fact]
+    public void The_erase_allowance_is_one_pixel_at_the_lowest_render_dpi()
+    {
+        ManifestChecks.EraseAllowancePt.Should().Be(72.0 / GenerateOptions.AllowedDpis.Min(), "the erase is painted in whole pixels, so it needs a pixel to spare at the coarsest DPI");
+    }
+
+    /// <summary>The three daily-page erases and the printed extents they must contain, by parent object and key.</summary>
+    private static readonly (string Parent, string EraseKey, string PrintedKey)[] DailyErases =
+    {
+        ("slots.date", "slashErase", "slashPrinted"),
+        ("slots.weeksRemaining", "erase", "printed"),
+        ("slots.timeBlocks", "erase", "printed"),
+    };
+
+    private static RectPt RectOf(JsonNode node) =>
+        new(node["x"]!.GetValue<double>(), node["y"]!.GetValue<double>(), node["w"]!.GetValue<double>(), node["h"]!.GetValue<double>());
+
+    /// <summary>A length as the manifest checks print it: invariant, at most two decimals.</summary>
+    private static string Pt(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
 
     [Fact]
     public void Missing_manifest_file_throws_a_manifest_exception()

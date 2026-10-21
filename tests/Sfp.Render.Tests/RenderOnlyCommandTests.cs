@@ -171,6 +171,64 @@ public sealed class RenderOnlyCommandTests
     }
 
     [Fact]
+    public void A_listed_png_that_cannot_be_deleted_exits_4_and_leaves_no_index()
+    {
+        // The second adversarial pass's Linux stand-in for a PNG Windows refuses to delete (read-only, or open in a
+        // viewer): a folder holding a file, under the name of a PNG the previous run's index lists. The cleanup stops
+        // there with exit 4, and the index is already gone, so no index describes the partly deleted render.
+        string dir = TestPaths.NewTempDir("render-only-undeletable");
+        try
+        {
+            string outDir = Path.Combine(dir, "out");
+            PreviousRun(outDir).Should().Contain("cover.png").And.Contain("day-2027-01-04.png");
+            string blocked = Path.Combine(outDir, "day-2027-01-04.png");
+            File.Delete(blocked);
+            Directory.CreateDirectory(blocked);
+            File.WriteAllText(Path.Combine(blocked, "keep.txt"), "x");
+
+            (int code, _, string err) = Run(Request(outDir, dir));
+
+            code.Should().Be(ExitCodes.RenderError, err);
+            err.Split('\n')[0].Should().StartWith("Render failed: ").And.Contain(blocked);
+            File.Exists(Path.Combine(outDir, RenderOnlyRunner.IndexFileName)).Should().BeFalse("the index is deleted before the PNGs it lists");
+            File.Exists(Path.Combine(outDir, "cover.png")).Should().BeFalse("the PNGs listed before the blocked one were deleted");
+            Directory.Exists(blocked).Should().BeTrue();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_folder_another_render_is_using_exits_2_with_one_line_and_keeps_its_files()
+    {
+        // Another render-only or generate --render-only run holds the folder's lock file for its whole run; here the test
+        // holds it. The refused run stops before it deletes or writes anything.
+        string dir = TestPaths.NewTempDir("render-only-busy");
+        try
+        {
+            string outDir = Path.Combine(dir, "out");
+            IReadOnlyList<string> listed = PreviousRun(outDir);
+            using (new FileStream(Path.Combine(outDir, RenderOnlyRunner.LockFileName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose))
+            {
+                (int code, string output, string err) = Run(Request(outDir, dir) with { Quiet = true });
+
+                code.Should().Be(ExitCodes.ValidationError, err);
+                err.Should().Be($"Another render is using the folder {Path.GetFullPath(outDir)}: wait for it to finish, or render into another folder.\n");
+                output.Should().BeEmpty();
+            }
+
+            File.Exists(Path.Combine(outDir, RenderOnlyRunner.IndexFileName)).Should().BeTrue("the refused run deleted nothing");
+            listed.Should().OnlyContain(png => File.ReadAllBytes(Path.Combine(outDir, png)).SequenceEqual(new byte[] { 1, 2, 3 }), "and overwrote nothing");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void A_log_folder_that_cannot_be_used_moves_the_log_to_the_temp_folder()
     {
         // The log folder lies under a file, so it can never be created: the run goes on with its log in the temp folder
@@ -272,5 +330,20 @@ public sealed class RenderOnlyCommandTests
         command.Options.Where(o => o.Required).Select(o => o.Name).Should().BeEquivalentTo("--pdf", "--start", "--out");
         command.Parse(new[] { "--pdf", "x.pdf", "--start", "2027-01", "--out", "out", "--dpi", "300", "--no-links", "--time-blocks", "7-19" }).Errors.Should().BeEmpty();
         command.Parse(new[] { "--pdf", "x.pdf", "--start", "2027-01" }).Errors.Should().NotBeEmpty("--out is required");
+    }
+
+    /// <summary>A finished run of the Q1 2027 plan in <paramref name="outDir"/>, a few bytes per page; returns the PNG names its index lists.</summary>
+    private static IReadOnlyList<string> PreviousRun(string outDir)
+    {
+        GenerateOptions options = new() { Start = new QuarterSpec(2027, 1), PdfPath = SyntheticTemplate.Build() };
+        RenderOnlyResult result = new RenderOnlyRunner(new TinyRenderer()).Run(Q1Plan(), new RenderOptions(options.PdfPath, 144, options), outDir);
+        return RenderIndex.Parse(File.ReadAllText(result.IndexPath)).Pages.Select(p => p.Png).OfType<string>().ToList();
+    }
+
+    /// <summary>A renderer that returns a few bytes as every page's image.</summary>
+    private sealed class TinyRenderer : IPageRenderer
+    {
+        public RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions o) =>
+            new(page.Key, new byte[] { 1, 2, 3 }, 1, 1, Array.Empty<AnchorPlacement>());
     }
 }
