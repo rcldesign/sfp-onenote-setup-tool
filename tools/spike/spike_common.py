@@ -68,14 +68,20 @@ RPC_E_CALL_REJECTED = 0x80010001
 RPC_E_SERVERCALL_RETRYLATER = 0x8001010A
 DISP_E_TYPEMISMATCH = 0x80020005
 DISP_E_BADPARAMCOUNT = 0x8002000E
-HR_LAST_MODIFIED_DATE_DID_NOT_MATCH = 0x80042013
-RETRY_CODES = {RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER}
+HR_LAST_MODIFIED_DATE_DID_NOT_MATCH = 0x80042010
+HR_APP_IN_MODAL_UI = 0x80042030
+# OneNote cannot take the call now: the two COM busy results and hrAppInModalUI (a dialog in OneNote blocks it). The
+# call is retried once after RETRY_DELAY_S, as the C# wrapper does (OneNoteHResults.IsBusy).
+RETRY_CODES = {RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER, HR_APP_IN_MODAL_UI}
 # If a binding marshals the DATE_MIN datetime to something other than OLE DATE 0, OneNote answers with one of these;
 # the call is then repeated once with the plain float 0.0.
 DATE_FALLBACK_CODES = {DISP_E_TYPEMISMATCH, HR_LAST_MODIFIED_DATE_DID_NOT_MATCH}
 RETRY_DELAY_S = 2.0
 
-# OneNote's own HRESULTs (hrMalformedXML onward), for readable failures.
+# OneNote's own HRESULTs, for readable failures: Microsoft's "Error codes (OneNote)" table
+# (learn.microsoft.com/office/client-developer/onenote/error-codes-onenote), every row with its published name, in its
+# order (there is no 0x80042021). OneNoteHResultsTests pins the same rows for the C# wrapper and checks this table
+# against them, so the two copies cannot drift apart.
 ONENOTE_ERRORS = {
     0x80042000: "hrMalformedXML",
     0x80042001: "hrInvalidXML",
@@ -88,23 +94,44 @@ ONENOTE_ERRORS = {
     0x80042008: "hrInsertingInk",
     0x80042009: "hrInsertingHtml",
     0x8004200A: "hrNavigatingToPage",
-    0x8004200B: "hrSectionNotFound",
-    0x8004200C: "hrPageNotFound",
-    0x8004200D: "hrFileAlreadyExists",
-    0x8004200E: "hrSectionReadOnly",
-    0x8004200F: "hrPageReadOnly",
-    0x80042010: "hrInsertingXHTML",
-    0x80042011: "hrPageObjectDoesNotExist",
-    0x80042012: "hrBinaryObjectDoesNotExist",
-    0x80042013: "hrLastModifiedDateDidNotMatch",
-    0x80042014: "hrGroupDoesNotExist",
-    0x80042015: "hrPageDoesNotExistInGroup",
-    0x80042016: "hrNoActiveSelection",
-    0x80042017: "hrObjectDoesNotExist",
-    0x80042018: "hrNotebookDoesNotExist",
-    0x80042019: "hrInvalidName",
-    0x8004201A: "hrFolderDoesNotExist",
-    0x8004201B: "hrInvalidQuery",
+    0x8004200B: "hrSectionReadOnly",
+    0x8004200C: "hrPageReadOnly",
+    0x8004200D: "hrInsertingOutlineText",
+    0x8004200E: "hrPageObjectDoesNotExist",
+    0x8004200F: "hrBinaryObjectDoesNotExist",
+    0x80042010: "hrLastModifiedDateDidNotMatch",
+    0x80042011: "hrGroupDoesNotExist",
+    0x80042012: "hrPageDoesNotExistInGroup",
+    0x80042013: "hrNoActiveSelection",
+    0x80042014: "hrObjectDoesNotExist",
+    0x80042015: "hrNotebookDoesNotExist",
+    0x80042016: "hrInsertingFile",
+    0x80042017: "hrInvalidName",
+    0x80042018: "hrFolderDoesNotExist",
+    0x80042019: "hrInvalidQuery",
+    0x8004201A: "hrFileAlreadyExists",
+    0x8004201B: "hrSectionEncryptedAndLocked",
+    0x8004201C: "hrDisabledByPolicy",
+    0x8004201D: "hrNotYetSynchronized",
+    0x8004201E: "hrLegacySection",
+    0x8004201F: "hrMergeFailed",
+    0x80042020: "hrInvalidXMLSchema",
+    0x80042022: "hrFutureContentLoss",
+    0x80042023: "hrTimeOut",
+    0x80042024: "hrRecordingInProgress",
+    0x80042025: "hrUnknownLinkedNoteState",
+    0x80042026: "hrNoShortNameForLinkedNote",
+    0x80042027: "hrNoFriendlyNameForLinkedNote",
+    0x80042028: "hrInvalidLinkedNoteUri",
+    0x80042029: "hrInvalidLinkedNoteThumbnail",
+    0x8004202A: "hrImportLNTThumbnailFailed",
+    0x8004202B: "hrUnreadDisabledForNotebook",
+    0x8004202C: "hrInvalidSelection",
+    0x8004202D: "hrConvertFailed",
+    0x8004202E: "hrRecycleBinEditFailed",
+    0x8004202F: "hrIMConversationTypeInvalid",
+    0x80042030: "hrAppInModalUI",
+    0x80042031: "hrPublishFormatUnsupportedForLabels",
     RPC_E_CALL_REJECTED: "RPC_E_CALL_REJECTED",
     RPC_E_SERVERCALL_RETRYLATER: "RPC_E_SERVERCALL_RETRYLATER",
     DISP_E_TYPEMISMATCH: "DISP_E_TYPEMISMATCH",

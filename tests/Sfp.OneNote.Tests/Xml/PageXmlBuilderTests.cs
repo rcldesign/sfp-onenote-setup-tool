@@ -236,7 +236,7 @@ public class PageXmlBuilderTests
     }
 
     [Fact]
-    public void Custom_page_size_writes_a_landscape_orientation_the_manifest_page_size_in_points_and_zero_margins()
+    public void Custom_page_size_writes_a_landscape_orientation_a_page_holding_the_placed_sheet_in_points_and_zero_margins()
     {
         PageXmlOptions options = MonJan4.Options(M, MonJan4.Generate() with { PageSize = PageSizeMode.Custom });
         string xml = MonJan4.Build(M, options);
@@ -244,20 +244,49 @@ public class PageXmlBuilderTests
 
         XElement size = page.Element(One + "PageSettings")!.Element(One + "PageSize")!;
         size.Elements().Select(e => e.Name.LocalName).Should().Equal(new[] { "Orientation", "Dimensions", "Margins" }, "the official schema's custom page size is that sequence, all three required");
-        size.Element(One + "Orientation")!.Attribute("landscape")!.Value.Should().Be("true", "the 1112 x 770 pt sheet is wider than tall");
+        size.Element(One + "Orientation")!.Attribute("landscape")!.Value.Should().Be("true", "the 1112 x 806 pt page is wider than tall");
         XElement dimensions = size.Element(One + "Dimensions")!;
         dimensions.Attribute("width")!.Value.Should().Be(OneNoteXml.Pt(M.PageWidthPt)).And.Be("1112", "Dimensions is in points, like the schema's Letter default of 612 x 792");
-        dimensions.Attribute("height")!.Value.Should().Be(OneNoteXml.Pt(M.PageHeightPt)).And.Be("770");
+        dimensions.Attribute("height")!.Value.Should().Be(OneNoteXml.Pt(M.OneNote.TitleOffsetPt + M.PageHeightPt)).And.Be("806", "the sheet sits below the 36 pt title offset");
         dimensions.HasElements.Should().BeFalse("Dimensions is an empty element with width and height attributes");
         XElement margins = size.Element(One + "Margins")!;
         margins.Attributes().Select(a => (a.Name.LocalName, a.Value)).Should().Equal(("top", "0"), ("bottom", "0"), ("left", "0"), ("right", "0"));
         size.ToString(SaveOptions.DisableFormatting).Should().Contain(
-            "<one:Orientation landscape=\"true\" /><one:Dimensions width=\"1112\" height=\"770\" /><one:Margins top=\"0\" bottom=\"0\" left=\"0\" right=\"0\" />");
+            "<one:Orientation landscape=\"true\" /><one:Dimensions width=\"1112\" height=\"806\" /><one:Margins top=\"0\" bottom=\"0\" left=\"0\" right=\"0\" />");
+        SchemaValidator.AssertValid(xml);
+    }
+
+    /// <summary>
+    /// onenote-6: the custom page always holds the sheet as placed, titles shown or hidden, at any scale: width = the
+    /// placed sheet width, height = the title offset plus the placed sheet height, with the sheet outline ending exactly
+    /// at the page's bottom edge.
+    /// </summary>
+    [Theory]
+    [InlineData(false, 1.0, "1112", "806")]
+    [InlineData(true, 1.0, "1112", "770")]
+    [InlineData(false, 1.5, "1668", "1191")]
+    [InlineData(true, 2.0, "2224", "1540")]
+    [InlineData(false, 0.72, "800.64", "590.4")]
+    public void Custom_page_size_holds_the_placed_sheet_with_titles_shown_or_hidden_at_any_scale(bool hideTitle, double scale, string width, string height)
+    {
+        PageXmlOptions options = MonJan4.Options(M, MonJan4.Generate() with { PageSize = PageSizeMode.Custom, HideTitle = hideTitle, PageScale = scale });
+
+        string xml = MonJan4.Build(M, options);
+        XElement page = XElement.Parse(xml);
+
+        XElement dimensions = page.Element(One + "PageSettings")!.Element(One + "PageSize")!.Element(One + "Dimensions")!;
+        dimensions.Attribute("width")!.Value.Should().Be(width);
+        dimensions.Attribute("height")!.Value.Should().Be(height);
+        XElement sheet = page.Elements(One + "Outline").First();
+        double sheetBottom = double.Parse(sheet.Element(One + "Position")!.Attribute("y")!.Value, CultureInfo.InvariantCulture)
+            + double.Parse(sheet.Element(One + "Size")!.Attribute("height")!.Value, CultureInfo.InvariantCulture);
+        sheetBottom.Should().BeApproximately(double.Parse(height, CultureInfo.InvariantCulture), 0.01, "the sheet ends at the page's bottom edge, nothing below it is cut off");
+        double.Parse(sheet.Element(One + "Size")!.Attribute("width")!.Value, CultureInfo.InvariantCulture).Should().BeApproximately(double.Parse(width, CultureInfo.InvariantCulture), 0.01);
         SchemaValidator.AssertValid(xml);
     }
 
     [Fact]
-    public void Custom_page_size_follows_the_manifest_page_shape_and_ignores_the_page_scale()
+    public void Custom_page_size_follows_the_manifest_page_shape_at_its_placed_size()
     {
         Manifest portrait = M with { PageSizePt = new[] { 612.0, 792.0 } };
         PageXmlOptions options = MonJan4.Options(portrait, MonJan4.Generate() with { PageSize = PageSizeMode.Custom, PageScale = 0.5 });
@@ -266,8 +295,8 @@ public class PageXmlBuilderTests
         XElement size = XElement.Parse(xml).Element(One + "PageSettings")!.Element(One + "PageSize")!;
 
         size.Element(One + "Orientation")!.Attribute("landscape")!.Value.Should().Be("false");
-        size.Element(One + "Dimensions")!.Attribute("width")!.Value.Should().Be("612", "Letter is 612 pt wide, unscaled");
-        size.Element(One + "Dimensions")!.Attribute("height")!.Value.Should().Be("792");
+        size.Element(One + "Dimensions")!.Attribute("width")!.Value.Should().Be("306", "Letter is 612 pt wide, placed at half size");
+        size.Element(One + "Dimensions")!.Attribute("height")!.Value.Should().Be("432", "the 36 pt title offset plus 396 pt of sheet");
         SchemaValidator.AssertValid(xml);
     }
 
@@ -285,7 +314,7 @@ public class PageXmlBuilderTests
             XElement dimensions = XElement.Parse(xml).Element(One + "PageSettings")!.Element(One + "PageSize")!.Element(One + "Dimensions")!;
 
             dimensions.Attribute("width")!.Value.Should().Be("1112.5");
-            dimensions.Attribute("height")!.Value.Should().Be("770.25");
+            dimensions.Attribute("height")!.Value.Should().Be("806.25", "770.25 pt of sheet below the 36 pt title offset");
             SchemaValidator.AssertValid(xml);
         }
         finally

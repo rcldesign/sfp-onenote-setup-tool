@@ -9,8 +9,10 @@ namespace Sfp.OneNote.Generate;
 /// out-of-space failure from any other and estimates the space a run needs. Windows reports a full disk as an
 /// IOException whose HResult is ERROR_DISK_FULL or ERROR_HANDLE_DISK_FULL as an HRESULT (0x80070070, 0x80070027);
 /// Linux and macOS report ENOSPC, whose errno (28) .NET puts in IOException.HResult. A OneNote call that fails because
-/// its disk is full carries the same Win32 HRESULTs. The estimate per page is the app's size line figure
-/// (<see cref="NotebookSizeEstimate.BytesPerPage"/>), so the message and the size line never disagree.
+/// its disk is full carries the same Win32 HRESULTs. Only the per-page figure is shared with the app's size line
+/// (<see cref="NotebookSizeEstimate.BytesPerPage"/>): the size line counts GenerateFormDefaults.PageCount for the
+/// quarter, while the message counts the plan's pages (out-of-quarter days and extra Notes pages included), so the two
+/// totals can differ.
 /// </summary>
 public static class DiskSpace
 {

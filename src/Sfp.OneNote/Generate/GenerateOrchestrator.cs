@@ -60,8 +60,9 @@ public sealed record GenerateOrchestratorOptions
 /// Contents page, the sidecar, the previous notebook's Next quarter link (with --previous; a warning, never a
 /// failure), SyncHierarchy and NavigateTo the cover.
 /// Cancellation is checked between pages; on cancel, and after a page fails to render, the partial notebook is closed
-/// and its folder deleted, so the same command can run again. Expected failures never throw: the result names the
-/// phase, the page and the HRESULT or message with the PRD exit code.
+/// and its folder deleted, so the same command can run again. When OneNote does not close it, the folder is left in
+/// place (OneNote still lists the notebook there) and a warning says to close it in OneNote and delete the folder.
+/// Expected failures never throw: the result names the phase, the page and the HRESULT or message with the PRD exit code.
 /// </summary>
 public sealed class GenerateOrchestrator : IGenerateOrchestrator
 {
@@ -468,10 +469,14 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
     }
 
     /// <summary>
-    /// Closes the partial notebook and deletes its folder and state file (on cancel, and after a render failure). True
-    /// when nothing is left; false when the folder could not be deleted, which the run's warnings then say.
+    /// Closes the partial notebook, then deletes its folder and state file (on cancel, and after a render failure). The
+    /// close and the delete are reported apart. When OneNote does not close the notebook, nothing is deleted: OneNote
+    /// still lists the notebook at that folder, and deleting the folder under it would leave OneNote pointing at nothing;
+    /// a warning then tells the user to close the notebook in OneNote and delete the folder before running the same
+    /// command again. A folder that cannot be deleted is a warning too. Both warnings are
+    /// <see cref="GenerateMessages.PartialNotebookNotDeleted"/>, so the cancelled summaries never say it was deleted.
     /// </summary>
-    private bool DeletePartialNotebook(RunState state)
+    private PartialCleanup DeletePartialNotebook(RunState state)
     {
         NotebookHandle nb = state.Notebook!;
         try
@@ -480,7 +485,11 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         }
         catch (OneNoteException ex)
         {
-            _log.Warning("CloseNotebook failed while removing the partial notebook ({HResult}); deleting the folder anyway", ex.HResultHex);
+            _log.Warning(ex, "CloseNotebook failed while removing the partial notebook ({HResult}); its folder {Path} is left in place", ex.HResultHex, nb.Path);
+            state.Warnings.Add(GenerateMessages.PartialNotebookNotDeleted(
+                nb.Path,
+                "OneNote did not close it, so its folder was left in place. Close the notebook in OneNote and delete the folder before running the same command again. OneNote said: " + ex.Message));
+            return PartialCleanup.NotClosed;
         }
 
         try
@@ -496,14 +505,14 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             }
 
             _log.Information("Partial notebook {Path} deleted", nb.Path);
-            return true;
+            return PartialCleanup.Deleted;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             string note = GenerateMessages.PartialNotebookNotDeleted(nb.Path, ex.Message);
             _log.Information(ex, "Partial notebook {Path} could not be deleted", nb.Path);
             state.Warnings.Add(note);
-            return false;
+            return PartialCleanup.NotDeleted;
         }
     }
 
@@ -569,14 +578,19 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         }
 
         // A render failure leaves nothing to inspect: the partial notebook is removed as on cancel, so the same command
-        // can be run again (the PRD's render error row: exit 4, nothing written to OneNote).
+        // can be run again (the PRD's render error row: exit 4, nothing written to OneNote). When OneNote does not close
+        // it, it is left in place (and its path kept) with a warning saying what to do.
         bool partialDeleted = false;
         if (ex is RenderFailedException && !state.Request.RenderOnly && state.Notebook is not null && state.Writer is not null)
         {
-            partialDeleted = DeletePartialNotebook(state);
-            message = message.TrimEnd().TrimEnd('.') + (partialDeleted
-                ? ". The partial notebook was closed and deleted, so the same command can be run again."
-                : ". The partial notebook could not be deleted; the warnings say why.");
+            PartialCleanup cleanup = DeletePartialNotebook(state);
+            partialDeleted = cleanup == PartialCleanup.Deleted;
+            message = message.TrimEnd().TrimEnd('.') + cleanup switch
+            {
+                PartialCleanup.Deleted => ". The partial notebook was closed and deleted, so the same command can be run again.",
+                PartialCleanup.NotClosed => ". The partial notebook was left in place because OneNote did not close it; the warnings say what to do before running the same command again.",
+                _ => ". The partial notebook could not be deleted; the warnings say why.",
+            };
         }
 
         string error = string.Format(CultureInfo.InvariantCulture, "{0}{1}: {2}", PhaseLabel(phase), page is null ? "" : ", page " + page.Title, message);
@@ -697,6 +711,19 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
                 throw new RenderFailedException(page, ex);
             }
         }
+    }
+
+    /// <summary>What removing the partial notebook left behind.</summary>
+    private enum PartialCleanup
+    {
+        /// <summary>Closed in OneNote, and its folder and state file deleted.</summary>
+        Deleted,
+
+        /// <summary>OneNote did not close it, so nothing was deleted; a warning says what to do.</summary>
+        NotClosed,
+
+        /// <summary>Closed, but its folder or state file could not be deleted; a warning says why.</summary>
+        NotDeleted,
     }
 
     /// <summary>Reports on the calling thread (Progress&lt;T&gt; would post to the thread pool and could report after the run ended).</summary>

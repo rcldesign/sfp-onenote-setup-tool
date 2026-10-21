@@ -3,6 +3,7 @@ using System.Globalization;
 using Serilog.Events;
 using Sfp.Core.Manifests;
 using Sfp.Core.Plan;
+using Sfp.OneNote;
 using Sfp.OneNote.Com;
 using Sfp.Refresh.Calendar;
 using Sfp.Refresh.Orchestration;

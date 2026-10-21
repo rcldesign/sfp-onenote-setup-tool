@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
 
 namespace Sfp.OneNote.Com;
 
@@ -177,14 +176,40 @@ public static class OneNoteHResults
         Names.TryGetValue(hresult, out string? name) ? name + " (" + Hex(hresult) + ")" : Hex(hresult);
 
     /// <summary>
-    /// Maps a COM failure of <paramref name="call"/> to the typed exception the orchestrator handles. The busy results
+    /// True when an exception thrown while creating the OneNote.Application object is an activation failure, which
+    /// <see cref="MapActivation"/> reports as OneNote not starting: anything but one the activator already mapped
+    /// (<see cref="OneNoteException"/>) or a fatal runtime failure (out of memory). The runtime throws most activation
+    /// HRESULTs as COMException, but some as the .NET exception it maps them to, carrying the HRESULT: E_ACCESSDENIED
+    /// (0x80070005, a DCOM launch permission) as UnauthorizedAccessException and ERROR_FILE_NOT_FOUND (0x80070002, a
+    /// registration whose server is gone) as FileNotFoundException. A reflection wrapper is judged by what it wraps.
+    /// </summary>
+    public static bool IsActivationFailure(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return Unwrap(error) is not (OneNoteException or OutOfMemoryException);
+    }
+
+    /// <summary>
+    /// Maps an activation failure (<see cref="IsActivationFailure"/>), whatever exception type the runtime raised it as,
+    /// to the not-started exception with its HRESULT, as <see cref="Map"/> does for <see cref="ActivateCall"/>; a
+    /// reflection wrapper is unwrapped first.
+    /// </summary>
+    public static OneNoteException MapActivation(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        return Map(ActivateCall, Unwrap(error), null);
+    }
+
+    /// <summary>
+    /// Maps a failure of <paramref name="call"/> (a COMException; for activation, whatever exception the runtime raised
+    /// for the HRESULT) to the typed exception the orchestrator handles, by the exception's HResult. The busy results
     /// are not mapped here (the caller retries them and raises <see cref="OneNoteBusyException"/> itself). Any failure of
     /// activation (<see cref="ActivateCall"/>) opens with <see cref="OneNoteUnavailableException.NotStartedMessage"/>: the
     /// activator resolves the ProgID first and keeps the install message for that lookup, so OneNote is installed here.
     /// A later unavailable result opens with <see cref="OneNoteUnavailableException.DisconnectedMessage"/> when OneNote
     /// went away (<see cref="IsDisconnected"/>), else with the install message (a missing registration).
     /// </summary>
-    public static OneNoteException Map(string call, COMException error, string? xml)
+    public static OneNoteException Map(string call, Exception error, string? xml)
     {
         ArgumentNullException.ThrowIfNull(error);
         int hr = error.HResult;
@@ -224,4 +249,8 @@ public static class OneNoteHResults
             string.Format(CultureInfo.InvariantCulture, "OneNote call {0} failed: {1}{2}", call, Describe(hr), detail),
             error);
     }
+
+    /// <summary>The exception a reflection wrapper (TargetInvocationException) carries, else the exception itself.</summary>
+    private static Exception Unwrap(Exception error) =>
+        error is System.Reflection.TargetInvocationException { InnerException: Exception inner } ? inner : error;
 }

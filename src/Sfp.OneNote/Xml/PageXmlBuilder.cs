@@ -169,21 +169,25 @@ public static class PageXmlBuilder
 
     /// <summary>
     /// one:PageSettings with the page color, no rule lines, and the page size: Automatic by default; for a custom size the
-    /// official 2013 schema's sequence, all three required: Orientation (landscape when the sheet is wider than tall),
-    /// Dimensions with the unscaled sheet size in points (1112 x 770 for the planner page; the schema's own defaults,
-    /// 612 x 792, are Letter in points), then Margins of 0 on every side so the page is the sheet.
+    /// official 2013 schema's sequence, all three required: Orientation (landscape when the page is wider than tall),
+    /// Dimensions in points (the schema's own defaults, 612 x 792, are Letter in points) sized to hold the sheet as it is
+    /// placed: its placed width, and the title offset plus its placed height (1112 x 806 for the planner page with
+    /// titles at scale 1, 1112 x 770 with titles hidden, 1668 x 1191 at scale 1.5 with titles), then Margins of 0 on
+    /// every side, so the page ends where the sheet does.
     /// </summary>
     private static XElement PageSettings(XNamespace one, PageXmlOptions options)
     {
         XElement size = new(one + "PageSize");
         if (options.PageSize == PageSizeMode.Custom)
         {
+            double width = options.PlacedWidthPt;
+            double height = options.TitleOffsetPt + options.PlacedHeightPt;
             size.Add(
-                new XElement(one + "Orientation", new XAttribute("landscape", OneNoteXml.Bool(options.SheetWidthPt > options.SheetHeightPt))),
+                new XElement(one + "Orientation", new XAttribute("landscape", OneNoteXml.Bool(width > height))),
                 new XElement(
                     one + "Dimensions",
-                    new XAttribute("width", OneNoteXml.Pt(options.SheetWidthPt)),
-                    new XAttribute("height", OneNoteXml.Pt(options.SheetHeightPt))),
+                    new XAttribute("width", OneNoteXml.Pt(width)),
+                    new XAttribute("height", OneNoteXml.Pt(height))),
                 new XElement(
                     one + "Margins",
                     new XAttribute("top", "0"),

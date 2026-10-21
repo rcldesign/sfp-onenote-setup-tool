@@ -101,6 +101,32 @@ public class GeneratePreflightTests
         activator.ActivationCount.Should().Be(1);
     }
 
+    /// <summary>
+    /// onenote-5: CoCreateInstance failing with E_ACCESSDENIED (a DCOM launch permission) or ERROR_FILE_NOT_FOUND (a
+    /// registration whose server is gone) reaches the code as UnauthorizedAccessException or FileNotFoundException, not as
+    /// a COMException; it still says OneNote is installed but could not be started, with exit 3.
+    /// </summary>
+    [Theory]
+    [InlineData(unchecked((int)0x80070005), typeof(UnauthorizedAccessException))]
+    [InlineData(unchecked((int)0x80070002), typeof(FileNotFoundException))]
+    public void An_activation_failure_the_runtime_raises_as_a_dotnet_exception_says_onenote_could_not_be_started_with_exit_3(int hresult, Type raisedAs)
+    {
+        Exception raised = System.Runtime.InteropServices.Marshal.GetExceptionForHR(hresult)!;
+        raised.Should().BeOfType(raisedAs, "the runtime raises this HRESULT as a .NET exception, not as a COMException");
+        raised.HResult.Should().Be(hresult);
+        FakeActivator activator = new(new FakeOneNoteTarget()) { Failure = raised };
+        using OneNoteSession session = new(activator, new Support.CapturingSink().CreateLogger(), TimeSpan.Zero);
+        Harness h = new() { Locator = new FakeOneNoteLocator(true, session) };
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        (string message, int exitCode) = result.Errors.Should().ContainSingle().Subject;
+        exitCode.Should().Be(3);
+        message.Should().StartWith(OneNoteUnavailableException.NotStartedMessage + " activate failed with " + OneNoteHResults.Describe(hresult));
+        message.Should().NotContain(OneNoteUnavailableException.InstallUrl, "the ProgID resolved, so OneNote is installed");
+        activator.ActivationCount.Should().Be(1);
+    }
+
     [Fact]
     public void A_com_session_that_cannot_start_is_reported_as_unavailable()
     {

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Win32;
 
@@ -23,21 +22,20 @@ internal sealed class ProgIdActivator : IOneNoteActivator
                 null);
         }
 
-        object target;
+        object? created;
         try
         {
-            target = Activator.CreateInstance(type) ?? throw new OneNoteUnavailableException(
-                OneNoteHResults.ActivateCall, OneNoteHResults.ServerExecFailed, OneNoteUnavailableException.NotStartedMessage + " CreateInstance returned nothing.", null);
+            created = Activator.CreateInstance(type);
         }
-        catch (COMException ex)
+        catch (Exception ex) when (OneNoteHResults.IsActivationFailure(ex))
         {
-            throw OneNoteHResults.Map(OneNoteHResults.ActivateCall, ex, null);
-        }
-        catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is COMException inner)
-        {
-            throw OneNoteHResults.Map(OneNoteHResults.ActivateCall, inner, null);
+            // COMException for most HRESULTs, but the runtime raises E_ACCESSDENIED as UnauthorizedAccessException and
+            // ERROR_FILE_NOT_FOUND as FileNotFoundException; all of them are OneNote not starting (exit 3).
+            throw OneNoteHResults.MapActivation(ex);
         }
 
+        object target = created ?? throw new OneNoteUnavailableException(
+            OneNoteHResults.ActivateCall, OneNoteHResults.ServerExecFailed, OneNoteUnavailableException.NotStartedMessage + " CreateInstance returned nothing.", null);
         return new ActivatedApp(target, ReadVersion());
     }
 
