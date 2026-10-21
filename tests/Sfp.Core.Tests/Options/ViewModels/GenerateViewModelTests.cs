@@ -10,13 +10,9 @@ public class GenerateViewModelTests
 {
     private readonly Harness _h = new();
 
-    private static async Task Settle(GenerateViewModel vm)
-    {
-        await vm.PendingPdfCheck;
-        await vm.Previews.Pending;
-    }
+    private Task Settle(GenerateViewModel vm) => _h.Settle(vm);
 
-    [Fact]
+    [UiFact]
     public async Task Defaults_follow_the_PRD_table_when_no_settings_exist()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -43,7 +39,7 @@ public class GenerateViewModelTests
         vm.Previews.Day.Status.Should().Contain("template PDF");
     }
 
-    [Fact]
+    [UiFact]
     public void The_fallback_font_warning_is_a_banner_before_anything_is_generated()
     {
         const string warning = "Font 'Bookman Old Style' is not installed; using the bundled 'TeX Gyre Bonum' instead. The date glyphs will differ slightly from the printed labels.";
@@ -59,7 +55,7 @@ public class GenerateViewModelTests
         _h.Generator.Runs.Should().Be(0, "the banner shows on the form, before any run");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Saved_settings_fill_every_field_and_the_pdf_check_starts()
     {
         AppSettings saved = new()
@@ -115,7 +111,7 @@ public class GenerateViewModelTests
         vm.ToSettings(Array.Empty<string>()).Should().BeEquivalentTo(saved, o => o.Excluding(s => s.KnownOutputFolders));
     }
 
-    [Fact]
+    [UiFact]
     public async Task Invalid_saved_values_fall_back_to_the_defaults()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -128,7 +124,7 @@ public class GenerateViewModelTests
         vm.OutputFolder.Should().Be(Harness.DefaultFolder);
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_saved_start_before_the_next_quarter_is_not_restored()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -161,7 +157,7 @@ public class GenerateViewModelTests
         await Settle(vm);
     }
 
-    [Fact]
+    [UiFact]
     public async Task Notebook_name_follows_the_default_until_the_user_edits_it()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -184,7 +180,7 @@ public class GenerateViewModelTests
         vm.NotebookName.Should().Be("SFP Q4 2028", "typing the default again re-attaches the name to the date");
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_bad_year_shows_the_start_message_and_blocks_generate_without_touching_the_name()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -207,7 +203,7 @@ public class GenerateViewModelTests
         vm.CanGenerate.Should().BeTrue();
     }
 
-    [Theory]
+    [UiTheory]
     [InlineData("1899")]
     [InlineData("2200")]
     [InlineData("1")]
@@ -245,17 +241,15 @@ public class GenerateViewModelTests
         await Settle(vm);
     }
 
-    [Fact]
+    [UiFact]
     public async Task Pdf_check_runs_in_the_background_and_shows_the_mismatch()
     {
         _h.PdfValidator.Result = ValidationResult.Fail("Expected 132 pages, found 130");
         using GenerateViewModel vm = _h.NewGenerate();
-        _h.PdfValidator.Hold();
 
         vm.PdfPath = Harness.Pdf;
         vm.PdfPending.Should().Be("Checking the PDF against the template manifest...", "the setter shows the pending row itself while the check runs");
         vm.CanGenerate.Should().BeFalse();
-        _h.PdfValidator.Release();
         await Settle(vm);
 
         vm.PdfPending.Should().BeNull();
@@ -272,24 +266,22 @@ public class GenerateViewModelTests
         vm.Previews.Day.HasImage.Should().BeTrue();
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_missing_pdf_is_reported_at_once_and_the_check_still_settles()
     {
         using GenerateViewModel vm = _h.NewGenerate();
         await Settle(vm);
 
-        // The validator is never reached for a missing file, so the check's result is held at the UI thread instead.
-        _h.Ui.Hold();
+        // The check's result waits in the dispatcher's queue until the test yields, so this is the setter's own message.
         vm.PdfPath = @"C:\nope.pdf";
 
         vm.PdfError.Should().Be(@"PDF not found: C:\nope.pdf", "the form's own rule reports it before the check's result arrives");
-        _h.Ui.Release();
         await Settle(vm);
         vm.PdfError.Should().Be(@"PDF not found: C:\nope.pdf");
         _h.PdfValidator.Calls.Should().Be(0, "the validator is not opened for a missing file");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Every_other_row_shows_its_message_inline()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -330,7 +322,7 @@ public class GenerateViewModelTests
         vm.CanGenerate.Should().BeTrue();
     }
 
-    [Fact]
+    [UiFact]
     public async Task Input_changes_raise_InputChanged_but_loading_does_not()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -347,7 +339,7 @@ public class GenerateViewModelTests
         await Settle(vm);
     }
 
-    [Fact]
+    [UiFact]
     public async Task Previews_re_render_when_the_date_or_format_changes_but_not_for_dpi()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -373,7 +365,7 @@ public class GenerateViewModelTests
         vm.Previews.RenderCount.Should().Be(3, "the DPI does not change what the thumbnails show");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Browse_buttons_set_the_field_only_when_a_choice_was_made()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -394,7 +386,7 @@ public class GenerateViewModelTests
         await Settle(vm);
     }
 
-    [Fact]
+    [UiFact]
     public async Task ToOptions_maps_every_field()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -428,7 +420,7 @@ public class GenerateViewModelTests
         await Settle(vm);
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_previous_notebook_field_maps_to_the_option_the_browse_button_and_the_run()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -459,7 +451,7 @@ public class GenerateViewModelTests
         _h.Dialogs.LastInitialPath.Should().Be(Harness.DefaultFolder, "with the field empty the dialog starts in the output folder");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Generate_runs_the_orchestrator_with_the_request_and_locks_the_fields_meanwhile()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -485,7 +477,7 @@ public class GenerateViewModelTests
         vm.Run.ShowSuccess.Should().BeTrue();
     }
 
-    [Fact]
+    [UiFact]
     public async Task Generate_is_refused_while_the_form_is_invalid()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -496,7 +488,7 @@ public class GenerateViewModelTests
         _h.Generator.Runs.Should().Be(0);
     }
 
-    [Fact]
+    [UiFact]
     public async Task After_a_successful_run_the_name_collision_rule_blocks_a_second_run_into_the_same_folder()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -510,7 +502,7 @@ public class GenerateViewModelTests
         vm.CanGenerate.Should().BeFalse();
     }
 
-    [Fact]
+    [UiFact]
     public async Task Closing_with_nothing_running_is_allowed_at_once_without_a_question()
     {
         using GenerateViewModel vm = _h.NewGenerate();
@@ -524,7 +516,7 @@ public class GenerateViewModelTests
         _h.Dialogs.Questions.Should().BeEmpty();
     }
 
-    [Fact]
+    [UiFact]
     public async Task Closing_during_a_run_asks_first_and_no_keeps_the_window_and_the_run()
     {
         _h.Generator.WaitForCancel = true;
@@ -546,7 +538,7 @@ public class GenerateViewModelTests
         await generating;
     }
 
-    [Fact]
+    [UiFact]
     public async Task Closing_during_a_run_on_yes_cancels_and_waits_until_the_run_has_stopped()
     {
         using ManualResetEventSlim deleting = new(false);
@@ -572,7 +564,7 @@ public class GenerateViewModelTests
         await generating;
     }
 
-    [Fact]
+    [UiFact]
     public async Task Closing_waits_for_a_preview_render_in_flight_and_no_render_starts_after()
     {
         using ManualResetEventSlim gate = new(false);
@@ -580,6 +572,7 @@ public class GenerateViewModelTests
         using GenerateViewModel vm = _h.NewGenerate();
         vm.PdfPath = Harness.Pdf;
         await vm.PendingPdfCheck;
+        await _h.Ui.Drain();
         vm.Previews.IsBusy.Should().BeTrue("the PDF check started a preview render that waits at the gate");
         vm.Month = 4;
 
@@ -596,7 +589,7 @@ public class GenerateViewModelTests
         _h.Dialogs.Questions.Should().BeEmpty();
     }
 
-    [Fact]
+    [UiFact]
     public void Dropdown_contents_match_the_PRD_table()
     {
         using GenerateViewModel vm = _h.NewGenerate();

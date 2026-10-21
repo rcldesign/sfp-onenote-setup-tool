@@ -12,7 +12,7 @@ public class PreviewStripViewModelTests
 
     private static GenerateOptions Options(int month = 1) => new() { Start = new QuarterSpec(2027, month), PdfPath = Harness.Pdf };
 
-    [Fact]
+    [UiFact]
     public async Task Request_renders_the_first_daily_page_the_first_calendar_month_and_the_cover()
     {
         using PreviewStripViewModel strip = _h.NewPreviews();
@@ -20,7 +20,7 @@ public class PreviewStripViewModelTests
         strip.Request(Options());
         strip.Day.IsRendering.Should().BeTrue();
         strip.Day.Status.Should().Be("Rendering...");
-        await strip.Pending;
+        await _h.Settle(strip.Pending);
 
         strip.Day.Title.Should().Be("Fri Jan 1");
         strip.CalendarMonth.Title.Should().Be("January 2027");
@@ -40,7 +40,7 @@ public class PreviewStripViewModelTests
         _h.Plans.Calls.Should().Be(1);
     }
 
-    [Fact]
+    [UiFact]
     public void Pick_skips_daily_pages_outside_the_quarter()
     {
         Quarter q = _h.Dates.Build(new QuarterSpec(2027, 1));
@@ -53,7 +53,7 @@ public class PreviewStripViewModelTests
         cover!.Type.Should().Be(PageType.Cover);
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_missing_page_in_the_plan_is_reported_in_its_slot_only()
     {
         using PreviewStripViewModel strip = _h.NewPreviews();
@@ -65,17 +65,17 @@ public class PreviewStripViewModelTests
         day.Should().NotBeNull();
         calendar.Should().NotBeNull();
         cover.Should().BeNull();
-        await strip.Pending;
+        await _h.Settle(strip.Pending);
     }
 
-    [Fact]
+    [UiFact]
     public async Task Renderer_errors_become_a_status_line_and_never_throw()
     {
         _h.Renderer.Throw = new InvalidOperationException("PDFium failed on page 17");
         using PreviewStripViewModel strip = _h.NewPreviews();
 
         strip.Request(Options());
-        await strip.Pending;
+        await _h.Settle(strip.Pending);
 
         strip.Status.Should().Be("Preview failed: PDFium failed on page 17");
         strip.Thumbnails.Should().AllSatisfy(t =>
@@ -86,19 +86,19 @@ public class PreviewStripViewModelTests
         });
     }
 
-    [Fact]
+    [UiFact]
     public async Task Plan_builder_errors_name_the_missing_module()
     {
         _h.Plans.Throw = new NotSupportedException("The plan builder (M1.6) is not wired into the app yet.");
         using PreviewStripViewModel strip = _h.NewPreviews();
 
         strip.Request(Options());
-        await strip.Pending;
+        await _h.Settle(strip.Pending);
 
         strip.Status.Should().Contain("M1.6");
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_newer_request_cancels_the_render_in_flight_and_only_its_result_shows()
     {
         using ManualResetEventSlim gate = new(false);
@@ -110,14 +110,14 @@ public class PreviewStripViewModelTests
         strip.Request(Options(month: 4));
         Task second = strip.Pending;
         gate.Set();
-        await Task.WhenAll(first, second);
+        await _h.Settle(first, second);
 
         strip.Day.Title.Should().Be("Thu Apr 1");
         strip.CalendarMonth.Title.Should().Be("April 2027");
         strip.RenderCount.Should().Be(2);
     }
 
-    [Fact]
+    [UiFact]
     public async Task Requests_inside_the_debounce_window_collapse_into_one_render()
     {
         using PreviewStripViewModel strip = _h.NewPreviews(TimeSpan.FromMilliseconds(80));
@@ -125,19 +125,19 @@ public class PreviewStripViewModelTests
         strip.Request(Options(month: 1));
         strip.Request(Options(month: 4));
         strip.Request(Options(month: 7));
-        await strip.Pending;
+        await _h.Settle(strip.Pending);
 
         strip.RenderCount.Should().Be(1);
         _h.Plans.Calls.Should().Be(1);
         strip.Day.Title.Should().Be("Thu Jul 1");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Clear_cancels_and_shows_the_placeholder_in_every_slot()
     {
         using PreviewStripViewModel strip = _h.NewPreviews();
         strip.Request(Options());
-        await strip.Pending;
+        await _h.Settle(strip.Pending);
 
         strip.Clear("Choose a template PDF to see previews.");
 
@@ -147,23 +147,23 @@ public class PreviewStripViewModelTests
             t.Status.Should().Be("Choose a template PDF to see previews.");
             t.Title.Should().Be("");
         });
-        await strip.Pending;
+        await _h.Settle(strip.Pending);
     }
 
-    [Fact]
+    [UiFact]
     public async Task Previews_render_at_the_preview_dpi_not_the_notebook_dpi()
     {
         using PreviewStripViewModel strip = _h.NewPreviews();
 
         strip.Request(Options() with { Dpi = 300 });
-        await strip.Pending;
+        await _h.Settle(strip.Pending);
 
         strip.Day.WidthPx.Should().Be(1112, "72 DPI gives one pixel per point");
         PreviewStripViewModel.DefaultPreviewDpi.Should().Be(72);
         PreviewStripViewModel.DefaultDebounce.Should().Be(TimeSpan.FromMilliseconds(300));
     }
 
-    [Fact]
+    [UiFact]
     public void Thumbnail_keeps_its_image_while_re_rendering()
     {
         PreviewThumbnail thumbnail = new("Cover");

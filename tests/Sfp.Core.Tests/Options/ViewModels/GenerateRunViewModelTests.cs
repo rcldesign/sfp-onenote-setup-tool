@@ -17,7 +17,7 @@ public class GenerateRunViewModelTests
         RenderOnly: false,
         RenderOutputDir: null);
 
-    [Fact]
+    [UiFact]
     public async Task A_successful_run_shows_the_summary_the_path_and_the_OneDrive_paragraph()
     {
         _h.Generator.ProgressToReport.Add(new GenerateProgress(GeneratePhase.CheckingOneNote, 0, 0, null));
@@ -52,7 +52,7 @@ public class GenerateRunViewModelTests
         _h.Ui.Posted.Should().Be(2, "every progress report crosses the UI thread");
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_success_view_says_whether_the_previous_notebook_got_its_next_quarter_link()
     {
         _h.Generator.Result = _h.Generator.Result with { NextQuarterLink = "Next quarter link added to the quarterly review of SFP Q4 2026." };
@@ -74,7 +74,7 @@ public class GenerateRunViewModelTests
         run.WarningsText.Should().Contain("Next quarter link was not written");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Progress_reports_drive_the_bar()
     {
         _h.Generator.ProgressToReport.Add(new GenerateProgress(GeneratePhase.Rendering, 36, 144, "Tue Jan 5"));
@@ -98,7 +98,7 @@ public class GenerateRunViewModelTests
         run.Total.Should().Be(144);
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_failed_run_shows_phase_page_and_message_and_keeps_the_partial_notebook_path()
     {
         _h.Generator.Result = new GenerateResult
@@ -125,7 +125,7 @@ public class GenerateRunViewModelTests
         run.SaveLogCommand.CanExecute(null).Should().BeTrue();
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_orchestrator_is_given_the_run_log_and_the_failure_view_shows_that_file()
     {
         FakeRunLogFactory logs = new();
@@ -161,7 +161,7 @@ public class GenerateRunViewModelTests
         _h.Shell.Copies.Should().Equal((log.Path, @"C:\Users\me\Desktop\sfp.log"));
     }
 
-    [Fact]
+    [UiFact]
     public async Task Save_log_copies_the_run_log_to_the_chosen_path()
     {
         _h.Generator.Result = new GenerateResult { Success = false, ExitCode = 4, Phase = GeneratePhase.Rendering, Error = "boom", LogPath = @"C:\logs\run.log" };
@@ -183,7 +183,7 @@ public class GenerateRunViewModelTests
         run.ActionMessage.Should().Be("Could not save the log: disk full");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Cancel_stops_the_run_and_shows_the_cancelled_view()
     {
         _h.Generator.WaitForCancel = true;
@@ -204,7 +204,7 @@ public class GenerateRunViewModelTests
         run.CancelCommand.CanExecute(null).Should().BeFalse();
     }
 
-    [Fact]
+    [UiFact]
     public async Task Once_writing_has_started_render_reports_no_longer_move_the_phase_line()
     {
         _h.Generator.ProgressToReport.AddRange(new[]
@@ -234,7 +234,7 @@ public class GenerateRunViewModelTests
             "the renderers run ahead of the writer on other threads; the line follows the writer");
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_cancelling_line_stays_until_the_run_has_stopped()
     {
         _h.Generator.WaitForCancel = true;
@@ -258,7 +258,7 @@ public class GenerateRunViewModelTests
         phases.Should().Equal(new[] { "Starting", GenerateRunViewModel.CancellingText, "Cancelled" }, "the page in flight finishing does not replace the Cancelling line");
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_cancelled_view_names_the_pages_reported_and_says_deleted_only_when_the_deletion_worked()
     {
         // The orchestrator's cancelled result carries no page counts; the view takes them from the progress reports.
@@ -296,7 +296,7 @@ public class GenerateRunViewModelTests
         run.WarningsText.Should().BeNull();
     }
 
-    [Fact]
+    [UiFact]
     public void Cancelled_text_is_built_from_the_result()
     {
         GenerateResult cancelled = new() { Success = false, Cancelled = true, ExitCode = 0, Phase = GeneratePhase.Cancelled, NotebookName = "SFP Q1 2027" };
@@ -311,7 +311,7 @@ public class GenerateRunViewModelTests
             .Should().Be("Cancelled after 0 pages rendered and 0 written; the partial notebook was deleted.", "the notebook existed, so it was there to delete");
     }
 
-    [Fact]
+    [UiFact]
     public async Task An_orchestrator_that_throws_still_yields_a_failure_view()
     {
         _h.Generator.Throw = new InvalidOperationException("COM is gone");
@@ -325,7 +325,7 @@ public class GenerateRunViewModelTests
         run.IsRunning.Should().BeFalse();
     }
 
-    [Fact]
+    [UiFact]
     public async Task Open_in_OneNote_and_Copy_path_use_the_shell_and_report_problems_inline()
     {
         using GenerateRunViewModel run = _h.NewRun();
@@ -347,7 +347,7 @@ public class GenerateRunViewModelTests
         run.ActionMessage.Should().Be("Could not copy the path: onenote.exe not found");
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_second_start_while_running_is_ignored()
     {
         _h.Generator.WaitForCancel = true;
@@ -361,7 +361,7 @@ public class GenerateRunViewModelTests
         await first;
     }
 
-    [Theory]
+    [UiTheory]
     [InlineData(GeneratePhase.CheckingOneNote, "Checking OneNote")]
     [InlineData(GeneratePhase.Rendering, "Rendering pages")]
     [InlineData(GeneratePhase.CreatingNotebook, "Creating notebook")]
@@ -373,7 +373,7 @@ public class GenerateRunViewModelTests
         GenerateRunViewModel.PhaseName(phase).Should().Be(expected);
     }
 
-    [Fact]
+    [UiFact]
     public void Progress_and_elapsed_text_formats()
     {
         GenerateRunViewModel.ProgressText(new GenerateProgress(GeneratePhase.Rendering, 4, 132, null)).Should().Be("Rendering pages (4 of 132)");
@@ -384,7 +384,7 @@ public class GenerateRunViewModelTests
             .Should().Be("Failed during checking onenote: no details were reported.");
     }
 
-    [Fact]
+    [UiFact]
     public void Launch_commands_try_the_executable_then_the_link()
     {
         IReadOnlyList<(string FileName, string Arguments)> commands = OneNoteLaunch.Commands(@"C:\Notebooks\SFP Q1 2027\");

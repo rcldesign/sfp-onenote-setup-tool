@@ -14,14 +14,14 @@ public class MainViewModelTests
 {
     private readonly Harness _h = new();
 
-    [Fact]
+    [UiFact]
     public async Task Initialize_loads_settings_into_both_tabs()
     {
         _h.Settings.Stored = new AppSettings { Start = new QuarterSpec(2027, 4), Dpi = 144, KnownOutputFolders = new[] { @"D:\Notebooks", "", @"d:\notebooks" } };
         using MainViewModel main = _h.NewMain();
 
         main.Initialize();
-        await main.Generate.PendingPdfCheck;
+        await _h.Settle(main.Generate);
         await main.Refresh.PendingReload;
 
         main.Title.Should().Be("SFP to OneNote");
@@ -35,7 +35,7 @@ public class MainViewModelTests
         _h.Settings.Saves.Should().Be(0, "a second Initialize is a no-op");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Field_changes_save_once_per_real_change()
     {
         using MainViewModel main = _h.NewMain();
@@ -51,10 +51,10 @@ public class MainViewModelTests
         main.Generate.NotebookName = "Mine";
         _h.Settings.Saves.Should().Be(2);
         _h.Settings.Stored.NotebookName.Should().Be("Mine");
-        await main.Generate.PendingPdfCheck;
+        await _h.Settle(main.Generate);
     }
 
-    [Fact]
+    [UiFact]
     public void Save_on_exit_writes_even_when_nothing_changed()
     {
         using MainViewModel main = _h.NewMain();
@@ -68,13 +68,13 @@ public class MainViewModelTests
         _h.Settings.Stored.NotebookName.Should().Be("SFP Q1 2027");
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_successful_generate_adds_its_output_folder_to_the_known_folders_and_saves()
     {
         using MainViewModel main = _h.NewMain();
         main.Initialize();
         main.Generate.PdfPath = Harness.Pdf;
-        await main.Generate.PendingPdfCheck;
+        await _h.Settle(main.Generate);
         _h.Generator.Result = _h.Generator.Result with { OutputPath = @"D:\Notebooks\SFP Q1 2027\" };
         int savesBefore = _h.Settings.Saves;
 
@@ -90,21 +90,21 @@ public class MainViewModelTests
         main.KnownOutputFolders.Should().Equal(new[] { @"D:\Notebooks" }, "a folder is listed once");
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_failed_generate_adds_nothing()
     {
         _h.Generator.Result = new GenerateResult { Success = false, ExitCode = 5, Phase = GeneratePhase.WritingPages, OutputPath = @"D:\Notebooks\SFP Q1 2027" };
         using MainViewModel main = _h.NewMain();
         main.Initialize();
         main.Generate.PdfPath = Harness.Pdf;
-        await main.Generate.PendingPdfCheck;
+        await _h.Settle(main.Generate);
 
         await main.Generate.GenerateCommand.ExecuteAsync(null);
 
         main.KnownOutputFolders.Should().BeEmpty();
     }
 
-    [Fact]
+    [UiFact]
     public void A_store_that_refuses_to_save_sets_the_notice_instead_of_throwing()
     {
         _h.Settings.ThrowOnSave = new IOException("read-only");
@@ -117,7 +117,7 @@ public class MainViewModelTests
         main.Notice.Should().Contain("/fake/settings.json").And.Contain("read-only");
     }
 
-    [Fact]
+    [UiFact]
     public void A_store_that_fails_to_load_still_opens_with_defaults()
     {
         _h.Settings.ThrowOnLoad = new UnauthorizedAccessException("no access");
@@ -129,7 +129,7 @@ public class MainViewModelTests
         main.Generate.Start.Should().Be(new QuarterSpec(2027, 1));
     }
 
-    [Fact]
+    [UiFact]
     public void A_corrupt_settings_file_is_reported_as_a_notice()
     {
         string dir = TestPaths.NewTempDir("main-settings");
@@ -152,7 +152,7 @@ public class MainViewModelTests
         }
     }
 
-    [Fact]
+    [UiFact]
     public void Current_settings_mirror_the_generate_fields_and_the_known_folders()
     {
         _h.Settings.Stored = new AppSettings { KnownOutputFolders = new[] { @"E:\x" } };
@@ -167,15 +167,14 @@ public class MainViewModelTests
         current.PdfPath.Should().Be("");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Closing_the_window_goes_through_the_generate_tab()
     {
         _h.Generator.WaitForCancel = true;
         using MainViewModel main = _h.NewMain();
         main.Initialize();
         main.Generate.PdfPath = Harness.Pdf;
-        await main.Generate.PendingPdfCheck;
-        await main.Generate.Previews.Pending;
+        await _h.Settle(main.Generate);
         (await main.PrepareToCloseAsync()).Should().BeTrue("nothing runs");
 
         Task generating = main.Generate.GenerateCommand.ExecuteAsync(null);
@@ -189,7 +188,7 @@ public class MainViewModelTests
         await generating;
     }
 
-    [Fact]
+    [UiFact]
     public async Task Closing_during_a_refresh_asks_no_keeps_it_running_and_yes_closes_once_the_cancelled_run_returns()
     {
         using ManualResetEventSlim finishing = new(false);
@@ -220,15 +219,14 @@ public class MainViewModelTests
         await refreshing;
     }
 
-    [Fact]
+    [UiFact]
     public async Task Closing_with_both_tabs_running_asks_about_the_refresh_first_and_closes_after_both_runs_stopped()
     {
         _h.Refresher.WaitForCancel = true;
         _h.Generator.WaitForCancel = true;
         using MainViewModel main = await InitializedWithANotebook();
         main.Generate.PdfPath = Harness.Pdf;
-        await main.Generate.PendingPdfCheck;
-        await main.Generate.Previews.Pending;
+        await _h.Settle(main.Generate);
         Task generating = main.Generate.GenerateCommand.ExecuteAsync(null);
         Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
         SpinWait.SpinUntil(() => _h.Generator.Runs == 1 && _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
@@ -256,13 +254,13 @@ public class MainViewModelTests
         _h.Registry.Notebooks.Add(new KnownNotebook("SFP Q1 2027", folder, new QuarterSpec(2027, 1), null, null, folder + ".sfp-state.json"));
         MainViewModel main = _h.NewMain();
         main.Initialize();
-        await main.Generate.PendingPdfCheck;
+        await _h.Settle(main.Generate);
         await main.Refresh.PendingReload;
         main.Refresh.SelectedNotebook.Should().NotBeNull();
         return main;
     }
 
-    [Fact]
+    [UiFact]
     public void Tab_index_and_notice_are_observable()
     {
         using MainViewModel main = _h.NewMain();
