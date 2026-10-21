@@ -479,7 +479,7 @@ public class NextQuarterLinkWriterTests
 
         result.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
         result.Warning.Should().Be(
-            "The Next quarter link was not written to the previous notebook " + previous.Folder + ": a Refresh of it is running (process "
+            "The Next quarter link was not written to the previous notebook " + previous.Folder + ": another run that uses it is in progress (process "
             + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + " on " + Environment.MachineName + ", since 2026-10-21 05:00) and still held its lock after 30 seconds.");
         waits.Should().HaveCount(30).And.OnlyContain(w => w == TimeSpan.FromSeconds(1));
         app.Calls.Should().HaveCount(calls, "nothing is read from or written to OneNote");

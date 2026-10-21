@@ -195,7 +195,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         {
             return NotWritten(given, given, string.Format(
                 CultureInfo.InvariantCulture,
-                "a Refresh of it is running ({0}) and still held its lock after {1:0} seconds",
+                "another run that uses it is in progress ({0}) and still held its lock after {1:0} seconds",
                 holder,
                 LockWait.TotalSeconds));
         }
