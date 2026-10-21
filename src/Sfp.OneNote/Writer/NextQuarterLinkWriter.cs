@@ -79,8 +79,9 @@ public interface INextQuarterLinkWriter
 /// (or, when an earlier run wrote it but could not record it, by its exact position and text) and updates its text and
 /// target in place instead of adding a second one, as long as it still holds only the tool's link; an outline the user
 /// typed into, drew in or put something in is kept as it is, and a fresh link outline goes below it (recorded in its
-/// place, with a warning). Anything else overlapping the slot (the user's text or ink) is left alone and the link is not
-/// written. When the notebook is not open in OneNote, or the page ID no longer resolves, the notebook is opened from its
+/// place, with a warning), unless the tool's own link from an earlier run already sits there unrecorded (a rebuilt state
+/// file recorded the edited outline instead): that one is updated in place and recorded. Anything else overlapping the
+/// slot (the user's text or ink) is left alone and the link is not written. When the notebook is not open in OneNote, or the page ID no longer resolves, the notebook is opened from its
 /// folder once (or, when that folder is no longer on disk, from the location its state file records) and the page is
 /// tried again. Anchors are placed relative to the sheet image as it sits on the page, so a hidden-title or scaled
 /// notebook is linked correctly. The previous notebook's run lock (<see cref="RefreshLock"/>) is held from the read of
@@ -246,10 +247,9 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         // writes it, with exactly its text): either is updated in place rather than joined by a second one, while it
         // still holds only the tool's link. One the user edited is kept as it is and a fresh link goes below it.
         string? recordedId = review.Anchors.TryGetValue(AnchorId, out string? recorded) && page.Outlines.Any(o => !o.IsBackgroundImage && o.ObjectId == recorded) ? recorded : null;
-        string? existingId = recordedId ?? Adoptable(page, expected, anchor.Placement.Text, review.Anchors.Values)?.ObjectId;
-        XElement? existing = existingId is null
-            ? null
-            : root.Elements(one + "Outline").FirstOrDefault(o => string.Equals((string?)o.Attribute("objectID"), existingId, StringComparison.Ordinal));
+        string linkText = anchor.Placement.Text.Trim();
+        string? existingId = recordedId ?? Adoptable(page, expected, review.Anchors.Values, o => string.Equals(o.PlainText, linkText, StringComparison.Ordinal))?.ObjectId;
+        XElement? existing = OutlineElement(root, one, existingId);
         string? editedNote = null;
         IEnumerable<string> ownedIds = review.Anchors.Values;
         if (existing is not null)
@@ -265,6 +265,18 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
             outline.Element(one + "Position")!.ReplaceWith(OneNoteXml.Position(one, kept.X, below, 1));
             expected = PageXmlParser.Bounds(outline, one) ?? throw new FormatException("The anchor outline builder produced no position.");
             ownedIds = ownedIds.Append(existingId!);
+
+            // The tool's own link from an earlier run may already sit there unrecorded: a rebuilt state file can record
+            // the edited outline in the slot in its place. One with the tool's link shape, whatever its text, is taken
+            // over: updated in place and recorded. Only when nothing there can be taken over does Blocker decide.
+            string? freshId = Adoptable(page, expected, ownedIds, o => Shape(o.Element, one) == LinkShape.Tool)?.ObjectId;
+            XElement? fresh = OutlineElement(root, one, freshId);
+            if (fresh is not null)
+            {
+                _log.Information("The Next quarter link outline {ObjectId} on {Name} holds more than the tool's link; the tool's unrecorded link below it ({FreshId}) is updated in place", existingId, name, freshId);
+                return Record(UpdateOwned(review.PageId, one, fresh, html, name, freshId!), review, sidecarPath, name, freshId!);
+            }
+
             editedNote = "The Next quarter link on the quarterly review of " + name + " was edited in OneNote, so it was kept as it is and a new link was added below it.";
             _log.Information("The Next quarter link outline {ObjectId} on {Name} holds more than the tool's link; it is kept and a new link goes below it", existingId, name);
         }
@@ -409,18 +421,25 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
 
     /// <summary>
     /// An outline the tool wrote for the link but did not record: not owned by any recorded anchor, within the match
-    /// tolerance of where the tool writes the link, and holding exactly its text. Null when there is not exactly one.
+    /// tolerance of where the tool writes the link (<paramref name="expected"/>), and recognized by
+    /// <paramref name="isToolLink"/> (in the slot: holding exactly the link text; below an edited outline: the tool's link
+    /// shape). Null when there is not exactly one.
     /// </summary>
-    private static OutlineInfo? Adoptable(PageXml page, RectPt expected, string text, IEnumerable<string> ownedIds)
+    private static OutlineInfo? Adoptable(PageXml page, RectPt expected, IEnumerable<string> ownedIds, Func<OutlineInfo, bool> isToolLink)
     {
         HashSet<string> owned = ownedIds.ToHashSet(StringComparer.Ordinal);
         List<OutlineInfo> matches = page.Outlines
             .Where(o => !o.IsBackgroundImage && o.ObjectId.Length > 0 && !owned.Contains(o.ObjectId))
             .Where(o => Math.Max(Math.Abs(o.X - expected.X), Math.Abs(o.Y - expected.Y)) <= MatchTolerancePt)
-            .Where(o => string.Equals(o.PlainText, text.Trim(), StringComparison.Ordinal))
+            .Where(isToolLink)
             .ToList();
         return matches.Count == 1 ? matches[0] : null;
     }
+
+    /// <summary>The one:Outline element with the given object ID among the page's top-level outlines, or null (also for a null ID).</summary>
+    private static XElement? OutlineElement(XElement root, XNamespace one, string? objectId) => objectId is null
+        ? null
+        : root.Elements(one + "Outline").FirstOrDefault(o => string.Equals((string?)o.Attribute("objectID"), objectId, StringComparison.Ordinal));
 
     /// <summary>
     /// The XML UpdatePageContent takes to add or update the link alone: the page, by its ID, holding that one outline.

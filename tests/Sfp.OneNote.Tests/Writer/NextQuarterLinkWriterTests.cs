@@ -255,6 +255,52 @@ public class NextQuarterLinkWriterTests
         previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId).PlainText.Should().Be("Read the Q4 retro notes first " + LinkText);
     }
 
+    /// <summary>
+    /// Round 4 onenote-2: a rebuilt state file can record the user's edited link outline as nextQuarter again (a Refresh
+    /// rebuild re-finds the anchor in the slot), while the tool's fresh link below it, from the run that kept the edit,
+    /// goes unrecorded. The next run takes that fresh link over instead of reporting it as something not the tool's: it
+    /// is updated in place and recorded, the edited outline stays exactly as it is, and nothing is added.
+    /// </summary>
+    [Fact]
+    public void After_a_rebuild_records_the_edited_outline_the_tools_fresh_link_below_it_is_updated_in_place_and_recorded()
+    {
+        const string thirdHref = "onenote:#Cover&section-id={third-quarter}{1}{B0}&page-id={third-cover}{1}{B0}&end";
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        NextQuarterLinkWriter writer = Writer(app);
+        NextQuarterLinkResult first = writer.Link(previous.Folder, Next, CoverHref);
+        XElement link = previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId).Element;
+        XElement run = link.Descendants(One + "T").Single();
+        run.ReplaceNodes(new XCData(run.Value + " (after the Q4 retro)"));
+        app.UpdatePageContent(OneNoteXml.Serialize(new XElement(One + "Page", new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName), new XAttribute("ID", previous.PageId), link)), DateTime.MinValue);
+        NextQuarterLinkResult second = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+        second.Outcome.Should().Be(NextQuarterLinkOutcome.Added, second.Warning);
+        OutlineInfo edited = previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId);
+
+        // The rebuild: the state file records the edited outline as nextQuarter again.
+        Sidecar sidecar = previous.Sidecar();
+        SidecarPage review = sidecar.Pages[PageKey.QuarterlyReview.Value];
+        Dictionary<string, string> rebuilt = new(review.Anchors, StringComparer.Ordinal) { [NextQuarterLinkWriter.AnchorId] = first.ObjectId! };
+        new SidecarStore().Save(previous.SidecarPath, sidecar with
+        {
+            Pages = new Dictionary<string, SidecarPage>(sidecar.Pages, StringComparer.Ordinal) { [PageKey.QuarterlyReview.Value] = review with { Anchors = rebuilt } },
+        });
+        int outlines = previous.Read(app).Outlines.Count;
+
+        NextQuarterLinkResult third = writer.Link(previous.Folder, Next with { Id = "{nb:third}{1}{B0}" }, thirdHref);
+
+        third.Outcome.Should().Be(NextQuarterLinkOutcome.Updated, third.Warning);
+        third.Warning.Should().BeNull();
+        third.ObjectId.Should().Be(second.ObjectId, "the tool's fresh link below the edited outline is the one updated");
+        PageXml page = previous.Read(app);
+        page.Outlines.Should().HaveCount(outlines, "nothing is added");
+        page.Outlines.Single(o => o.ObjectId == first.ObjectId).TextRuns.Select(r => r.Html).Should().Equal(edited.TextRuns.Select(r => r.Html), "the edited outline is left exactly as it is");
+        OutlineInfo fresh = page.Outlines.Single(o => o.ObjectId == second.ObjectId);
+        fresh.PlainText.Should().Be(LinkText);
+        fresh.TextRuns.Single().Html.Should().Contain(WebUtility.HtmlEncode(thirdHref)).And.NotContain(WebUtility.HtmlEncode(OtherCoverHref));
+        previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId].Should().Be(second.ObjectId, "the fresh link is recorded again");
+    }
+
     /// <summary>Replaces the text of the user's "Q4 went well" outline, sending that outline alone as OneNote's own editor does.</summary>
     private static void EditMine(FakeOneNoteApp app, PreviousNotebook previous, string text)
     {
