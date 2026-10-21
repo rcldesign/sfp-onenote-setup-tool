@@ -118,6 +118,30 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Whether the window may close once <paramref name="prepare"/> (a completed <see cref="PrepareToCloseAsync"/>) has
+    /// finished, and the notice to show. A close preparation that failed must neither crash the app nor keep the window
+    /// open for good, so it allows the close and <paramref name="notice"/> says what went wrong (the fault is observed).
+    /// </summary>
+    public static bool MayClose(Task<bool> prepare, out string? notice)
+    {
+        ArgumentNullException.ThrowIfNull(prepare);
+        if (!prepare.IsCompleted)
+        {
+            throw new InvalidOperationException("The close preparation has not finished yet.");
+        }
+
+        if (prepare.IsCompletedSuccessfully)
+        {
+            notice = null;
+            return prepare.Result;
+        }
+
+        string reason = prepare.Exception?.GetBaseException().Message ?? "it was cancelled";
+        notice = "The runs could not be stopped cleanly before closing: " + reason;
+        return true;
+    }
+
     public void Dispose()
     {
         Generate.InputChanged -= OnGenerateInputChanged;

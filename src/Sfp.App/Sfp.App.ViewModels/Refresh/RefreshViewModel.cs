@@ -120,6 +120,10 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string? _inkNotice;
 
+    /// <summary>The one line shown when the run's log could not be started anywhere, so the run has no log file; else null.</summary>
+    [ObservableProperty]
+    private string? _logNotice;
+
     [ObservableProperty]
     private string? _changesHeading;
 
@@ -354,6 +358,10 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
 
     private async Task RunCoreAsync(RefreshRequest request, bool dryRun, KnownNotebookItem notebook)
     {
+        // Before the run counts as busy, and never throwing: a log folder that cannot be created must not leave the tab
+        // busy for good. It falls back to the temp folder, then to no log file with a one-line notice.
+        using IRunLog log = _logs.StartOrFallBack("refresh", out string? logNotice);
+        LogNotice = logNotice;
         IsBusy = true;
         _cancelRequested = false;
         _pagesWrittenSeen = 0;
@@ -368,7 +376,6 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         _cts?.Dispose();
         _cts = new CancellationTokenSource();
         CancellationToken token = _cts.Token;
-        using IRunLog log = _logs.Start("refresh");
         RefreshResult result;
         try
         {
@@ -572,7 +579,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
 
         if (!result.Success)
         {
-            ErrorText = (result.Error ?? "Refresh failed.") + " Log: " + logPath;
+            ErrorText = (result.Error ?? "Refresh failed.") + (string.IsNullOrEmpty(logPath) ? "" : " Log: " + logPath);
         }
 
         ProgressText = result.Success

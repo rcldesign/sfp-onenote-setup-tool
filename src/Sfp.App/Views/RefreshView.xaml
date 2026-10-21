@@ -43,6 +43,7 @@
 
       <TextBlock Style="{StaticResource MessageText}" Text="{Binding ProgressText}" FontWeight="SemiBold" Margin="0,8,0,0"
                  AutomationProperties.Name="Refresh progress" />
+      <TextBlock Style="{StaticResource WarningText}" Text="{Binding LogNotice}" AutomationProperties.Name="Run log notice" />
       <TextBlock Style="{StaticResource ErrorText}" Text="{Binding ErrorText}" />
       <TextBlock Style="{StaticResource MessageText}" Text="{Binding CancelledText}" AutomationProperties.Name="Cancelled refresh" />
 

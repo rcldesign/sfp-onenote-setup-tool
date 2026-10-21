@@ -128,6 +128,10 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string? _actionMessage;
 
+    /// <summary>The one line shown when the run's log could not be started anywhere, so the run has no log file; else null.</summary>
+    [ObservableProperty]
+    private string? _logNotice;
+
     public GenerateRunViewModel(
         IRunLogFactory logs,
         GenerateOrchestratorFactory orchestrators,
@@ -220,6 +224,11 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     private async Task RunAsync(GenerateRequest request)
     {
         ResetViews();
+
+        // Before the run counts as running, and never throwing: a log folder that cannot be created must not leave the
+        // tab locked. It falls back to the temp folder, then to no log file with a one-line notice.
+        using IRunLog log = _logs.StartOrFallBack("generate", out string? logNotice);
+        LogNotice = logNotice;
         IsRunning = true;
         IsIndeterminate = true;
         PhaseText = "Starting";
@@ -227,7 +236,6 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         _cts = new CancellationTokenSource();
         CancellationToken token = _cts.Token;
 
-        using IRunLog log = _logs.Start("generate");
         GenerateResult result;
         try
         {
@@ -382,6 +390,7 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         FailureText = null;
         LogPath = null;
         ActionMessage = null;
+        LogNotice = null;
         Current = 0;
         Total = 0;
         Fraction = 0;
