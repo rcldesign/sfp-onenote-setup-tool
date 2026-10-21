@@ -474,6 +474,85 @@ public class NextQuarterLinkWriterTests
         LinkOutlines(page).Should().BeEmpty();
     }
 
+    /// <summary>
+    /// Round 4 onenote-3: a picture, attached file, media file or content from a later OneNote version that the user put
+    /// on the page itself (outside any outline, the way OneNote inserts a picture on empty page space) over the Next
+    /// quarter slot is the user's content: no link is written over it, and the warning names it.
+    /// </summary>
+    [Theory]
+    [InlineData("Image", "a picture")]
+    [InlineData("InsertedFile", "an attached file")]
+    [InlineData("MediaFile", "a media file")]
+    [InlineData("FutureObject", "an object")]
+    public void A_picture_file_or_other_object_on_the_page_over_the_slot_is_left_alone_and_reported(string kind, string named)
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        FixedAnchor slot = M.Links.NextQuarter;
+        Send(app, previous, PageObject(kind, slot.X - 10, slot.Y + M.OneNote.TitleOffsetPt - 10, 220, 140));
+        previous.Read(app).PageObjects.Should().ContainSingle().Which.Kind.Should().Be(kind);
+        int writes = app.CallsOf("UpdatePageContent").Count;
+
+        NextQuarterLinkResult result = Writer(app).Link(previous.Folder, Next, CoverHref);
+
+        result.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
+        result.Warning.Should().Be("The Next quarter link was not written to the previous notebook " + previous.Folder + ": something that is not the tool's sits where the link goes (" + named + ").");
+        app.CallsOf("UpdatePageContent").Should().HaveCount(writes, "nothing is written over it");
+        LinkOutlines(previous.Read(app)).Should().BeEmpty();
+        previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors.Should().NotContainKey(NextQuarterLinkWriter.AnchorId);
+    }
+
+    /// <summary>
+    /// Round 4 onenote-3: below a link outline the user edited, a picture the user put on the page where the fresh link
+    /// would go is the user's content too: the edited outline is kept, nothing is written, and the warning names it.
+    /// </summary>
+    [Fact]
+    public void A_picture_on_the_page_below_an_edited_link_outline_is_left_alone_and_no_fresh_link_is_written()
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        NextQuarterLinkWriter writer = Writer(app);
+        NextQuarterLinkResult first = writer.Link(previous.Folder, Next, CoverHref);
+        OutlineInfo link = previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId);
+        XElement edited = new(link.Element);
+        edited.Element(One + "OEChildren")!.AddFirst(new XElement(One + "OE", new XElement(One + "T", new XCData("Read the Q4 retro notes first"))));
+        Send(app, previous, edited, PageObject("Image", link.X + 5, link.Y + link.Height + 2, 180, 120));
+        int writes = app.CallsOf("UpdatePageContent").Count;
+
+        NextQuarterLinkResult second = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+
+        second.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
+        second.Warning.Should().Be("The Next quarter link was not written to the previous notebook " + previous.Folder
+            + ": its link outline was edited in OneNote and is kept as it is, and something that is not the tool's sits below it where a new link would go (a picture).");
+        app.CallsOf("UpdatePageContent").Should().HaveCount(writes, "nothing is written over the picture");
+        PageXml page = previous.Read(app);
+        page.Outlines.Single(o => o.ObjectId == first.ObjectId).PlainText.Should().Be("Read the Q4 retro notes first " + LinkText);
+        LinkOutlines(page).Should().BeEmpty("no fresh link outline was added");
+        previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId].Should().Be(first.ObjectId, "the state file is left as it was");
+    }
+
+    /// <summary>Sends <paramref name="elements"/> to the review page, as OneNote's own editor does with what the user changed.</summary>
+    private static void Send(FakeOneNoteApp app, PreviousNotebook previous, params XElement[] elements) =>
+        app.UpdatePageContent(OneNoteXml.Serialize(new XElement(One + "Page", new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName), new XAttribute("ID", previous.PageId), elements)), DateTime.MinValue);
+
+    /// <summary>A picture, file, media file or later-version object placed on the page itself, outside any outline.</summary>
+    private static XElement PageObject(string kind, double x, double y, double width, double height)
+    {
+        XElement element = new(One + kind, OneNoteXml.Position(One, x, y, 3), OneNoteXml.Size(One, width, height, true));
+        switch (kind)
+        {
+            case "Image":
+                element.Add(new XAttribute("format", "png"), new XElement(One + "Data", Convert.ToBase64String(MonJan4.Png)));
+                break;
+            case "InsertedFile":
+            case "MediaFile":
+                element.Add(new XAttribute("pathSource", @"C:\Users\me\Documents\Q4 retro"), new XAttribute("preferredName", "Q4 retro"));
+                break;
+        }
+
+        return element;
+    }
+
     [Fact]
     public void The_link_goes_over_the_slot_of_a_sheet_placed_without_a_title_and_at_another_scale()
     {

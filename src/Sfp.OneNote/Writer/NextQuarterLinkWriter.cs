@@ -81,7 +81,8 @@ public interface INextQuarterLinkWriter
 /// typed into, drew in or put something in is kept as it is, and a fresh link outline goes below it (recorded in its
 /// place, with a warning), unless the tool's own link from an earlier run already sits there unrecorded (a rebuilt state
 /// file recorded the edited outline instead): that one is updated in place and recorded. Anything else overlapping the
-/// slot (the user's text or ink) is left alone and the link is not written. When the notebook is not open in OneNote, or the page ID no longer resolves, the notebook is opened from its
+/// slot or that spot (the user's text, ink, or a picture, file or other object placed on the page) is left alone and the
+/// link is not written. When the notebook is not open in OneNote, or the page ID no longer resolves, the notebook is opened from its
 /// folder once (or, when that folder is no longer on disk, from the location its state file records) and the page is
 /// tried again. Anchors are placed relative to the sheet image as it sits on the page, so a hidden-title or scaled
 /// notebook is linked correctly. The previous notebook's run lock (<see cref="RefreshLock"/>) is held from the read of
@@ -605,7 +606,11 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         };
     }
 
-    /// <summary>Something not owned by the tool (an outline or page-level ink) that overlaps the slot, described for the warning, or null.</summary>
+    /// <summary>
+    /// Something not owned by the tool that overlaps the slot, described for the warning, or null: an outline, page-level
+    /// ink, or a picture, attached file, media file or content from a later OneNote version placed on the page outside any
+    /// outline (<see cref="PageXml.PageObjects"/>), the objects Refresh's slot inspection counts as the user's.
+    /// </summary>
     private static string? Blocker(PageXml page, RectPt slot, IEnumerable<string> ownedIds)
     {
         HashSet<string> owned = ownedIds.ToHashSet(StringComparer.Ordinal);
@@ -626,8 +631,23 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
             return "text '" + (text.Length > max ? text[..max].TrimEnd() + "..." : text).Replace('\n', ' ') + "'";
         }
 
-        return page.InkDrawings().Any(d => d.OutlineObjectId is null && d.Bounds is RectPt bounds && Overlaps(bounds, slot)) ? "ink" : null;
+        if (page.InkDrawings().Any(d => d.OutlineObjectId is null && d.Bounds is RectPt bounds && Overlaps(bounds, slot)))
+        {
+            return "ink";
+        }
+
+        PageObjectInfo? item = page.PageObjects.FirstOrDefault(o => !owned.Contains(o.ObjectId) && Overlaps(o.Rect, slot));
+        return item is null ? null : Describe(item);
     }
+
+    /// <summary>A page object as the warning names it (the words Refresh's slot inspection uses).</summary>
+    private static string Describe(PageObjectInfo item) => item.Kind switch
+    {
+        "Image" => "a picture",
+        "InsertedFile" => "an attached file",
+        "MediaFile" => "a media file",
+        _ => "an object",
+    };
 
     /// <summary>True when an object overlaps the slot; an object without a reported size counts when its position lies in the slot (with the match tolerance).</summary>
     private static bool Overlaps(RectPt objectRect, RectPt slot)
