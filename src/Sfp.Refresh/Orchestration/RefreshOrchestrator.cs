@@ -54,10 +54,16 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     public const string ConflictReason = "The page changed while Refresh was writing it (twice in a row); nothing was written to it and it will be tried again on the next run.";
 
     /// <summary>
+    /// Error of a run refused because another run of the same notebook holds the lock beside its sidecar ({0}: the
+    /// notebook, {1}: the run that holds it); exit 5, and the failure streak is left alone.
+    /// </summary>
+    public const string AlreadyRunningFormat = "Another Refresh of '{0}' is running ({1}); this run was not started. Try again when it has finished.";
+
+    /// <summary>
     /// Error of a run whose end-of-run sidecar save failed on every attempt ({0}: the sidecar path, {1}: the attempts,
     /// {2}: the last error); the run fails (exit 5) and the next run re-adopts the objects it wrote.
     /// </summary>
-    public const string SidecarSaveFailedFormat ="The sidecar {0} could not be saved after {1} attempts ({2}). What this run wrote is on the pages; the next run re-adopts those objects.";
+    public const string SidecarSaveFailedFormat = "The sidecar {0} could not be saved after {1} attempts ({2}). What this run wrote is on the pages; the next run re-adopts those objects.";
 
     /// <summary>How many times the end-of-run sidecar save is tried before the run reports it failed.</summary>
     public const int SidecarSaveAttempts = 3;
@@ -85,9 +91,17 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         ArgumentNullException.ThrowIfNull(request);
         Stopwatch clock = Stopwatch.StartNew();
         RunState state = new();
-        RefreshResult result = RunGuarded(request, progress, cancellationToken, clock, state);
-        TrackStreak(request, state, result);
-        return result;
+        try
+        {
+            RefreshResult result = RunGuarded(request, progress, cancellationToken, clock, state);
+            TrackStreak(request, state, result);
+            return result;
+        }
+        finally
+        {
+            // Held from the moment the sidecar's path is known until the streak beside it is updated.
+            state.Lock?.Dispose();
+        }
     }
 
     private RefreshResult RunGuarded(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken, Stopwatch clock, RunState state)
@@ -136,6 +150,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
 
         state.SidecarPath = opened.SidecarPath;
+        state.Lock = RefreshLock.TryAcquire(opened.SidecarPath, services.Clock(), services.Log, out string? holder);
+        if (state.Lock is null && holder is not null)
+        {
+            state.Refused = true;
+            services.Log.Warning("Refresh of {Name} not started: {Holder} holds the lock beside its sidecar", request.NotebookName, holder);
+            return Fail(WriteFailureExitCode, string.Format(CultureInfo.InvariantCulture, AlreadyRunningFormat, request.NotebookName, holder), clock);
+        }
 
         progress?.Report("Checking the sidecar");
         SidecarRecovery recovery = new(services.App, manifest, services.Dates, services.Plans, services.Log);
@@ -780,12 +801,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// The PRD's "three consecutive failures raise a Windows toast", updated once per real run from how it ended: a run
     /// that succeeded clears the streak; a run whose every Setup calendar source failed (exit 6) or that OneNote failed
     /// (exit 3 or 5) adds one, and from the third in a row on each such run raises the toast. Dry runs, cancelled runs, a
-    /// notebook that was not found (exit 2) and runs whose sidecar path never became known leave the streak alone. The
+    /// notebook that was not found (exit 2), a run refused because another run of the notebook holds its lock, and runs
+    /// whose sidecar path never became known leave the streak alone. The
     /// counter file lives beside the sidecar; failing to update it is logged, never fatal.
     /// </summary>
     private void TrackStreak(RefreshRequest request, RunState state, RefreshResult result)
     {
-        if (request.DryRun || state.Cancelled || state.SidecarPath is null)
+        if (request.DryRun || state.Cancelled || state.Refused || state.SidecarPath is null)
         {
             return;
         }
@@ -851,6 +873,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         public CalendarFetchResult? SetupFetch { get; set; }
 
         public bool Cancelled { get; set; }
+
+        /// <summary>The lock beside the sidecar this run holds, released when the run has ended.</summary>
+        public RefreshLock? Lock { get; set; }
+
+        /// <summary>True when another run of the notebook held the lock, so this one did not start.</summary>
+        public bool Refused { get; set; }
     }
 
     private sealed record WriteOutcome(
