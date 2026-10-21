@@ -70,8 +70,9 @@ public interface INextQuarterLinkWriter
 /// <summary>
 /// The production <see cref="INextQuarterLinkWriter"/>. Reads the previous notebook's state file, finds its quarterly
 /// review page ("review:quarter"), reads the page without binary data, and inserts one anchor outline at the manifest's
-/// links.nextQuarter geometry (text from its textFormat, the link to the new cover) through UpdatePageContent with the
-/// page's existing XML, so nothing else on the page changes. The page is read again to learn the outline's object ID,
+/// links.nextQuarter geometry (text from its textFormat, the link to the new cover) through UpdatePageContent with that
+/// outline alone inside the page element: UpdatePageContent never removes what the XML leaves out, so nothing else on
+/// the page changes, not even an edit made after the page was read. The page is read again to learn the outline's object ID,
 /// which is recorded under anchors["nextQuarter"] in the previous state file. A later run finds that outline by its ID
 /// (or, when an earlier run wrote it but could not record it, by its exact position and text) and updates its text and
 /// target in place instead of adding a second one. Anything else overlapping the slot (the user's text or ink) is left
@@ -192,7 +193,7 @@ public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
             : root.Elements(one + "Outline").FirstOrDefault(o => string.Equals((string?)o.Attribute("objectID"), existingId, StringComparison.Ordinal));
         if (existing is not null)
         {
-            NextQuarterLinkResult updated = UpdateOwned(root, one, existing, html, name, existingId!);
+            NextQuarterLinkResult updated = UpdateOwned(review.PageId, one, existing, html, name, existingId!);
             return recordedId is not null ? updated : Record(updated, previous, review, sidecarPath, name, existingId!);
         }
 
@@ -203,8 +204,7 @@ public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
         }
 
         HashSet<string> before = page.Outlines.Select(o => o.ObjectId).Where(objectId => objectId.Length > 0).ToHashSet(StringComparer.Ordinal);
-        root.Add(outline);
-        _app.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
+        _app.UpdatePageContent(OneNoteXml.Serialize(LinkPage(review.PageId, outline)), DateTime.MinValue);
         _log.Information("Next quarter link added to the quarterly review of {Name} ({PageId})", name, review.PageId);
 
         PageXml reread = PageXmlParser.Parse(_app.GetPageContent(review.PageId, PageInfo.Basic));
@@ -259,8 +259,22 @@ public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
         return matches.Count == 1 ? matches[0] : null;
     }
 
-    /// <summary>The link an earlier run added: its text and target are replaced in place (it stays where it is, even if the user moved it).</summary>
-    private NextQuarterLinkResult UpdateOwned(XElement root, XNamespace one, XElement owned, string html, string name, string ownedId)
+    /// <summary>
+    /// The XML UpdatePageContent takes to add or update the link alone: the page, by its ID, holding that one outline.
+    /// UpdatePageContent never removes an object the XML leaves out, so the rest of the page stays as OneNote has it,
+    /// including anything the user changed after the page was read.
+    /// </summary>
+    private static XElement LinkPage(string pageId, XElement outline)
+    {
+        XNamespace one = outline.Name.Namespace;
+        return new XElement(one + "Page", new XAttribute(XNamespace.Xmlns + OneNoteXml.Prefix, one.NamespaceName), new XAttribute("ID", pageId), outline);
+    }
+
+    /// <summary>
+    /// The link an earlier run added: its text and target are replaced in place (it stays where it is, even if the user
+    /// moved it). Only that outline is sent, under its object ID.
+    /// </summary>
+    private NextQuarterLinkResult UpdateOwned(string pageId, XNamespace one, XElement owned, string html, string name, string ownedId)
     {
         XElement? t = owned.Descendants(one + "T").FirstOrDefault();
         if (t is not null && string.Equals(t.Value, html, StringComparison.Ordinal))
@@ -289,7 +303,7 @@ public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
             oe.Add(new XElement(one + "T", new XCData(html)));
         }
 
-        _app.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
+        _app.UpdatePageContent(OneNoteXml.Serialize(LinkPage(pageId, owned)), DateTime.MinValue);
         _log.Information("Next quarter link on the quarterly review of {Name} updated in place ({ObjectId})", name, ownedId);
         return new NextQuarterLinkResult { Outcome = NextQuarterLinkOutcome.Updated, PreviousNotebook = name, ObjectId = ownedId };
     }

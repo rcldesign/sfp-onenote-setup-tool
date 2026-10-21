@@ -43,6 +43,12 @@ public class NextQuarterLinkWriterTests
         PreviousNotebook previous = Previous(app);
         PageXml before = previous.Read(app);
         int writes = app.CallsOf("UpdatePageContent").Count;
+        List<string> sent = new();
+        app.UpdatePageContentFailure = xml =>
+        {
+            sent.Add(xml);
+            return null;
+        };
 
         NextQuarterLinkResult result = Writer(app).Link(previous.Folder, Next, CoverHref);
 
@@ -51,7 +57,11 @@ public class NextQuarterLinkWriterTests
         result.Warning.Should().BeNull();
         result.PreviousNotebook.Should().Be(PreviousNotebook.Name);
         result.Summary.Should().Be("Next quarter link added to the quarterly review of SFP Q4 2026.");
-        app.CallsOf("UpdatePageContent").Should().HaveCount(writes + 1, "one UpdatePageContent carries the page with the new outline");
+        app.CallsOf("UpdatePageContent").Should().HaveCount(writes + 1, "one UpdatePageContent carries the new outline");
+        XElement update = XElement.Parse(sent.Should().ContainSingle().Subject);
+        update.Attribute("ID")!.Value.Should().Be(previous.PageId);
+        update.Elements().Should().ContainSingle("only the link outline is sent; OneNote keeps everything the XML leaves out")
+            .Which.Name.Should().Be(One + "Outline");
         OpenCalls(app).Should().Be(0, "an open notebook is not opened again");
 
         PageXml after = previous.Read(app);
@@ -104,6 +114,45 @@ public class NextQuarterLinkWriterTests
         third.Summary.Should().Contain("already points to this notebook");
         app.CallsOf("UpdatePageContent").Should().HaveCount(writes, "a link that already says the same is not sent again");
         LinkOutlines(previous.Read(app)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public void An_edit_the_user_makes_between_the_read_and_the_write_survives_the_add_and_the_update()
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        XElement mine = new(
+            One + "Outline",
+            OneNoteXml.Position(One, 120, 520, 2),
+            OneNoteXml.Size(One, 300, 13, false),
+            new XElement(One + "OEChildren", new XElement(One + "OE", new XElement(One + "T", new XCData("Q4 went well")))));
+        app.UpdatePageContent(OneNoteXml.Serialize(new XElement(One + "Page", new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName), new XAttribute("ID", previous.PageId), mine)), DateTime.MinValue);
+        NextQuarterLinkWriter writer = Writer(app);
+
+        // The user's outline changes after the writer has read the page and before its write arrives (an iPad edit synced in).
+        app.BeforeNextPageWrite = _ => EditMine(app, previous, "Q4 went well; hired two PMs and shipped the connector");
+        NextQuarterLinkResult added = writer.Link(previous.Folder, Next, CoverHref);
+
+        added.Outcome.Should().Be(NextQuarterLinkOutcome.Added, added.Warning);
+        PageXml page = previous.Read(app);
+        page.Outlines.Select(o => o.PlainText).Should().Contain("Q4 went well; hired two PMs and shipped the connector").And.NotContain("Q4 went well");
+        LinkOutlines(page).Should().ContainSingle();
+
+        app.BeforeNextPageWrite = _ => EditMine(app, previous, "Q4 went well; the connector shipped on time");
+        NextQuarterLinkResult updated = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+
+        updated.Outcome.Should().Be(NextQuarterLinkOutcome.Updated, updated.Warning);
+        page = previous.Read(app);
+        page.Outlines.Select(o => o.PlainText).Should().Contain("Q4 went well; the connector shipped on time");
+        LinkOutlines(page).Should().ContainSingle().Which.TextRuns.Single().Html.Should().Contain(WebUtility.HtmlEncode(OtherCoverHref));
+    }
+
+    /// <summary>Replaces the text of the user's "Q4 went well" outline, sending that outline alone as OneNote's own editor does.</summary>
+    private static void EditMine(FakeOneNoteApp app, PreviousNotebook previous, string text)
+    {
+        XElement outline = previous.Read(app).Outlines.Single(o => o.PlainText.StartsWith("Q4 went well", StringComparison.Ordinal)).Element;
+        outline.Descendants(One + "T").Single().ReplaceNodes(new XCData(text));
+        app.UpdatePageContent(OneNoteXml.Serialize(new XElement(One + "Page", new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName), new XAttribute("ID", previous.PageId), outline)), DateTime.MinValue);
     }
 
     [Fact]
