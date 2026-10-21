@@ -671,8 +671,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         "Some calendar sources failed; every event line already on the pages was kept, and new events were added only where a slot had room beside them.";
 
     /// <summary>
-    /// A Remove, or an Update that loses one of the old lines: what a failed source must never cause. The placement keeps
-    /// every old line during a partial failure, so this only guards that rule.
+    /// A Remove, or an Update that loses one of the old lines (compared as the page reads them back): what a failed
+    /// source must never cause. The placement keeps every old line during a partial failure, so this only guards that rule.
     /// </summary>
     private static bool DropsLines(PlannedChange change)
     {
@@ -686,8 +686,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             return false;
         }
 
-        List<string> remaining = change.NewText.Split('\n').ToList();
-        return !change.OldText.Split('\n').All(remaining.Remove);
+        List<string> remaining = change.NewText.Split('\n').Select(CalendarDiff.Comparable).ToList();
+        return !change.OldText.Split('\n').Select(CalendarDiff.Comparable).All(remaining.Remove);
     }
 
     /// <summary>

@@ -315,13 +315,14 @@ public sealed class PlacementEngine
             : null;
     }
 
-    /// <summary>How often each line occurs.</summary>
+    /// <summary>How often each line occurs, lines compared as the page reads them back (<see cref="CalendarDiff.Comparable"/>).</summary>
     private static Dictionary<string, int> Tally(IEnumerable<string> lines)
     {
         Dictionary<string, int> tally = new(StringComparer.Ordinal);
         foreach (string line in lines)
         {
-            tally[line] = tally.GetValueOrDefault(line) + 1;
+            string key = CalendarDiff.Comparable(line);
+            tally[key] = tally.GetValueOrDefault(key) + 1;
         }
 
         return tally;
@@ -330,12 +331,13 @@ public sealed class PlacementEngine
     /// <summary>Takes one occurrence of <paramref name="line"/> out of <paramref name="tally"/>; false when none is left.</summary>
     private static bool Take(Dictionary<string, int> tally, string line)
     {
-        if (!tally.TryGetValue(line, out int count) || count == 0)
+        string key = CalendarDiff.Comparable(line);
+        if (!tally.TryGetValue(key, out int count) || count == 0)
         {
             return false;
         }
 
-        tally[line] = count - 1;
+        tally[key] = count - 1;
         return true;
     }
 
@@ -368,7 +370,7 @@ public sealed class PlacementEngine
             return text;
         }
 
-        for (int length = text.Length - 1; length > 0; length--)
+        foreach (int length in TextCut.PrefixLengths(text))
         {
             string candidate = text[..length].TrimEnd() + options.Ellipsis;
             if (measure(candidate, sizePt) <= widthPt)
@@ -389,7 +391,7 @@ public sealed class PlacementEngine
             return full;
         }
 
-        for (int length = title.Length - 1; length > 0; length--)
+        foreach (int length in TextCut.PrefixLengths(title))
         {
             string candidate = prefix + title[..length].TrimEnd() + options.Ellipsis;
             if (measure(candidate, sizePt) <= widthPt)
