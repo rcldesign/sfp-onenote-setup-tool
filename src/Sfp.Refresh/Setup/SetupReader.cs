@@ -173,7 +173,11 @@ public sealed partial class SetupReader : ISetupReader
         return given.Select(list => list.Select(Reading).ToArray()).ToArray();
     }
 
-    /// <summary>Whitespace runs (line breaks included) collapsed to one space and the ends trimmed; null when nothing remains.</summary>
+    /// <summary>
+    /// The text as a page can carry it, every character XML 1.0 does not allow (a C0 control from a numeric character
+    /// reference, say) a space as in an event title (<see cref="CalendarDiff.XmlSafe"/>), then whitespace runs (line
+    /// breaks included) collapsed to one space and the ends trimmed; null when nothing remains.
+    /// </summary>
     public static string? Normalize(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -181,7 +185,7 @@ public sealed partial class SetupReader : ISetupReader
             return null;
         }
 
-        string collapsed = Whitespace().Replace(text, " ").Trim();
+        string collapsed = Whitespace().Replace(CalendarDiff.XmlSafe(text), " ").Trim();
         return collapsed.Length == 0 ? null : collapsed;
     }
 

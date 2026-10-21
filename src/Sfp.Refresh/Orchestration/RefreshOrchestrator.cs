@@ -95,6 +95,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// </summary>
     public const string AllWritesConflictedFormat = "OneNote refused every page write of this run ({0} page(s)): each page was reported as changed since Refresh read it (hrLastModifiedDateDidNotMatch). If nobody was editing those pages, the page time stamp check (dateExpectedLastModified) may be rejecting unchanged pages; see the log.";
 
+    /// <summary>
+    /// Error of a run in which page writes were attempted and every one was refused before reaching OneNote because its
+    /// text holds a character a page cannot carry ({0}: how many pages); such a run fails (exit 5) and counts toward the
+    /// failure streak. A run that wrote any page succeeds with the per-page warnings.
+    /// </summary>
+    public const string AllWritesUnwritableFormat = "Refresh refused every page write of this run ({0} page(s)): the text for each holds a character a OneNote page cannot carry, so nothing was written. The warnings name each slot and character.";
+
     private readonly RefreshServices services;
 
     public RefreshOrchestrator(RefreshServices services)
@@ -495,8 +502,9 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// Writes the unblocked changes page by page (<see cref="WritePage"/>); inked values are skipped unless confirmed; the
     /// first OneNote failure stops the run with the page named. What each page write did is recorded in
     /// <paramref name="state"/> as soon as it is done, so a run that stops part way still saves it. When page writes were
-    /// made and OneNote refused every one of them as a conflict, the run fails (<see cref="AllWritesConflictedFormat"/>):
-    /// a run that only some conflicts held back still succeeds.
+    /// made and OneNote refused every one of them as a conflict, the run fails (<see cref="AllWritesConflictedFormat"/>);
+    /// when no page reached OneNote because every page write was refused as unwritable, it fails too
+    /// (<see cref="AllWritesUnwritableFormat"/>). A run that only some conflicts or unwritable texts held back still succeeds.
     /// </summary>
     private WriteOutcome WriteAll(
         List<PlannedChange> changes,
@@ -516,6 +524,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         int eventsWritten = 0;
         int attempted = 0;
         int conflicted = 0;
+        int unwritable = 0;
         string? error = null;
 
         foreach (IGrouping<PageKey, PlannedChange> group in changes.GroupBy(c => c.Page))
@@ -575,6 +584,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                 services.Log.Error(ex, "Page {Title} was not written", spec.Title);
                 outcome.AddRange(pending.Select(c => c with { Blocked = true, Reason = ex.Message }));
                 warnings.Add($"Page {spec.Title} was not written: {ex.Message}");
+                unwritable++;
                 continue;
             }
             catch (OneNoteException ex)
@@ -607,6 +617,11 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         {
             error = string.Format(CultureInfo.InvariantCulture, AllWritesConflictedFormat, conflicted);
             services.Log.Error("Every page write was refused as a conflict ({Count} pages); check how OneNote compares the dateExpectedLastModified stamp", conflicted);
+        }
+        else if (error is null && attempted == 0 && unwritable > 0)
+        {
+            error = string.Format(CultureInfo.InvariantCulture, AllWritesUnwritableFormat, unwritable);
+            services.Log.Error("Every page write was refused as unwritable ({Count} pages); nothing was written", unwritable);
         }
 
         return new WriteOutcome(outcome, touched, valuesWritten, eventsWritten, warnings, error);
@@ -939,7 +954,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// <summary>
     /// The PRD's "three consecutive failures raise a Windows toast", updated once per real run from how it ended: a run
     /// that succeeded clears the streak; a run whose every Setup calendar source failed (exit 6), that OneNote failed
-    /// (exit 3 or 5), that the opener stopped with a <see cref="NotebookOpener.Problem"/> (exit 2: another notebook of the
+    /// (exit 3 or 5), that wrote no page because every page write was refused as a conflict or as unwritable (exit 5),
+    /// that the opener stopped with a <see cref="NotebookOpener.Problem"/> (exit 2: another notebook of the
     /// same name, an old folder that still holds notebook files while the notebook of that name is at a URL, or the URL
     /// the sidecar records would not open), or that was refused by a stale lock that
     /// could not be taken over (exit 5, <see cref="RefreshLock.IsStuck"/>) adds one, and from the third in a row on each
