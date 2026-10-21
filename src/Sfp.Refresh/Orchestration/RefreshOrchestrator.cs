@@ -131,7 +131,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         cancellationToken.ThrowIfCancellationRequested();
         Quarter quarter = services.Dates.Build(sidecar.Quarter);
-        NotebookPlan plan = services.Plans.Build(manifest, quarter, new GenerateOptions { Start = sidecar.Quarter });
+        NotebookPlan plan = services.Plans.Build(manifest, quarter, SidecarPlanOptions.ToGenerateOptions(sidecar.Quarter, sidecar.PlanOptions));
         PageCache pages = new(services.App, sidecar, services.Log, recovered.Pages);
         Dictionary<string, string> titles = plan.Pages.ToDictionary(p => p.Key.Value, p => p.Title, StringComparer.Ordinal);
 
