@@ -443,7 +443,9 @@ public static class GenerateCommand
                 stderr.WriteLine("Log: " + result.LogPath);
             }
 
-            if (!request.RenderOnly && !string.IsNullOrEmpty(result.OutputPath))
+            // Left for inspection only when no warning says the notebook could not be deleted: a notebook OneNote would not
+            // close, or whose folder could not be deleted, has that warning above, which says what to do with it.
+            if (!request.RenderOnly && !string.IsNullOrEmpty(result.OutputPath) && !result.Warnings.Any(GenerateMessages.IsPartialNotebookNotDeleted))
             {
                 stderr.WriteLine("The partial notebook at " + result.OutputPath + " was left in place for inspection.");
             }

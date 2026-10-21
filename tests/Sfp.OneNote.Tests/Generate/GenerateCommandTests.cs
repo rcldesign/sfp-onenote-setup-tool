@@ -694,6 +694,11 @@ public class GenerateCommandTests
             Occurrences(shown, "CloseNotebook failed").Should().Be(0, "the orchestrator's own line stays in the log file (quiet {0}): {1}", quiet, shown);
             shown.Should().NotMatchRegex(LogLevelToken, "no line of the run log reaches the console (quiet {0})", quiet);
             LogFile(logs).Should().Contain("[WRN] CloseNotebook failed while removing the partial notebook");
+
+            // Fix round 4 cliapp-2: the block used to end "was left in place for inspection", against the warning's own
+            // instruction; with that warning the block ends with the warning and the log line.
+            shown.Should().Contain("Close the notebook in OneNote and delete the folder before running the same command again");
+            shown.Should().NotContain("for inspection", "the warning says what to do with the notebook (quiet {0})", quiet);
         }
     }
 

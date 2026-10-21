@@ -480,7 +480,9 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
     /// "Generate failed: Writing pages, page Mon Jan 4: OneNote rejected the XML for page 'Mon Jan 4' (0x80042001). The
     /// partial notebook at ... is left in place for inspection." The orchestrator's error already names the phase and the
     /// page, so the line shows it as it is behind a neutral prefix, and so does an exception the view model caught itself.
-    /// One trailing period of the error is dropped, so the sentence ends with exactly one.
+    /// One trailing period of the error is dropped, so the sentence ends with exactly one. The inspection sentence is left
+    /// out when the result warns that the partial notebook could not be deleted (OneNote would not close it, or its folder
+    /// could not be deleted): that warning, shown under the line, says what to do with it.
     /// </summary>
     public static string FailureTextFor(GenerateResult result)
     {
@@ -492,7 +494,7 @@ public sealed partial class GenerateRunViewModel : ObservableObject, IDisposable
         }
 
         string text = FailurePrefix + error + ".";
-        if (!string.IsNullOrEmpty(result.OutputPath))
+        if (!string.IsNullOrEmpty(result.OutputPath) && !result.Warnings.Any(GenerateMessages.IsPartialNotebookNotDeleted))
         {
             text += " The partial notebook at " + result.OutputPath + " is left in place for inspection.";
         }
