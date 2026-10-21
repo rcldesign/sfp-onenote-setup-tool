@@ -143,6 +143,18 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         return nb.Id;
     }
 
+    /// <summary>
+    /// Moves a notebook to <paramref name="newPath"/> (a OneDrive URL, say) the way moving it in OneNote does: every ID
+    /// changes (see <see cref="RenumberIds"/>) and GetHierarchy and OpenHierarchy know the notebook by its new path only.
+    /// Returns the notebook's new ID.
+    /// </summary>
+    public string MoveNotebook(string notebookId, string newPath)
+    {
+        string id = RenumberIds(notebookId);
+        notebooks[id].Path = newPath;
+        return id;
+    }
+
     public string GetHierarchy(string? startId, HierarchyScope scope)
     {
         Record("GetHierarchy", (startId ?? "") + ":" + scope);
@@ -603,7 +615,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
         public string Name { get; }
 
-        public string Path { get; }
+        public string Path { get; set; }
 
         public bool Open { get; set; } = true;
 
