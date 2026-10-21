@@ -4,9 +4,10 @@ namespace Sfp.Core.Manifests;
 
 /// <summary>
 /// Structural sanity and token validation run on every loaded manifest: no null where the record needs a value, page
-/// size and count, every color in the form #RRGGBB, the nine-page week run, PDF page numbers inside the document, known page names in every
-/// <c>appliesTo</c> list and page template, the PRD token set in every section name and page title pattern, and a week
-/// token in the name of every section repeated per week. Each
+/// size and count, every color in the form #RRGGBB, the nine-page week run, PDF page numbers inside the document, known
+/// page names in every <c>appliesTo</c> list and page template, every erase rectangle containing the printed extent it
+/// removes, a stacked day inset that leaves room in the day box, the PRD token set in every section name and page title
+/// pattern, and a week token in the name of every section repeated per week. Each
 /// failure is a <see cref="ManifestException"/> naming the manifest and the offending value.
 /// </summary>
 public static class ManifestChecks
@@ -172,6 +173,55 @@ public static class ManifestChecks
                 }
             }
         }
+
+        SlotsSpec slots = m.Slots;
+        CheckEraseCovers(source, "slots.date.slashErase", slots.Date.SlashErase, "slots.date.slashPrinted", slots.Date.SlashPrinted);
+        CheckEraseCovers(source, "slots.weeksRemaining.erase", slots.WeeksRemaining.Erase, "slots.weeksRemaining.printed", slots.WeeksRemaining.Printed);
+        CheckEraseCovers(source, "slots.timeBlocks.erase", slots.TimeBlocks.Erase, "slots.timeBlocks.printed", slots.TimeBlocks.Printed);
+
+        DayGridSlot grid = slots.DayGrid;
+        if (grid.StackedInsetPt < 0 || 2 * grid.StackedInsetPt >= grid.BoxPt)
+        {
+            Fail(source, $"slots.dayGrid.stackedInsetPt must be at least 0 and leave room inside the {Pt(grid.BoxPt)} pt day box (slots.dayGrid.boxPt) on both sides, found {Pt(grid.StackedInsetPt)}.");
+        }
+    }
+
+    /// <summary>
+    /// An erase rectangle must contain the measured extent of the printed art it removes, or a sliver of that art stays
+    /// beside the overlay drawn back into it. Names both keys, both rectangles and every side that falls short.
+    /// </summary>
+    private static void CheckEraseCovers(string source, string eraseKey, RectPt erase, string printedKey, RectPt printed)
+    {
+        if (printed.W <= 0 || printed.H <= 0)
+        {
+            Fail(source, $"{printedKey} {Rect(printed)} must have a positive width and height.");
+        }
+
+        List<string> misses = new();
+        if (erase.X > printed.X)
+        {
+            misses.Add($"its left edge {Pt(erase.X)} is right of {Pt(printed.X)}");
+        }
+
+        if (erase.Y > printed.Y)
+        {
+            misses.Add($"its top {Pt(erase.Y)} is below {Pt(printed.Y)}");
+        }
+
+        if (erase.Right < printed.Right)
+        {
+            misses.Add($"its right edge {Pt(erase.Right)} is left of {Pt(printed.Right)}");
+        }
+
+        if (erase.Bottom < printed.Bottom)
+        {
+            misses.Add($"its bottom {Pt(erase.Bottom)} is above {Pt(printed.Bottom)}");
+        }
+
+        if (misses.Count > 0)
+        {
+            Fail(source, $"{eraseKey} {Rect(erase)} must contain {printedKey} {Rect(printed)}, the printed art it erases: {string.Join("; ", misses)}.");
+        }
     }
 
     /// <summary>
@@ -322,4 +372,6 @@ public static class ManifestChecks
     private static string Int(int value) => value.ToString(CultureInfo.InvariantCulture);
 
     private static string Pt(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private static string Rect(RectPt r) => $"(x {Pt(r.X)}, y {Pt(r.Y)}, w {Pt(r.W)}, h {Pt(r.H)})";
 }

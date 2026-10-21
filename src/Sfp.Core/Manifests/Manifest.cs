@@ -280,6 +280,9 @@ public sealed record DateSlot
     public IReadOnlyList<LinePt> Slashes { get; init; } = Array.Empty<LinePt>();
 
     public required RectPt SlashErase { get; init; }
+
+    /// <summary>Ink bounds of the printed slashes, measured on the PDF; <see cref="SlashErase"/> must contain them.</summary>
+    public required RectPt SlashPrinted { get; init; }
 }
 
 public sealed record Span([property: JsonRequired] double From, [property: JsonRequired] double To);
@@ -289,6 +292,9 @@ public sealed record WeeksRemainingSlot
     public required IReadOnlyList<string> AppliesTo { get; init; }
 
     public required RectPt Erase { get; init; }
+
+    /// <summary>Ink bounds of the printed numbers and disc over every week run, measured on the PDF; <see cref="Erase"/> must contain them.</summary>
+    public required RectPt Printed { get; init; }
 
     public required double SizePt { get; init; }
 
@@ -335,6 +341,12 @@ public sealed record DayGridSlot
     public required IReadOnlyList<double> RowY { get; init; }
 
     public required double BoxPt { get; init; }
+
+    /// <summary>
+    /// Air kept between a stacked sixth-row string ("23 / 30") and each side of its day box: the string is set smaller
+    /// when it is wider than <see cref="BoxPt"/> less this on both sides.
+    /// </summary>
+    public required double StackedInsetPt { get; init; }
 
     /// <summary>Width of one grid cell (the distance between column origins).</summary>
     public required double ColumnPitch { get; init; }
@@ -447,6 +459,9 @@ public sealed record TimeBlocksSlot
     public required IReadOnlyList<string> AppliesTo { get; init; }
 
     public required RectPt Erase { get; init; }
+
+    /// <summary>Ink bounds of the printed hour and half-hour rules and hour labels, measured on the PDF; <see cref="Erase"/> must contain them.</summary>
+    public required RectPt Printed { get; init; }
 
     public required double ColumnX { get; init; }
 
