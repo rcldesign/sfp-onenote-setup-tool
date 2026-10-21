@@ -47,7 +47,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Number of saves that reached the store (for tests).</summary>
     public int SaveCount { get; private set; }
 
-    /// <summary>Loads settings into both tabs and starts saving on change. Call once after construction.</summary>
+    /// <summary>
+    /// Loads settings into both tabs and starts saving on change. Call once after construction. Saving starts only once
+    /// this has succeeded: after a failed start the exit save would write half-loaded defaults over the user's file.
+    /// </summary>
     public void Initialize()
     {
         if (_initialized)
@@ -55,7 +58,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        _initialized = true;
         AppSettings settings;
         string? problem = null;
         try
@@ -69,7 +71,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             problem = "Settings could not be loaded; defaults are used. " + ex.Message;
         }
 
-        Notice = problem;
+        // SettingsStore already replaced null members; any other store gets the same treatment.
+        settings = settings.WithDefaultsForNulls();
+        Notice = StartupNotice(problem, settings);
         _knownFolders.Clear();
         _knownFolders.AddRange(settings.KnownOutputFolders.Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase));
         Generate.LoadFrom(settings);
@@ -77,6 +81,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _lastSavedJson = SettingsStore.Serialize(Current());
         Generate.InputChanged += OnGenerateInputChanged;
         Generate.Run.Completed += OnGenerateCompleted;
+        _initialized = true;
     }
 
     /// <summary>Saves the current values (on exit). Returns false and sets <see cref="Notice"/> when the store refused.</summary>
@@ -115,6 +120,31 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Generate.Run.Completed -= OnGenerateCompleted;
         Generate.Dispose();
         Refresh.Dispose();
+    }
+
+    /// <summary>
+    /// The startup notice: why the defaults were loaded, that the file comes from a newer version, and where the store
+    /// keeps the file before its first save replaces it. Null when there is nothing to say.
+    /// </summary>
+    private string? StartupNotice(string? problem, AppSettings settings)
+    {
+        List<string> parts = new();
+        if (!string.IsNullOrEmpty(problem))
+        {
+            parts.Add(problem);
+        }
+
+        if (settings.SchemaVersion > AppSettings.CurrentSchemaVersion)
+        {
+            parts.Add($"Settings file {_settings.Path} was written by a newer version of SFP to OneNote; the settings this version knows are used.");
+        }
+
+        if (_settings is SettingsStore { BackupPending: true } store)
+        {
+            parts.Add($"The file is copied to {store.BackupPath} before it is overwritten.");
+        }
+
+        return parts.Count == 0 ? null : string.Join(" ", parts);
     }
 
     private void OnGenerateInputChanged(object? sender, EventArgs e) => Save(force: false);
