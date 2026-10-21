@@ -1,3 +1,4 @@
+using Sfp.OneNote;
 using Sfp.Cli;
 using Sfp.Cli.Verbs;
 using Sfp.Core.Manifests;
