@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
 using Serilog;
@@ -75,19 +77,44 @@ public interface INextQuarterLinkWriter
 /// the page changes, not even an edit made after the page was read. The page is read again to learn the outline's object ID,
 /// which is recorded under anchors["nextQuarter"] in the previous state file. A later run finds that outline by its ID
 /// (or, when an earlier run wrote it but could not record it, by its exact position and text) and updates its text and
-/// target in place instead of adding a second one. Anything else overlapping the slot (the user's text or ink) is left
-/// alone and the link is not written. When the notebook is not open in OneNote, or the page ID no longer resolves, the
-/// notebook is opened from its folder once (or, when that folder is no longer on disk, from the location its state file
-/// records) and the page is tried again. Anchors are placed relative to the sheet image as it sits on the page, so a
-/// hidden-title or scaled notebook is linked correctly.
+/// target in place instead of adding a second one, as long as it still holds only the tool's link; an outline the user
+/// typed into, drew in or put something in is kept as it is, and a fresh link outline goes below it (recorded in its
+/// place, with a warning). Anything else overlapping the slot (the user's text or ink) is left alone and the link is not
+/// written. When the notebook is not open in OneNote, or the page ID no longer resolves, the notebook is opened from its
+/// folder once (or, when that folder is no longer on disk, from the location its state file records) and the page is
+/// tried again. Anchors are placed relative to the sheet image as it sits on the page, so a hidden-title or scaled
+/// notebook is linked correctly.
 /// </summary>
-public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
+public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
 {
     /// <summary>The anchor id of the slot, as the renderer reserves it and the state file records it.</summary>
     public const string AnchorId = "nextQuarter";
 
     /// <summary>How far (points, each axis) the written outline may sit from where it was placed and still be recognized on re-read.</summary>
     public const double MatchTolerancePt = 4.0;
+
+    /// <summary>
+    /// The elements a link outline holds as the tool writes it and OneNote returns it (Indent is the content of Indents;
+    /// List, Bullet and Number are a paragraph's list formatting). Any other element inside it means the user put
+    /// something there: ink, a picture, a file, a table, a tag.
+    /// </summary>
+    private static readonly HashSet<string> ToolShapeElements = new(StringComparer.Ordinal)
+    {
+        "Position", "Size", "Meta", "Indents", "Indent", "OEChildren", "OE", "T", "List", "Bullet", "Number",
+    };
+
+    /// <summary>What a link outline an earlier run wrote holds now.</summary>
+    private enum LinkShape
+    {
+        /// <summary>One paragraph holding only the tool's onenote: link with the link text: updated in place.</summary>
+        Tool,
+
+        /// <summary>No text and nothing else (the link's text was deleted): filled in place again.</summary>
+        Empty,
+
+        /// <summary>Anything else (another paragraph, text around the link, ink, a picture): kept as it is.</summary>
+        Edited,
+    }
 
     private readonly IOneNoteApp _app;
     private readonly ISidecarStore _sidecars;
@@ -185,22 +212,38 @@ public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
         RectPt expected = PageXmlParser.Bounds(outline, one) ?? throw new FormatException("The anchor outline builder produced no position.");
 
         // The link an earlier run recorded, else one an earlier run wrote but could not record (exactly where the tool
-        // writes it, with exactly its text): either is updated in place rather than joined by a second one.
+        // writes it, with exactly its text): either is updated in place rather than joined by a second one, while it
+        // still holds only the tool's link. One the user edited is kept as it is and a fresh link goes below it.
         string? recordedId = review.Anchors.TryGetValue(AnchorId, out string? recorded) && page.Outlines.Any(o => !o.IsBackgroundImage && o.ObjectId == recorded) ? recorded : null;
         string? existingId = recordedId ?? Adoptable(page, expected, anchor.Placement.Text, review.Anchors.Values)?.ObjectId;
         XElement? existing = existingId is null
             ? null
             : root.Elements(one + "Outline").FirstOrDefault(o => string.Equals((string?)o.Attribute("objectID"), existingId, StringComparison.Ordinal));
+        string? editedNote = null;
+        IEnumerable<string> ownedIds = review.Anchors.Values;
         if (existing is not null)
         {
-            NextQuarterLinkResult updated = UpdateOwned(review.PageId, one, existing, html, name, existingId!);
-            return recordedId is not null ? updated : Record(updated, previous, review, sidecarPath, name, existingId!);
+            if (Shape(existing, one, anchor.Placement.Text) != LinkShape.Edited)
+            {
+                NextQuarterLinkResult updated = UpdateOwned(review.PageId, one, existing, html, name, existingId!);
+                return recordedId is not null ? updated : Record(updated, previous, review, sidecarPath, name, existingId!);
+            }
+
+            OutlineInfo kept = page.Outlines.First(o => string.Equals(o.ObjectId, existingId, StringComparison.Ordinal));
+            double below = kept.Y + (kept.Height > 0 ? kept.Height : expected.H);
+            outline.Element(one + "Position")!.ReplaceWith(OneNoteXml.Position(one, kept.X, below, 1));
+            expected = PageXmlParser.Bounds(outline, one) ?? throw new FormatException("The anchor outline builder produced no position.");
+            ownedIds = ownedIds.Append(existingId!);
+            editedNote = "The Next quarter link on the quarterly review of " + name + " was edited in OneNote, so it was kept as it is and a new link was added below it.";
+            _log.Information("The Next quarter link outline {ObjectId} on {Name} holds more than the tool's link; it is kept and a new link goes below it", existingId, name);
         }
 
-        string? blocker = Blocker(page, expected, review.Anchors.Values);
+        string? blocker = Blocker(page, expected, ownedIds);
         if (blocker is not null)
         {
-            return NotWritten(given, name, "something that is not the tool's sits where the link goes (" + blocker + ")");
+            return NotWritten(given, name, editedNote is null
+                ? "something that is not the tool's sits where the link goes (" + blocker + ")"
+                : "its link outline was edited in OneNote and is kept as it is, and something that is not the tool's sits below it where a new link would go (" + blocker + ")");
         }
 
         HashSet<string> before = page.Outlines.Select(o => o.ObjectId).Where(objectId => objectId.Length > 0).ToHashSet(StringComparer.Ordinal);
@@ -216,13 +259,56 @@ public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
             {
                 Outcome = NextQuarterLinkOutcome.Added,
                 PreviousNotebook = name,
-                Warning = "The Next quarter link was added to the quarterly review of " + name + " but could not be found again, so its state file does not record it.",
+                Warning = Join(editedNote, "The Next quarter link was added to the quarterly review of " + name + " but could not be found again, so its state file does not record it."),
             };
         }
 
-        NextQuarterLinkResult added = new() { Outcome = NextQuarterLinkOutcome.Added, PreviousNotebook = name, ObjectId = created.ObjectId };
+        NextQuarterLinkResult added = new() { Outcome = NextQuarterLinkOutcome.Added, PreviousNotebook = name, ObjectId = created.ObjectId, Warning = editedNote };
         return Record(added, previous, review, sidecarPath, name, created.ObjectId);
     }
+
+    /// <summary>Two warning sentences as one line; the first may be absent.</summary>
+    private static string Join(string? first, string second) => first is null ? second : first + " " + second;
+
+    /// <summary>
+    /// What the link outline an earlier run wrote holds now. It has the tool's shape when it holds only the elements a
+    /// link outline holds (<see cref="ToolShapeElements"/>) and one paragraph whose only run is one onenote: link with
+    /// the link text and no text around it; it is empty when it holds no text and nothing else; anything else is the
+    /// user's edit.
+    /// </summary>
+    private static LinkShape Shape(XElement outline, XNamespace one, string linkText)
+    {
+        if (outline.Descendants().Any(e => e.Name.Namespace != one || !ToolShapeElements.Contains(e.Name.LocalName))
+            || outline.Descendants(one + "OE").Skip(1).Any())
+        {
+            return LinkShape.Edited;
+        }
+
+        List<XElement> runs = outline.Descendants(one + "T").ToList();
+        if (runs.Count <= 1 && runs.All(t => PageXmlParser.PlainText(t.Value).Length == 0))
+        {
+            return LinkShape.Empty;
+        }
+
+        if (runs.Count != 1)
+        {
+            return LinkShape.Edited;
+        }
+
+        string html = runs[0].Value;
+        string text = linkText.Trim();
+        MatchCollection links = LinkElement().Matches(html);
+        return links.Count == 1
+            && WebUtility.HtmlDecode(links[0].Groups["href"].Value).Trim().StartsWith("onenote:", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(PageXmlParser.PlainText(links[0].Groups["inner"].Value), text, StringComparison.Ordinal)
+            && string.Equals(PageXmlParser.PlainText(html), text, StringComparison.Ordinal)
+            ? LinkShape.Tool
+            : LinkShape.Edited;
+    }
+
+    /// <summary>An a element of a one:T's HTML: its href (double- or single-quoted) and its inner HTML.</summary>
+    [GeneratedRegex(@"<a\b[^>]*?\bhref\s*=\s*(?:""(?<href>[^""]*)""|'(?<href>[^']*)')[^>]*>(?<inner>.*?)</a\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    private static partial Regex LinkElement();
 
     /// <summary>Records the link's object ID under anchors["nextQuarter"] of the quarterly review in the previous state file; a save failure becomes the result's warning.</summary>
     private NextQuarterLinkResult Record(NextQuarterLinkResult result, Sidecar previous, SidecarPage review, string sidecarPath, string name, string objectId)
@@ -239,7 +325,7 @@ public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
             _log.Warning(ex, "The state file {Path} could not be updated with the Next quarter link", sidecarPath);
             return result with
             {
-                Warning = "The Next quarter link is on the quarterly review of " + name + " but its state file " + sidecarPath + " could not be updated: " + ex.Message,
+                Warning = Join(result.Warning, "The Next quarter link is on the quarterly review of " + name + " but its state file " + sidecarPath + " could not be updated: " + ex.Message),
             };
         }
     }
@@ -271,8 +357,9 @@ public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
     }
 
     /// <summary>
-    /// The link an earlier run added: its text and target are replaced in place (it stays where it is, even if the user
-    /// moved it). Only that outline is sent, under its object ID.
+    /// The link an earlier run added, still holding only the tool's link or nothing (<see cref="Shape"/>): its text and
+    /// target are replaced in place (it stays where it is, even if the user moved it). Only that outline is sent, under
+    /// its object ID.
     /// </summary>
     private NextQuarterLinkResult UpdateOwned(string pageId, XNamespace one, XElement owned, string html, string name, string ownedId)
     {

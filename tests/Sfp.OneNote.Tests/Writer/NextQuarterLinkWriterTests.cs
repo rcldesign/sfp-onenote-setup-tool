@@ -147,6 +147,81 @@ public class NextQuarterLinkWriterTests
         LinkOutlines(page).Should().ContainSingle().Which.TextRuns.Single().Html.Should().Contain(WebUtility.HtmlEncode(OtherCoverHref));
     }
 
+    /// <summary>
+    /// onenote-1: a link outline the user typed into (a line above the link, or words after it in the same run) is kept
+    /// exactly as the user has it; the next run adds a fresh link outline below it, records that one and says so.
+    /// </summary>
+    [Theory]
+    [InlineData("a line above the link")]
+    [InlineData("words after the link")]
+    public void A_link_outline_the_user_typed_into_is_kept_and_a_fresh_link_is_added_below_it(string edit)
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        NextQuarterLinkWriter writer = Writer(app);
+        NextQuarterLinkResult first = writer.Link(previous.Folder, Next, CoverHref);
+        XElement link = previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId).Element;
+        if (edit == "a line above the link")
+        {
+            link.Element(One + "OEChildren")!.AddFirst(new XElement(One + "OE", new XElement(One + "T", new XCData("Read the Q4 retro notes first"))));
+        }
+        else
+        {
+            XElement run = link.Descendants(One + "T").Single();
+            run.ReplaceNodes(new XCData(run.Value + " after the Q4 retro"));
+        }
+
+        app.UpdatePageContent(OneNoteXml.Serialize(new XElement(One + "Page", new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName), new XAttribute("ID", previous.PageId), link)), DateTime.MinValue);
+        OutlineInfo edited = previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId);
+
+        NextQuarterLinkResult second = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+
+        second.Outcome.Should().Be(NextQuarterLinkOutcome.Added, second.Warning);
+        second.Warning.Should().Be("The Next quarter link on the quarterly review of SFP Q4 2026 was edited in OneNote, so it was kept as it is and a new link was added below it.");
+        second.ObjectId.Should().NotBe(first.ObjectId);
+        PageXml page = previous.Read(app);
+        OutlineInfo kept = page.Outlines.Single(o => o.ObjectId == first.ObjectId);
+        kept.TextRuns.Select(r => r.Html).Should().Equal(edited.TextRuns.Select(r => r.Html), "the user's outline is left exactly as it is");
+        kept.PlainText.Should().Contain("Q4 retro").And.Contain(LinkText);
+        OutlineInfo fresh = page.Outlines.Single(o => o.ObjectId == second.ObjectId);
+        fresh.PlainText.Should().Be(LinkText);
+        fresh.TextRuns.Single().Html.Should().Contain(WebUtility.HtmlEncode(OtherCoverHref));
+        fresh.X.Should().BeApproximately(kept.X, 0.01);
+        fresh.Y.Should().BeApproximately(kept.Y + kept.Height, 0.01, "the fresh link goes right below the kept outline");
+        previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId].Should().Be(second.ObjectId, "the fresh link is the one the state file records now");
+
+        NextQuarterLinkResult third = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+
+        third.Outcome.Should().Be(NextQuarterLinkOutcome.Unchanged, "the fresh link holds only the tool's link and already says the same");
+        third.Warning.Should().BeNull();
+    }
+
+    [Fact]
+    public void An_edited_link_outline_with_the_users_text_below_it_is_kept_and_nothing_is_written()
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        NextQuarterLinkWriter writer = Writer(app);
+        NextQuarterLinkResult first = writer.Link(previous.Folder, Next, CoverHref);
+        OutlineInfo link = previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId);
+        XElement edited = new(link.Element);
+        edited.Element(One + "OEChildren")!.AddFirst(new XElement(One + "OE", new XElement(One + "T", new XCData("Read the Q4 retro notes first"))));
+        XElement below = new(
+            One + "Outline",
+            OneNoteXml.Position(One, link.X + 10, link.Y + link.Height + 2, 2),
+            OneNoteXml.Size(One, 150, 13, false),
+            new XElement(One + "OEChildren", new XElement(One + "OE", new XElement(One + "T", new XCData("January: hire two PMs")))));
+        app.UpdatePageContent(OneNoteXml.Serialize(new XElement(One + "Page", new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName), new XAttribute("ID", previous.PageId), edited, below)), DateTime.MinValue);
+        int writes = app.CallsOf("UpdatePageContent").Count;
+
+        NextQuarterLinkResult second = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+
+        second.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
+        second.Warning.Should().Contain("its link outline was edited in OneNote and is kept as it is").And.Contain("text 'January: hire two PMs'");
+        app.CallsOf("UpdatePageContent").Should().HaveCount(writes, "nothing is sent");
+        previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId).PlainText.Should().Be("Read the Q4 retro notes first " + LinkText);
+    }
+
     /// <summary>Replaces the text of the user's "Q4 went well" outline, sending that outline alone as OneNote's own editor does.</summary>
     private static void EditMine(FakeOneNoteApp app, PreviousNotebook previous, string text)
     {
