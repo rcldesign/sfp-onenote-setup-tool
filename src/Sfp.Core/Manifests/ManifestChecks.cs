@@ -4,7 +4,7 @@ namespace Sfp.Core.Manifests;
 
 /// <summary>
 /// Structural sanity and token validation run on every loaded manifest: no null where the record needs a value, page
-/// size and count, the nine-page week run, PDF page numbers inside the document, known page names in every
+/// size and count, every color in the form #RRGGBB, the nine-page week run, PDF page numbers inside the document, known page names in every
 /// <c>appliesTo</c> list and page template, the PRD token set in every section name and page title pattern, and a week
 /// token in the name of every section repeated per week. Each
 /// failure is a <see cref="ManifestException"/> naming the manifest and the offending value.
@@ -28,6 +28,7 @@ public static class ManifestChecks
         ArgumentNullException.ThrowIfNull(sourceName);
         ManifestNullChecks.Run(manifest, sourceName);
         CheckPage(manifest, sourceName);
+        CheckColors(manifest, sourceName);
         CheckPageTypes(manifest, sourceName);
         CheckSlots(manifest, sourceName);
         CheckNotebook(manifest, sourceName);
@@ -50,6 +51,42 @@ public static class ManifestChecks
             Fail(source, $"pageCount must be greater than 0, found {m.PageCount.ToString(CultureInfo.InvariantCulture)}.");
         }
     }
+
+    /// <summary>
+    /// Every color is "#RRGGBB": the form the renderer's ColorParser reads (background, ink, dayBox) and OneNote's color
+    /// attribute accepts (section tints, page color). The page color may also be "automatic", OneNote's own color.
+    /// Checked at load so a bad tint fails before a full render instead of at the first section OneNote refuses.
+    /// </summary>
+    private static void CheckColors(Manifest m, string source)
+    {
+        CheckHexColor(source, "colors.background", m.Colors.Background);
+        CheckHexColor(source, "colors.ink", m.Colors.Ink);
+        CheckHexColor(source, "colors.dayBox", m.Colors.DayBox);
+        for (int i = 0; i < m.Colors.SectionTints.Count; i++)
+        {
+            CheckHexColor(source, $"colors.sectionTints[{Int(i)}]", m.Colors.SectionTints[i]);
+        }
+
+        string pageColor = m.OneNote.PageColor;
+        if (!IsHexColor(pageColor) && !string.Equals(pageColor, AutomaticPageColor, StringComparison.Ordinal))
+        {
+            Fail(source, $"onenote.pageColor must be a color in the form #RRGGBB or \"{AutomaticPageColor}\", found '{pageColor}'.");
+        }
+    }
+
+    private const string AutomaticPageColor = "automatic";
+
+    private static void CheckHexColor(string source, string path, string value)
+    {
+        if (!IsHexColor(value))
+        {
+            Fail(source, $"{path} must be a color in the form #RRGGBB, found '{value}'.");
+        }
+    }
+
+    /// <summary>'#' and six hex digits in either case, nothing else (no whitespace, no alpha, no short form).</summary>
+    private static bool IsHexColor(string value) =>
+        value.Length == 7 && value[0] == '#' && value.Skip(1).All(char.IsAsciiHexDigit);
 
     private static void CheckPageTypes(Manifest m, string source)
     {

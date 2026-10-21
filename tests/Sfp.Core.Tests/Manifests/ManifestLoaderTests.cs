@@ -358,6 +358,35 @@ public class ManifestLoaderTests : IDisposable
         act.Should().Throw<ManifestException>().WithMessage("*pageCount*");
     }
 
+    [Theory]
+    [InlineData("{ \"colors\": { \"sectionTints\": [\"#F0E6D8\", \"#E4D6C4\", \"D8C8B2\"] } }", "colors.sectionTints[2] must be a color in the form #RRGGBB, found 'D8C8B2'.")]
+    [InlineData("{ \"colors\": { \"sectionTints\": [\"#F0E6D8FF\"] } }", "colors.sectionTints[0] must be a color in the form #RRGGBB, found '#F0E6D8FF'.")]
+    [InlineData("{ \"colors\": { \"background\": \"#DED4C\" } }", "colors.background must be a color in the form #RRGGBB, found '#DED4C'.")]
+    [InlineData("{ \"colors\": { \"ink\": \"#1E1E2G\" } }", "colors.ink must be a color in the form #RRGGBB, found '#1E1E2G'.")]
+    [InlineData("{ \"colors\": { \"dayBox\": \"#F2E7DD \" } }", "colors.dayBox must be a color in the form #RRGGBB, found '#F2E7DD '.")]
+    [InlineData("{ \"onenote\": { \"pageColor\": \"DED4C8\" } }", "onenote.pageColor must be a color in the form #RRGGBB or \"automatic\", found 'DED4C8'.")]
+    [InlineData("{ \"onenote\": { \"pageColor\": \"Automatic\" } }", "onenote.pageColor must be a color in the form #RRGGBB or \"automatic\", found 'Automatic'.")]
+    public void A_color_not_in_the_form_hash_rrggbb_is_a_load_error_naming_its_path(string userJson, string message)
+    {
+        string user = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, user);
+
+        act.Should().Throw<ManifestException>().WithMessage($"Manifest '*{Path.GetFileName(user)}': {message}");
+    }
+
+    [Theory]
+    [InlineData("{ \"onenote\": { \"pageColor\": \"automatic\" } }")]
+    [InlineData("{ \"colors\": { \"background\": \"#ded4c8\", \"sectionTints\": [\"#f0E6d8\"] }, \"onenote\": { \"pageColor\": \"#dEd4C8\" } }")]
+    public void Hex_digits_in_either_case_and_an_automatic_page_color_load(string userJson)
+    {
+        string user = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, user);
+
+        act.Should().NotThrow();
+    }
+
     [Fact]
     public void Weekly_run_must_list_nine_page_names()
     {
