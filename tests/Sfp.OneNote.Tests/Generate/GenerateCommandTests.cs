@@ -88,6 +88,53 @@ public class GenerateCommandTests
         return (code, stdout.ToString(), stderr.ToString(), canned, seen, logPath);
     }
 
+    /// <summary>Fails its preflight the way <see cref="GenerateOrchestrator"/> does: logs the error, reports the Failed phase and returns the failure.</summary>
+    private sealed class FailingPreflightOrchestrator : IGenerateOrchestrator
+    {
+        private readonly Serilog.ILogger _log;
+        private readonly string _logPath;
+        private readonly string _message;
+
+        public FailingPreflightOrchestrator(Serilog.ILogger log, string logPath, string message)
+        {
+            _log = log;
+            _logPath = logPath;
+            _message = message;
+        }
+
+        public GenerateResult Run(GenerateRequest request, IProgress<GenerateProgress>? progress, CancellationToken cancellationToken)
+        {
+            progress?.Report(new GenerateProgress(GeneratePhase.CheckingOneNote, 0, 0, null));
+            _log.Error("Preflight failed: {Errors}", _message);
+            progress?.Report(new GenerateProgress(GeneratePhase.Failed, 0, 0, _message));
+            return new GenerateResult { Success = false, ExitCode = ExitCodes.OneNoteUnavailable, Phase = GeneratePhase.CheckingOneNote, Error = _message, LogPath = _logPath };
+        }
+    }
+
+    /// <summary>Runs <paramref name="run"/> with both console streams captured, where the run log's console sink writes, and returns what it wrote there.</summary>
+    private static string WithConsole(Action run)
+    {
+        StringWriter console = new();
+        TextWriter originalOut = Console.Out;
+        TextWriter originalError = Console.Error;
+        Console.SetOut(console);
+        Console.SetError(console);
+        try
+        {
+            run();
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+        }
+
+        return console.ToString();
+    }
+
+    private static int Occurrences(string text, string value) =>
+        System.Text.RegularExpressions.Regex.Matches(text, System.Text.RegularExpressions.Regex.Escape(value)).Count;
+
     /// <summary>
     /// Runs a command line through <see cref="Program.Run"/> as the executable does. The verbs and the run log's console
     /// sink write to the console, so both console streams are captured; the run log goes to <paramref name="logDir"/>
@@ -518,9 +565,14 @@ public class GenerateCommandTests
     {
         // The verb prints its own progress and summary; the run log's console sink keeps to warnings and errors so every
         // COM call and rendered page (logged at Information) does not flood the console or repeat the progress lines.
-        RunLog.ConsoleLevel(quiet: true, printsOwnProgress: true).Should().Be(LogEventLevel.Error);
-        RunLog.ConsoleLevel(quiet: false, printsOwnProgress: true).Should().Be(LogEventLevel.Warning);
-        RunLog.ConsoleLevel(quiet: false, printsOwnProgress: false).Should().Be(LogEventLevel.Information);
+        RunLog.ConsoleShows(LogEventLevel.Warning, quiet: false, printsOwnProgress: true).Should().BeTrue();
+        RunLog.ConsoleShows(LogEventLevel.Information, quiet: false, printsOwnProgress: true).Should().BeFalse();
+        RunLog.ConsoleShows(LogEventLevel.Error, quiet: false, printsOwnProgress: true).Should().BeFalse("the verb prints its failures itself");
+        RunLog.ConsoleShows(LogEventLevel.Warning, quiet: true, printsOwnProgress: true).Should().BeFalse();
+        RunLog.ConsoleShows(LogEventLevel.Error, quiet: true, printsOwnProgress: true).Should().BeFalse();
+        RunLog.ConsoleShows(LogEventLevel.Error, quiet: true, printsOwnProgress: false).Should().BeTrue();
+        RunLog.ConsoleShows(LogEventLevel.Warning, quiet: true, printsOwnProgress: false).Should().BeFalse();
+        RunLog.ConsoleShows(LogEventLevel.Information, quiet: false, printsOwnProgress: false).Should().BeTrue();
 
         string info = "information-" + Guid.NewGuid().ToString("N");
         string warning = "warning-" + Guid.NewGuid().ToString("N");
@@ -546,6 +598,76 @@ public class GenerateCommandTests
         }
 
         console.ToString().Should().Contain(warning).And.NotContain(info);
+    }
+
+    [Fact]
+    public void A_failure_the_verb_prints_itself_is_shown_once_and_without_a_stack_trace()
+    {
+        // The run log's console sink used to repeat the verb's own failure block, even with --quiet: generate printed the
+        // OneNote message as a "Failed: ..." progress line, as "[ERR] Preflight failed: ..." and in the block; refresh
+        // printed it, then "[ERR] OneNote is unavailable" and the whole stack trace. The errors now go to the log file
+        // only, a failure is not a progress line, and the console never shows a stack trace.
+        string message = OneNoteUnavailableException.UserMessage;
+        foreach (bool quiet in new[] { false, true })
+        {
+            string generateLogs = Path.Combine(Root, "logs-once-generate-" + quiet);
+            StringWriter generateOut = new();
+            StringWriter generateErr = new();
+            int generateCode = -1;
+            string generateConsole = WithConsole(() => generateCode = GenerateCommand.Run(
+                Args() with { Quiet = quiet }, generateOut, generateErr, (_, log, logPath) => new FailingPreflightOrchestrator(log, logPath, message), generateLogs));
+
+            string refreshLogs = Path.Combine(Root, "logs-once-refresh-" + quiet);
+            StringWriter refreshOut = new();
+            StringWriter refreshErr = new();
+            int refreshCode = -1;
+            string refreshConsole = WithConsole(() => refreshCode = RefreshCommand.Run(
+                new RefreshArgs { Notebook = "SFP Q1 2027", Today = "2027-01-04", Templates = TestPaths.TemplatesDir, Quiet = quiet },
+                refreshOut,
+                refreshErr,
+                (_, _, _, _, _) => throw new OneNoteUnavailableException(message + " Refresh runs on Windows only."),
+                refreshLogs));
+
+            generateCode.Should().Be(ExitCodes.OneNoteUnavailable);
+            refreshCode.Should().Be(ExitCodes.OneNoteUnavailable);
+            string generateAll = generateConsole + generateOut + generateErr;
+            string refreshAll = refreshConsole + refreshOut + refreshErr;
+            Occurrences(generateAll, message).Should().Be(1, "generate shows the message once, in its failure block (quiet {0}): {1}", quiet, generateAll);
+            Occurrences(refreshAll, message).Should().Be(1, "refresh shows the message once (quiet {0}): {1}", quiet, refreshAll);
+            generateErr.ToString().Should().Contain("Error: " + message);
+            refreshErr.ToString().Should().Contain(message);
+            generateAll.Should().NotContain("   at ").And.NotContain("[ERR]");
+            refreshAll.Should().NotContain("   at ").And.NotContain("[ERR]");
+
+            // The log files keep the errors, the refresh one with its exception and stack trace.
+            File.ReadAllText(Directory.GetFiles(generateLogs, "*-generate.log").Should().ContainSingle().Which).Should().Contain("[ERR] Preflight failed: " + message);
+            File.ReadAllText(Directory.GetFiles(refreshLogs, "*-refresh.log").Should().ContainSingle().Which)
+                .Should().Contain("[ERR] OneNote is unavailable").And.Contain(nameof(OneNoteUnavailableException)).And.Contain("   at ");
+        }
+    }
+
+    [SkippableFact]
+    public void Without_onenote_each_verb_prints_the_message_once_and_no_stack_trace()
+    {
+        // The executable's own path, through Program.Run with the production composition: off Windows OneNote is
+        // unavailable, which is the PRD message, printed once, with or without --quiet.
+        Skip.If(OperatingSystem.IsWindows(), "On Windows the production composition starts OneNote.");
+        string logs = Path.Combine(Root, "logs-no-onenote");
+        string[] refresh = { "refresh", "--notebook", "SFP Q1 2027", "--today", "2027-01-04", "--templates", TestPaths.TemplatesDir };
+        string[] generate = { "generate", "--pdf", Pdf, "--start", "2027-01", "--out", Path.Combine(Root, "out"), "--templates", TestPaths.TemplatesDir };
+        foreach (string[] verb in new[] { refresh, generate })
+        {
+            foreach (string[] args in new[] { verb, verb.Append("--quiet").ToArray() })
+            {
+                (int code, string stdout, string stderr) = RunCli(logs, args);
+
+                string shown = stdout + stderr;
+                code.Should().Be(ExitCodes.OneNoteUnavailable, shown);
+                Occurrences(shown, OneNoteUnavailableException.UserMessage).Should().Be(1, "{0} shows the OneNote message once: {1}", string.Join(' ', args), shown);
+                stderr.Should().Contain(OneNoteUnavailableException.UserMessage);
+                shown.Should().NotContain("   at ", "a stack trace belongs in the log file");
+            }
+        }
     }
 
     [Fact]

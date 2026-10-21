@@ -164,7 +164,8 @@ public static class GenerateCommand
         bool renderOnly = !string.IsNullOrWhiteSpace(args.RenderOnly);
         GenerateRequest request = new(options, manifest, templatesDir, renderOnly, renderOnly ? Path.GetFullPath(args.RenderOnly!) : null);
 
-        // The verb prints its own progress and summary, so the log's console sink keeps to warnings and errors.
+        // The verb prints its own progress, summary and failure block, so the log's console sink keeps to warnings; the
+        // errors, which the failure block reports, go to the log file only.
         using RunLog log = RunLog.Start("generate", args.Quiet, logDirectory, printsOwnProgress: true);
         log.Logger.Information("generate --pdf {Pdf} --start {Start} --dpi {Dpi} render-only {RenderOnly}", options.PdfPath, options.Start, options.Dpi, renderOnly);
         IGenerateOrchestrator orchestrator;
@@ -499,7 +500,7 @@ public static class GenerateCommand
     /// <summary>
     /// Prints one line per progress report, in the order the reports arrive, synchronously (reports arrive from render
     /// workers too). The orchestrator reports each page once, from the worker that finished it, so page counts can
-    /// arrive out of order; none is dropped.
+    /// arrive out of order; none is dropped. The Failed report is not printed: the failure block on stderr says it once.
     /// </summary>
     private sealed class ProgressPrinter : IProgress<GenerateProgress>
     {
@@ -515,7 +516,7 @@ public static class GenerateCommand
 
         public void Report(GenerateProgress value)
         {
-            if (_quiet)
+            if (_quiet || value.Phase == GeneratePhase.Failed)
             {
                 return;
             }
