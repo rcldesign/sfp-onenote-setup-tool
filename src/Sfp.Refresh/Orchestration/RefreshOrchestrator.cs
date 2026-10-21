@@ -164,7 +164,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         if (state.Lock is null && holder is not null)
         {
             state.Refused = true;
-            services.Log.Warning("Refresh of {Name} not started: {Holder} holds the lock beside its sidecar", request.NotebookName, holder);
+            services.Log.Information("Refresh of {Name} not started: {Holder} holds the lock beside its sidecar", request.NotebookName, holder);
             return Fail(WriteFailureExitCode, string.Format(CultureInfo.InvariantCulture, AlreadyRunningFormat, request.NotebookName, holder), clock);
         }
 
@@ -569,7 +569,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                 if (conflict && attempt == 1)
                 {
                     // Removals made before the refusal are found gone by the next attempt's re-check.
-                    services.Log.Warning("Page {Title} changed while it was being written; reading it again", spec.Title);
+                    services.Log.Information("Page {Title} changed while it was being written; reading it again", spec.Title);
                     continue;
                 }
 
@@ -581,7 +581,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                     throw;
                 }
 
-                services.Log.Warning(ex, "Page {Title} changed again while it was being written; its changes are left for the next run", spec.Title);
+                services.Log.Information(ex, "Page {Title} changed again while it was being written; its changes are left for the next run", spec.Title);
                 List<PlannedChange> conflicted = settled
                     .Concat(writes.Select(w => removed.Contains(w.Write) ? w.Write.Change : w.Write.Change with { Blocked = true, Reason = ConflictReason }))
                     .ToList();
@@ -905,7 +905,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                 case NotFoundExitCode when state.OpenerStopped:
                     counter.RecordTotalFailure(now, result.Error);
                     counter.Save();
-                    services.Log.Warning("Refresh of {Name} failed ({Streak} runs in a row): {Error}", request.NotebookName, counter.ConsecutiveTotalFailures, result.Error);
+                    services.Log.Information("Refresh of {Name} failed ({Streak} runs in a row): {Error}", request.NotebookName, counter.ConsecutiveTotalFailures, result.Error);
                     if (counter.ShouldToast)
                     {
                         notifier.Notify(RefreshFailureToastTitle, string.Format(

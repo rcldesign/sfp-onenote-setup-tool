@@ -29,7 +29,10 @@ public sealed class RunLog : IDisposable
     /// <summary>Full path of this run's log file.</summary>
     public string Path { get; }
 
-    /// <summary>Default log folder.</summary>
+    /// <summary>
+    /// Default log folder, as a full path: a relative SFP2ONENOTE_LOGDIR is resolved against the current folder when the
+    /// run starts, so the log path a run reports stays right after the current folder changes (a file dialog in the app).
+    /// </summary>
     public static string DefaultDirectory
     {
         get
@@ -37,16 +40,19 @@ public sealed class RunLog : IDisposable
             string? env = Environment.GetEnvironmentVariable(LogDirEnvVar);
             if (!string.IsNullOrWhiteSpace(env))
             {
-                return env;
+                return System.IO.Path.GetFullPath(env);
             }
 
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            return System.IO.Path.Combine(local, "sfp2onenote", "logs");
+            return System.IO.Path.GetFullPath(System.IO.Path.Combine(local, "sfp2onenote", "logs"));
         }
     }
 
-    /// <summary>Where a CLI verb's log goes when its folder cannot be used (<see cref="StartWithFallback"/>): sfp2onenote\logs in the temp folder.</summary>
-    public static string FallbackDirectory => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sfp2onenote", "logs");
+    /// <summary>
+    /// Where a run's log goes when its folder cannot be used (<see cref="StartWithFallback"/>, the app's log factory):
+    /// sfp2onenote\logs in the temp folder, as a full path.
+    /// </summary>
+    public static string FallbackDirectory => System.IO.Path.GetFullPath(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sfp2onenote", "logs"));
 
     /// <summary>The console's line: Serilog's default without the exception, so a stack trace goes to the file only.</summary>
     private const string ConsoleTemplate = "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}";
@@ -73,6 +79,26 @@ public sealed class RunLog : IDisposable
         Logger logger = config.CreateLogger();
         logger.Information("sfp2onenote {Verb} started; log {Path}", verb, file);
         return new RunLog(logger, file);
+    }
+
+    /// <summary>
+    /// <see cref="Start"/> after making sure the log file can be written: the folder is created and the file opened once,
+    /// because the file sink, unlike <see cref="Directory.CreateDirectory(string)"/>, does not throw for a file it cannot
+    /// open (it logs nothing, and the run would name a log file that does not exist). A folder or file that cannot be used
+    /// throws here instead (<see cref="IOException"/>, <see cref="UnauthorizedAccessException"/> and the like), so the
+    /// caller can fall back. The app's log factory starts its logs this way.
+    /// </summary>
+    public static RunLog StartChecked(string verb, bool quiet, string? directory = null, DateTimeOffset? now = null, bool printsOwnProgress = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(verb);
+        string dir = directory ?? DefaultDirectory;
+        DateTimeOffset stamp = now ?? DateTimeOffset.Now;
+        Directory.CreateDirectory(dir);
+        using (new FileStream(FilePath(dir, verb, stamp), FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+        {
+        }
+
+        return Start(verb, quiet, dir, stamp, printsOwnProgress);
     }
 
     /// <summary>
@@ -115,21 +141,12 @@ public sealed class RunLog : IDisposable
         return null;
     }
 
-    /// <summary>
-    /// Starts the log in <paramref name="dir"/> or says why it cannot. The file is opened once first because the file
-    /// sink, unlike <see cref="Directory.CreateDirectory(string)"/>, does not throw for a file it cannot open: it logs
-    /// nothing, and the run would name a log file that does not exist.
-    /// </summary>
+    /// <summary>Starts the log in <paramref name="dir"/> with <see cref="StartChecked"/>, or says why it cannot.</summary>
     private static bool TryStart(string verb, bool quiet, string dir, DateTimeOffset stamp, bool printsOwnProgress, [NotNullWhen(true)] out RunLog? log, [NotNullWhen(false)] out string? reason)
     {
         try
         {
-            Directory.CreateDirectory(dir);
-            using (new FileStream(FilePath(dir, verb, stamp), FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
-            {
-            }
-
-            log = Start(verb, quiet, dir, stamp, printsOwnProgress);
+            log = StartChecked(verb, quiet, dir, stamp, printsOwnProgress);
             reason = null;
             return true;
         }

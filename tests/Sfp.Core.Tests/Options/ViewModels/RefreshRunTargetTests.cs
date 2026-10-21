@@ -76,6 +76,7 @@ public class RefreshRunTargetTests
         vm.SelectedNotebook = vm.Notebooks.Single(n => n.Path == Q1OtherPath);
 
         await vm.RefreshNowCommand.ExecuteAsync(null);
+        await _h.Settle(vm.PendingReload);
 
         _h.Refresher.LastRequest!.NotebooksFolder.Should().Be(@"D:\Notebooks");
         _h.Registry.Queries.Should().HaveCount(2, "the run reloaded the list");

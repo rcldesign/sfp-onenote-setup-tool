@@ -647,6 +647,26 @@ public class GenerateCommandTests
     }
 
     [Fact]
+    public void The_next_quarter_link_warning_the_verb_prints_is_logged_below_what_its_console_shows()
+    {
+        // Fix round 3 app-4: the warning travels in the run's warnings, which the verb prints as a "Warning: ..." line. The
+        // writer logged it at Warning too, which the console sink shows for this verb, so it appeared twice; it is logged at
+        // Information now (as the font fallback is), and the log file still keeps it.
+        Support.CapturingSink sink = new();
+        using FakeOneNoteApp app = new();
+        Sfp.Core.Manifests.Manifest manifest = Support.TestManifest.Load();
+        string missing = Path.Combine(TestPaths.NewTempDir("previous-missing"), "SFP Q4 2026");
+        Sfp.OneNote.Writer.NextQuarterLinkWriter writer = new(app, new SidecarStore(), manifest, Xml.MonJan4.Options(manifest), sink.CreateLogger());
+
+        Sfp.OneNote.Writer.NextQuarterLinkResult result = writer.Link(missing, new NotebookHandle("{nb:next}{1}{B0}", "/out/SFP Q1 2027", "SFP Q1 2027"), "onenote:#Cover&end");
+
+        result.Warning.Should().NotBeNullOrEmpty("the verb prints it as a Warning line");
+        LogEvent logged = sink.Events.Should().ContainSingle(e => e.MessageTemplate.Text.StartsWith("Next quarter link not written", StringComparison.Ordinal)).Subject;
+        logged.Level.Should().Be(LogEventLevel.Information);
+        RunLog.ConsoleShows(logged.Level, quiet: false, printsOwnProgress: true).Should().BeFalse("the verb's own Warning line is the one the user sees");
+    }
+
+    [Fact]
     public void A_log_folder_that_cannot_be_created_moves_the_log_to_the_temp_folder_and_the_run_goes_on()
     {
         // SFP2ONENOTE_LOGDIR under a file: the folder can never be created. The verbs used to stop with exit 1 and an
@@ -675,6 +695,27 @@ public class GenerateCommandTests
                 stderr.Should().Contain("Log: " + RunLog.FallbackDirectory + Path.DirectorySeparatorChar, "the failure block names the log in the temp folder");
             }
         }
+    }
+
+    [SkippableFact]
+    public void A_relative_log_folder_override_gives_runs_a_full_log_path()
+    {
+        // Fix round 3 app-5: SFP2ONENOTE_LOGDIR=rel-logs gave "Log: rel-logs/...", which means nothing once the current
+        // folder changes (the app's Save log copies the file after a file dialog that may change it). The folder is now
+        // resolved to a full path before any file path is built.
+        string folder = Path.Combine(Root, "relative-logs");
+        string relative = Path.GetRelativePath(Environment.CurrentDirectory, folder);
+        Skip.If(Path.IsPathRooted(relative), "The test folder is on another drive than the current folder.");
+        string[] renderOnly = { "generate", "--pdf", Pdf, "--start", "2027-01", "--render-only", Path.Combine(Root, "png-relative-log"), "--templates", TestPaths.TemplatesDir };
+
+        (int code, string stdout, string stderr) = RunCli(relative, renderOnly);
+
+        code.Should().Be(ExitCodes.ValidationError, "the placeholder PDF is not the planner: {0}", stderr);
+        string logLine = (stdout + stderr).Split('\n').Select(l => l.TrimEnd('\r')).Should().ContainSingle(l => l.StartsWith("Log: ", StringComparison.Ordinal)).Which;
+        string logPath = logLine["Log: ".Length..];
+        Path.IsPathFullyQualified(logPath).Should().BeTrue(logLine);
+        logPath.Should().StartWith(folder + Path.DirectorySeparatorChar);
+        File.Exists(logPath).Should().BeTrue();
     }
 
     [Fact]

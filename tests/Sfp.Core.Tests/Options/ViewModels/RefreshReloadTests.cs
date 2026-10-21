@@ -72,6 +72,7 @@ public class RefreshReloadTests
         vm.SelectedNotebook!.LastRefreshText.Should().Be("never");
 
         await vm.RefreshNowCommand.ExecuteAsync(null);
+        await _h.Settle(vm.PendingReload);
 
         _h.Registry.Queries.Should().HaveCount(2, "the run reloads the list");
         vm.Notebooks.Should().ContainSingle().Which.LastRefreshText.Should().Be("2026-10-21 05:00");
@@ -104,7 +105,9 @@ public class RefreshReloadTests
         };
 
         await vm.RefreshNowCommand.ExecuteAsync(null);
+        await _h.Settle(vm.PendingReload);
 
+        _h.Registry.Listings.Should().Be(2, "the run reloaded the list");
         vm.SelectedNotebook!.Name.Should().Be("SFP Q1 2027");
         vm.Summary.Should().NotBeNull();
         vm.SetupLines.Should().NotBeEmpty();
@@ -130,6 +133,57 @@ public class RefreshReloadTests
         vm.Summary.Should().BeNull("the results were about SFP Q1 2027, which is gone");
         vm.Changes.Should().BeEmpty();
         vm.SetupLines.Should().BeEmpty();
+    }
+
+    [UiTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_notebook_clicked_while_the_list_reloads_stays_selected_and_the_checkbox_shows_its_own_task(bool afterRefreshNow)
+    {
+        // Fix round 3 app-1: the list is enabled while the folders are listed, after Refresh now and after Reload. The
+        // reload used to put the notebook selected before the listing back, and the checkbox kept showing the clicked
+        // notebook's daily task, so unticking it removed a task the selected notebook does not have.
+        _h.Registry.Notebooks.Add(Q1(null));
+        _h.Registry.Notebooks.Add(Q4);
+        _h.Tasks.Registered.Add("SFP Q4 2026");
+        _h.Refresher.Result = Refreshed();
+        using RefreshViewModel vm = _h.NewRefresh();
+        vm.SetKnownFolders(Array.Empty<string>());
+        await _h.Settle(vm.PendingReload);
+        vm.Notebooks.CollectionChanged += (_, e) =>
+        {
+            // A WPF ListView bound two-way to SelectedNotebook does this when its items are reset.
+            if (e.Action == NotifyCollectionChangedAction.Reset)
+            {
+                vm.SelectedNotebook = null;
+            }
+        };
+        vm.SelectedNotebook!.Name.Should().Be("SFP Q1 2027");
+        vm.DailyRefreshEnabled.Should().BeFalse("SFP Q1 2027 has no daily task");
+
+        using ManualResetEventSlim listing = new(false);
+        _h.Registry.Gate = listing;
+        Task started = afterRefreshNow ? vm.RefreshNowCommand.ExecuteAsync(null) : vm.ReloadNotebooksCommand.ExecuteAsync(null);
+        try
+        {
+            await _h.WaitUntilAsync(() => _h.Registry.Listings == 2 && !vm.IsBusy, "the reload lists the folders");
+            vm.CanSelectNotebook.Should().BeTrue("no run is on while the folders are listed");
+            vm.SelectedNotebook = vm.Notebooks.Single(n => n.Name == "SFP Q4 2026");
+            vm.DailyRefreshEnabled.Should().BeTrue("SFP Q4 2026 has a daily task");
+        }
+        finally
+        {
+            listing.Set();
+        }
+
+        await _h.Settle(started);
+        await _h.Settle(vm.PendingReload);
+
+        vm.SelectedNotebook!.Name.Should().Be("SFP Q4 2026", "the reload keeps the notebook clicked while the folders were listed");
+        vm.DailyRefreshEnabled.Should().BeTrue("the checkbox shows the selected notebook's own daily task");
+        vm.Summary.Should().BeNull("the results shown before the click were about SFP Q1 2027");
+        vm.DailyRefreshEnabled = false;
+        _h.Tasks.Removals.Should().Equal(new[] { "SFP Q4 2026" }, "unticking removes the task of the notebook shown");
     }
 
     [UiFact]

@@ -501,7 +501,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             string note = GenerateMessages.PartialNotebookNotDeleted(nb.Path, ex.Message);
-            _log.Warning(ex, "Partial notebook {Path} could not be deleted", nb.Path);
+            _log.Information(ex, "Partial notebook {Path} could not be deleted", nb.Path);
             state.Warnings.Add(note);
             return false;
         }

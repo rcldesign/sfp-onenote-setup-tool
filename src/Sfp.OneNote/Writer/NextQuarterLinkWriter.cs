@@ -479,7 +479,7 @@ public sealed class NextQuarterLinkWriter : INextQuarterLinkWriter
 
     private NextQuarterLinkResult NotWritten(string given, string name, string reason)
     {
-        _log.Warning("Next quarter link not written to {Previous}: {Reason}", given, reason);
+        _log.Information("Next quarter link not written to {Previous}: {Reason}", given, reason);
         return new NextQuarterLinkResult { Outcome = NextQuarterLinkOutcome.NotWritten, PreviousNotebook = name, Warning = WarningFor(given, reason) };
     }
 }

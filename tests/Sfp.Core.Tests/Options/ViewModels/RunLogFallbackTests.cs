@@ -2,6 +2,7 @@ using Sfp.App.ViewModels;
 using Sfp.App.ViewModels.Generate;
 using Sfp.App.ViewModels.Refresh;
 using Sfp.App.ViewModels.Services;
+using Sfp.Cli.Logging;
 using Sfp.Core.Dates;
 using Sfp.OneNote.Generate;
 using Sfp.Refresh;
@@ -124,6 +125,75 @@ public class RunLogFallbackTests
         MainViewModel.MayClose(Task.FromResult(true), out string? closed).Should().BeTrue();
         closed.Should().BeNull();
         FluentActions.Invoking(() => MainViewModel.MayClose(new TaskCompletionSource<bool>().Task, out _)).Should().Throw<InvalidOperationException>();
+    }
+
+    [UiFact]
+    public void A_log_folder_that_exists_but_cannot_take_the_file_falls_back_to_the_temp_folder()
+    {
+        // Fix round 3 app-2: the app's factory started its logs with the unprobed RunLog.Start, whose file sink logs nothing
+        // for a file it cannot open, so the run named a log file that did not exist and never fell back. It now starts them
+        // with RunLog.StartChecked, which opens the file once first and throws.
+        string root = TestPaths.NewTempDir("app-log-fallback");
+        string blocked = Path.Combine(root, "blocked");
+        string fallback = Path.Combine(root, "temp-logs");
+        DateTimeOffset now = new(2027, 1, 4, 9, 0, 0, TimeSpan.Zero);
+        Directory.CreateDirectory(Path.Combine(blocked, "20270104-090000-refresh.log"));
+        CheckedRunLogFactory logs = new(blocked, fallback, now);
+
+        string fallbackFile = Path.Combine(fallback, "20270104-090000-refresh.log");
+        using (IRunLog log = logs.StartOrFallBack("refresh", out string? notice))
+        {
+            notice.Should().BeNull("the run has a log file, only in the temp folder");
+            log.Path.Should().Be(fallbackFile);
+            log.Logger.Information("A line of the run");
+        }
+
+        File.ReadAllText(fallbackFile).Should().Contain("The log folder could not be used").And.Contain("A line of the run");
+
+        // Neither folder can take the file: the run has no log file and says so in one line.
+        Directory.CreateDirectory(Path.Combine(blocked, "20270104-090000-generate.log"));
+        Directory.CreateDirectory(Path.Combine(fallback, "20270104-090000-generate.log"));
+        using IRunLog none = logs.StartOrFallBack("generate", out string? noneNotice);
+        none.Path.Should().BeEmpty();
+        noneNotice.Should().StartWith("The run log could not be started (").And.EndWith("); this run has no log file.");
+    }
+
+    /// <summary>
+    /// The app's RunLogFactory (src/Sfp.App/Composition/RunLogFactory.cs, which builds for Windows only) call for call,
+    /// pointed at test folders and a fixed clock.
+    /// </summary>
+    private sealed class CheckedRunLogFactory : IRunLogFactory
+    {
+        private readonly string _folder;
+        private readonly string _fallback;
+        private readonly DateTimeOffset _now;
+
+        public CheckedRunLogFactory(string folder, string fallback, DateTimeOffset now)
+        {
+            _folder = folder;
+            _fallback = fallback;
+            _now = now;
+        }
+
+        public IRunLog Start(string verb) => new Handle(RunLog.StartChecked(verb, quiet: true, directory: _folder, now: _now));
+
+        public IRunLog StartFallback(string verb) => new Handle(RunLog.StartChecked(verb, quiet: true, directory: _fallback, now: _now));
+
+        private sealed class Handle : IRunLog
+        {
+            private readonly RunLog _log;
+
+            public Handle(RunLog log)
+            {
+                _log = log;
+            }
+
+            public Serilog.ILogger Logger => _log.Logger;
+
+            public string Path => _log.Path;
+
+            public void Dispose() => _log.Dispose();
+        }
     }
 
     /// <summary>A log folder that cannot be created; the temp-folder fallback works only when <see cref="FallbackWorks"/> is set.</summary>
