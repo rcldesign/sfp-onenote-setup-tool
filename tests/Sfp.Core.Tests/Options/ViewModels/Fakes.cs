@@ -894,4 +894,31 @@ public sealed class Harness
 
         await Ui.Drain();
     }
+
+    /// <summary>
+    /// Waits, without blocking the dispatcher, until <paramref name="condition"/> holds: each turn runs everything queued
+    /// and then yields a millisecond, so background work, the view models' await continuations and their timers move on
+    /// while the test waits (a SpinWait on the dispatcher's thread would starve them). Fails the test after
+    /// <see cref="TestDispatcher.Timeout"/>, naming the condition and <paramref name="because"/>.
+    /// </summary>
+    public async Task WaitUntilAsync(Func<bool> condition, string? because = null, [System.Runtime.CompilerServices.CallerArgumentExpression(nameof(condition))] string conditionText = "")
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            await Ui.Drain();
+            if (condition())
+            {
+                return;
+            }
+
+            if (clock.Elapsed > TestDispatcher.Timeout)
+            {
+                throw new TimeoutException($"Waited {TestDispatcher.Timeout.TotalSeconds} s for {conditionText}" + (because is null ? "." : ": " + because + "."));
+            }
+
+            await Task.Delay(1);
+        }
+    }
 }

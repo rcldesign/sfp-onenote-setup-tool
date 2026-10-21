@@ -63,10 +63,10 @@ public class CloseFlowTests
         _h.Refresher.AfterCancelGate = finishing;
         using MainViewModel main = await ReadyWindow();
         Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Refresher.WaitingForCancel);
 
         Task<bool> closing = main.PrepareToCloseAsync();
-        SpinWait.SpinUntil(() => _h.Refresher.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Refresher.SawCancel);
 
         closing.IsCompleted.Should().BeFalse("the refresh is still finishing its page");
         main.Generate.IsClosing.Should().BeTrue();
@@ -91,10 +91,10 @@ public class CloseFlowTests
         _h.Generator.AfterCancelGate = deleting;
         using MainViewModel main = await ReadyWindow();
         Task generating = main.Generate.GenerateCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
 
         Task<bool> closing = main.PrepareToCloseAsync();
-        SpinWait.SpinUntil(() => _h.Generator.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.SawCancel);
 
         closing.IsCompleted.Should().BeFalse("the orchestrator is deleting the partial notebook");
         main.Refresh.IsClosing.Should().BeTrue();
@@ -121,17 +121,17 @@ public class CloseFlowTests
         _h.Generator.AfterCancelGate = generateDeleting;
         using MainViewModel main = await ReadyWindow();
         Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Refresher.WaitingForCancel);
         Task<bool> closing = main.PrepareToCloseAsync();
-        SpinWait.SpinUntil(() => _h.Refresher.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Refresher.SawCancel);
 
         // A run that got past the disabled buttons (started straight on the run view model).
         Task generating = main.Generate.Run.StartAsync(Request());
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
         refreshFinishing.Set();
         await refreshing;
 
-        SpinWait.SpinUntil(() => _h.Generator.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("the close looks again and cancels it");
+        await _h.WaitUntilAsync(() => _h.Generator.SawCancel, "the close looks again and cancels it");
         closing.IsCompleted.Should().BeFalse("the close waits for that run too");
         generateDeleting.Set();
         (await closing).Should().BeTrue();

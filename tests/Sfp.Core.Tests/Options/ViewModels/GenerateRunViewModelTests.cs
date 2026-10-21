@@ -190,7 +190,7 @@ public class GenerateRunViewModelTests
         using GenerateRunViewModel run = _h.NewRun();
 
         Task running = run.StartAsync(Request());
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
         run.IsRunning.Should().BeTrue();
         run.CancelCommand.CanExecute(null).Should().BeTrue();
         run.CancelCommand.Execute(null);
@@ -251,7 +251,7 @@ public class GenerateRunViewModelTests
         };
 
         Task running = run.StartAsync(Request());
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
         run.CancelCommand.Execute(null);
         await running;
 
@@ -278,7 +278,7 @@ public class GenerateRunViewModelTests
         using GenerateRunViewModel run = _h.NewRun();
 
         Task running = run.StartAsync(Request());
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
         run.CancelCommand.Execute(null);
         await running;
 
@@ -288,7 +288,7 @@ public class GenerateRunViewModelTests
 
         _h.Generator.CancelledResult = _h.Generator.CancelledResult with { Warnings = Array.Empty<string>() };
         running = run.StartAsync(Request());
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 2, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 2);
         run.CancelCommand.Execute(null);
         await running;
 
@@ -354,7 +354,7 @@ public class GenerateRunViewModelTests
         using GenerateRunViewModel run = _h.NewRun();
 
         Task first = run.StartAsync(Request());
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
         await run.StartAsync(Request());
         _h.Generator.Runs.Should().Be(1);
         run.CancelCommand.Execute(null);
