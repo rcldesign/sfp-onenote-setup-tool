@@ -804,7 +804,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
 
         string? written = record is not null && record.AnchorTexts.TryGetValue(change.SlotId, out string? last) ? last : null;
-        if (state.Owned is not null && Propagator.IsEdited(state.OwnedText, written))
+        if (Propagator.IsEdited(state, written))
         {
             return change with { Blocked = true, Reason = Propagator.EditedReason };
         }

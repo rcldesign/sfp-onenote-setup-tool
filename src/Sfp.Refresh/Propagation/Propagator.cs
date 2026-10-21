@@ -149,7 +149,7 @@ public sealed class Propagator : IPropagator
         }
 
         string old = state.OwnedText ?? "";
-        if (string.Equals(old, wanted, StringComparison.Ordinal))
+        if (string.Equals(CalendarDiff.Comparable(old), CalendarDiff.Comparable(wanted), StringComparison.Ordinal))
         {
             return state.IsBlocked && !state.Moved
                 ? new PlannedChange(page, slotId, old, wanted, ChangeKind.Update, true, CoveredReason(state))
