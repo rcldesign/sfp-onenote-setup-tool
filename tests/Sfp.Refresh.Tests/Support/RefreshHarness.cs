@@ -29,10 +29,11 @@ public sealed class RefreshHarness
     /// <param name="folder">The notebooks folder; a new temp folder when null.</param>
     /// <param name="start">The quarter; Q1 2027 when null.</param>
     /// <param name="app">The fake OneNote to generate into; a new one when null.</param>
-    public RefreshHarness(bool saveSidecar = true, ICalendarSourceFactory? calendars = null, Func<GenerateOptions, GenerateOptions>? shape = null, string? folder = null, QuarterSpec? start = null, FakeOneNoteApp? app = null)
+    /// <param name="window">The Time Blocks window the notebook is generated with and its sidecar records; none recorded when null.</param>
+    public RefreshHarness(bool saveSidecar = true, ICalendarSourceFactory? calendars = null, Func<GenerateOptions, GenerateOptions>? shape = null, string? folder = null, QuarterSpec? start = null, FakeOneNoteApp? app = null, TimeBlockWindow? window = null)
     {
         Folder = folder ?? TestPaths.NewTempDir("refresh-harness");
-        Notebook = FakeNotebook.Generate(start, Folder, app, shape: shape);
+        Notebook = FakeNotebook.Generate(start, Folder, app, window: window, shape: shape);
         Store = new SidecarStore();
         SidecarPath = Store.PathFor(Notebook.NotebookPath);
         if (saveSidecar)
