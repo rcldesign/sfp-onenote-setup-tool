@@ -379,7 +379,7 @@ public class RefreshViewModelTests
         using RefreshViewModel vm = await Loaded();
 
         Task refreshing = vm.RefreshNowCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Refresher.WaitingForCancel);
         await _h.Ui.Drain();
         vm.IsBusy.Should().BeTrue();
         vm.ProgressText.Should().Be("Writing Annual Objectives");
@@ -388,7 +388,7 @@ public class RefreshViewModelTests
         vm.CancelCommand.Execute(null);
 
         vm.ProgressText.Should().Be(RefreshViewModel.CancellingText);
-        SpinWait.SpinUntil(() => _h.Refresher.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("the run was given the token Cancel cancels");
+        await _h.WaitUntilAsync(() => _h.Refresher.SawCancel, "the run was given the token Cancel cancels");
         await _h.Ui.Drain();
         vm.ProgressText.Should().Be("Cancelling after the current page", "the page in flight reporting does not replace the cancelling line");
         vm.IsBusy.Should().BeTrue("the run is still finishing that page");
@@ -414,7 +414,7 @@ public class RefreshViewModelTests
         using RefreshViewModel vm = await Loaded();
 
         Task previewing = vm.PreviewChangesCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Refresher.WaitingForCancel);
 
         await vm.CancelAndWaitAsync();
 
@@ -440,7 +440,7 @@ public class RefreshViewModelTests
         using RefreshViewModel vm = await Loaded();
 
         Task refreshing = vm.RefreshNowCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Refresher.WaitingForCancel);
         vm.CancelCommand.Execute(null);
         await refreshing;
 

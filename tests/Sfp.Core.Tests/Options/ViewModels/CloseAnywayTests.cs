@@ -46,11 +46,11 @@ public class CloseAnywayTests
         _closeDialogs.Answers.Enqueue(true);
         using MainViewModel main = await Window(TimeSpan.FromMilliseconds(200));
         Task generating = main.Generate.Run.StartAsync(Request());
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
         try
         {
             Task<bool> closing = main.PrepareToCloseAsync();
-            SpinWait.SpinUntil(() => _h.Generator.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("the run sees the cancel");
+            await _h.WaitUntilAsync(() => _h.Generator.SawCancel, "the run sees the cancel");
 
             (await closing.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue("yes closes although the run never returned");
 
@@ -77,14 +77,14 @@ public class CloseAnywayTests
         _closeDialogs.Answers.Enqueue(true);
         using MainViewModel main = await Window(TimeSpan.FromHours(1));
         Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Refresher.WaitingForCancel);
         try
         {
             Task<bool> closing = main.PrepareToCloseAsync();
-            SpinWait.SpinUntil(() => _h.Refresher.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+            await _h.WaitUntilAsync(() => _h.Refresher.SawCancel);
 
             main.RequestCloseAgain();
-            SpinWait.SpinUntil(() => _closeDialogs.Asked.Count == 1, TimeSpan.FromSeconds(5)).Should().BeTrue("the second click asks");
+            await _h.WaitUntilAsync(() => _closeDialogs.Asked.Count == 1, "the second click asks");
             closing.IsCompleted.Should().BeFalse("no keeps waiting for the run");
 
             main.RequestCloseAgain();
@@ -111,10 +111,10 @@ public class CloseAnywayTests
         _closeDialogs.Answers.Enqueue(false);
         using MainViewModel main = await Window(TimeSpan.FromMilliseconds(100));
         Task generating = main.Generate.Run.StartAsync(Request());
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
 
         Task<bool> closing = main.PrepareToCloseAsync();
-        SpinWait.SpinUntil(() => _closeDialogs.Asked.Count == 1, TimeSpan.FromSeconds(5)).Should().BeTrue("the delay asks once");
+        await _h.WaitUntilAsync(() => _closeDialogs.Asked.Count == 1, "the delay asks once");
         await Task.Delay(300);
         _closeDialogs.Asked.Should().HaveCount(1, "after a no only another close request asks again");
         closing.IsCompleted.Should().BeFalse();

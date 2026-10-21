@@ -178,7 +178,7 @@ public class MainViewModelTests
         (await main.PrepareToCloseAsync()).Should().BeTrue("nothing runs");
 
         Task generating = main.Generate.GenerateCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
         _h.Dialogs.ConfirmAnswer = false;
         (await main.PrepareToCloseAsync()).Should().BeFalse("the user kept the run going");
 
@@ -196,7 +196,7 @@ public class MainViewModelTests
         _h.Refresher.AfterCancelGate = finishing;
         using MainViewModel main = await InitializedWithANotebook();
         Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Refresher.WaitingForCancel);
 
         _h.Dialogs.ConfirmAnswer = false;
         (await main.PrepareToCloseAsync()).Should().BeFalse("the user kept the refresh going");
@@ -207,7 +207,7 @@ public class MainViewModelTests
 
         _h.Dialogs.ConfirmAnswer = true;
         Task<bool> closing = main.PrepareToCloseAsync();
-        SpinWait.SpinUntil(() => _h.Refresher.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("yes cancels the run");
+        await _h.WaitUntilAsync(() => _h.Refresher.SawCancel, "yes cancels the run");
         main.Refresh.ProgressText.Should().Be(RefreshViewModel.CancellingText);
         closing.IsCompleted.Should().BeFalse("the window stays open until the run returns");
 
@@ -229,7 +229,7 @@ public class MainViewModelTests
         await _h.Settle(main.Generate);
         Task generating = main.Generate.GenerateCommand.ExecuteAsync(null);
         Task refreshing = main.Refresh.RefreshNowCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1 && _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1 && _h.Refresher.WaitingForCancel);
 
         _h.Dialogs.ConfirmAnswer = false;
         (await main.PrepareToCloseAsync()).Should().BeFalse();

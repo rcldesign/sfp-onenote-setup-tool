@@ -524,7 +524,7 @@ public class GenerateViewModelTests
         vm.PdfPath = Harness.Pdf;
         await Settle(vm);
         Task generating = vm.GenerateCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
         _h.Dialogs.ConfirmAnswer = false;
 
         bool close = await vm.PrepareToCloseAsync();
@@ -548,12 +548,12 @@ public class GenerateViewModelTests
         vm.PdfPath = Harness.Pdf;
         await Settle(vm);
         Task generating = vm.GenerateCommand.ExecuteAsync(null);
-        SpinWait.SpinUntil(() => _h.Generator.Runs == 1, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.WaitUntilAsync(() => _h.Generator.Runs == 1);
 
         Task<bool> closing = vm.PrepareToCloseAsync();
 
         _h.Dialogs.Questions.Should().ContainSingle();
-        SpinWait.SpinUntil(() => _h.Generator.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("yes cancels the run");
+        await _h.WaitUntilAsync(() => _h.Generator.SawCancel, "yes cancels the run");
         vm.Run.PhaseText.Should().Be(GenerateRunViewModel.CancellingText);
         closing.IsCompleted.Should().BeFalse("the window stays open while the orchestrator deletes the partial notebook");
 
