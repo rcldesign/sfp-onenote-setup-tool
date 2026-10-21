@@ -48,15 +48,18 @@ public class ManifestNullChecksTests : IDisposable
     }
 
     [Fact]
-    public void A_positional_record_member_left_out_of_the_file_is_reported_like_an_explicit_null()
+    public void A_positional_record_member_left_out_of_the_file_is_a_load_error_naming_the_key()
     {
-        // System.Text.Json passes null for a missing constructor parameter, so the field's name is null after the load.
+        // Every positional record member is [JsonRequired], so a left-out name fails in deserialization instead of
+        // reaching the walk as null (an explicit null still does, see NulledMembers).
         string user = WriteUser(
             "{ \"slots\": { \"date\": { \"fields\": [ { \"align\": \"right\", \"x\": 895 }, { \"name\": \"day\", \"align\": \"center\", \"x\": 935 }, { \"name\": \"year\", \"align\": \"left\", \"x\": 976 } ] } } }");
 
         Action act = () => _loader.Merge(TestPaths.ManifestPath, user);
 
-        act.Should().Throw<ManifestException>().WithMessage("*$.slots.date.fields[0].name must not be null.");
+        act.Should().Throw<ManifestException>()
+            .WithMessage("*does not match the manifest schema at *fields[0]*")
+            .WithMessage("*missing required properties, including the following: name*");
     }
 
     [Theory]

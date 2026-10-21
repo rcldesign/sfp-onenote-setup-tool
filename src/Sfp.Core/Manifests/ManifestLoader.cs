@@ -181,6 +181,13 @@ public sealed class ManifestLoader : IManifestLoader
     {
         try
         {
+            // JsonNode builds objects lazily, so a duplicate key or an unpaired surrogate escape would only fail at first
+            // use (in MergeNodes, RemoveComments or Deserialize). The walk finds both here, inside this try.
+            using (JsonDocument document = JsonDocument.Parse(json, NodeOptions))
+            {
+                CheckWellFormed(document.RootElement, "$", sourceName);
+            }
+
             return JsonNode.Parse(json, documentOptions: NodeOptions)
                 ?? throw new ManifestException($"Manifest '{sourceName}' is empty (JSON null).");
         }
@@ -188,14 +195,66 @@ public sealed class ManifestLoader : IManifestLoader
         {
             throw new ManifestException($"Manifest '{sourceName}' is not valid JSON: {ex.Message}", ex);
         }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw new ManifestException($"Manifest '{sourceName}' is not valid JSON: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Rejects what <see cref="JsonNode"/> would only report on first use: a key that appears twice in one object (two
+    /// <c>$comment</c> notes included) and a key or string holding an unpaired UTF-16 surrogate escape ("\ud800").
+    /// </summary>
+    private static void CheckWellFormed(JsonElement element, string path, string sourceName)
+    {
+        try
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    HashSet<string> keys = new(StringComparer.Ordinal);
+                    foreach (JsonProperty property in element.EnumerateObject())
+                    {
+                        string key = property.Name;
+                        if (!keys.Add(key))
+                        {
+                            throw new ManifestException(
+                                $"Manifest '{sourceName}' is not valid JSON: {path} holds the key '{key}' twice; a key may appear only once in an object.");
+                        }
+
+                        CheckWellFormed(property.Value, path + "." + key, sourceName);
+                    }
+
+                    break;
+                case JsonValueKind.Array:
+                    int index = 0;
+                    foreach (JsonElement item in element.EnumerateArray())
+                    {
+                        CheckWellFormed(item, path + "[" + index.ToString(CultureInfo.InvariantCulture) + "]", sourceName);
+                        index++;
+                    }
+
+                    break;
+                case JsonValueKind.String:
+                    _ = element.GetString();
+                    break;
+                default:
+                    break;
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new ManifestException(
+                $"Manifest '{sourceName}' is not valid JSON: {path} holds an unpaired UTF-16 surrogate escape in a key or string: {ex.Message}", ex);
+        }
     }
 
     private static Manifest Materialize(JsonNode node, string sourceName)
     {
-        RemoveComments(node);
         Manifest manifest;
         try
         {
+            RemoveComments(node);
             manifest = node.Deserialize<Manifest>(JsonOptions)
                 ?? throw new ManifestException($"Manifest '{sourceName}' is empty (JSON null).");
         }
@@ -203,6 +262,12 @@ public sealed class ManifestLoader : IManifestLoader
         {
             string where = string.IsNullOrEmpty(ex.Path) ? "" : string.Format(CultureInfo.InvariantCulture, " at {0}", ex.Path);
             throw new ManifestException($"Manifest '{sourceName}' does not match the manifest schema{where}: {ex.Message}", ex);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            // ParseNode rejects duplicate keys and unpaired surrogates first; this keeps any other lazy JsonNode failure a
+            // ManifestException too.
+            throw new ManifestException($"Manifest '{sourceName}' is not valid JSON: {ex.Message}", ex);
         }
 
         ManifestChecks.Run(manifest, sourceName);

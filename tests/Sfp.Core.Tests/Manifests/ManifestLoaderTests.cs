@@ -101,6 +101,28 @@ public class ManifestLoaderTests : IDisposable
     }
 
     [Fact]
+    public void A_section_repeated_per_week_must_use_a_week_token_in_its_name()
+    {
+        string path = WriteModified(root => root["notebook"]!["sections"]![3]!["name"] = "Week");
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>()
+            .WithMessage("*notebook.sections[3].name 'Week' repeats once per week (eachWeek) but uses none of {NN}, {start} or {end}*");
+    }
+
+    [Theory]
+    [InlineData("Week {NN}")]
+    [InlineData("From {start}")]
+    [InlineData("{Qn} to {end}")]
+    public void One_week_token_is_enough_for_a_section_repeated_per_week(string name)
+    {
+        string path = WriteModified(root => root["notebook"]!["sections"]![3]!["name"] = name);
+
+        _loader.Load(path).Notebook.Sections[3].Name.Should().Be(name);
+    }
+
+    [Fact]
     public void Unknown_token_in_the_notebook_name_pattern_throws()
     {
         string path = WriteModified(root => root["notebook"]!["namePattern"] = "SFP {Quarter}");
@@ -216,6 +238,49 @@ public class ManifestLoaderTests : IDisposable
     }
 
     [Theory]
+    [InlineData("{ \"slots\": { \"date\": { \"fields\": [ { \"name\": \"month\", \"align\": \"right\" }, { \"name\": \"day\", \"align\": \"center\", \"x\": 935 }, { \"name\": \"year\", \"align\": \"left\", \"x\": 976 } ] } } }", "fields[0]", "x")]
+    [InlineData("{ \"slots\": { \"standingGoals\": { \"rows\": [ { \"x\": 111, \"y\": 92, \"w\": 234 } ] } } }", "rows[0]", "h")]
+    [InlineData("{ \"generated\": { \"setup\": { \"labels\": [ { \"text\": \"Objectives\", \"x\": 40 } ] } } }", "labels[0]", "baselineY")]
+    public void A_value_member_of_a_positional_record_left_out_of_the_file_is_a_load_error(string userJson, string where, string key)
+    {
+        // Arrays replace whole in a merge, so a user's array entry can leave a member out. DateField and LabelSpec are
+        // positional classes, RectPt is a positional struct: [JsonRequired] holds for both.
+        string user = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, user);
+
+        act.Should().Throw<ManifestException>()
+            .WithMessage($"*does not match the manifest schema at *{where}*")
+            .WithMessage($"*missing required properties, including the following: {key}*");
+    }
+
+    [Fact]
+    public void A_point_without_y_in_a_complete_manifest_is_a_load_error()
+    {
+        // Objects merge key by key, so only a complete manifest can leave out a member of a positional record held in an object.
+        string path = WriteModified(root => root["onenote"]!["anchorPaddingPt"]!.AsObject().Remove("y").Should().BeTrue());
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>()
+            .WithMessage("*does not match the manifest schema at *anchorPaddingPt*")
+            .WithMessage("*missing required properties, including the following: y*");
+    }
+
+    [Theory]
+    [InlineData("{ \"links\": { \"prev\": { \"align\": 7 } } }", "$.links.prev.align", "7")]
+    [InlineData("{ \"links\": { \"prev\": { \"align\": \"7\" } } }", "$.links.prev.align", "7")]
+    [InlineData("{ \"slots\": { \"date\": { \"fields\": [ { \"name\": \"month\", \"align\": -1, \"x\": 895 } ] } } }", "$.slots.date.fields[0].align", "-1")]
+    public void An_align_value_the_enum_does_not_define_is_a_load_error(string userJson, string path, string value)
+    {
+        string user = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, user);
+
+        act.Should().Throw<ManifestException>().WithMessage($"Manifest '*{Path.GetFileName(user)}': {path} holds {value}, which is not one of left, center, right.");
+    }
+
+    [Theory]
     [InlineData("colors", "greyedInkOpacity")]
     [InlineData("colors", "prefillInkOpacity")]
     [InlineData("colors", "eventInkOpacity")]
@@ -285,6 +350,37 @@ public class ManifestLoaderTests : IDisposable
         act.Should().Throw<ManifestException>().WithMessage("*not valid JSON*");
     }
 
+    [Theory]
+    [InlineData("\"pageCount\": 132,", "\"pageCount\": 132, \"pageCount\": 132,", "$ holds the key 'pageCount' twice")]
+    [InlineData("\"namePattern\": \"SFP {Qn} {YYYY}\",", "\"$comment\": \"a\", \"$comment\": \"b\", \"namePattern\": \"SFP {Qn} {YYYY}\",", "$.notebook holds the key '$comment' twice")]
+    [InlineData("\"font\": {", "\"font\": { \"family\": \"x\" }, \"font\": {", "$ holds the key 'font' twice")]
+    [InlineData("\"namePattern\": \"SFP {Qn} {YYYY}\",", "\"namePattern\": \"SFP \\ud800 {Qn} {YYYY}\",", "$.notebook.namePattern holds an unpaired UTF-16 surrogate escape")]
+    public void Load_reports_a_duplicate_key_or_an_unpaired_surrogate_as_a_manifest_error(string find, string replace, string message)
+    {
+        string shipped = File.ReadAllText(TestPaths.ManifestPath);
+        shipped.Should().Contain(find);
+        string path = WriteText(shipped.Replace(find, replace, StringComparison.Ordinal));
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage($"Manifest '{path}' is not valid JSON: {message}*");
+    }
+
+    [Theory]
+    [InlineData("{ \"pageCount\": 132, \"pageCount\": 132 }", "$ holds the key 'pageCount' twice")]
+    [InlineData("{ \"slots\": { \"date\": { \"$comment\": \"a\", \"$comment\": \"b\", \"baselineY\": 38.5 } } }", "$.slots.date holds the key '$comment' twice")]
+    [InlineData("{ \"notebook\": { \"namePattern\": \"A {Qn}\" }, \"notebook\": { \"namePattern\": \"B {Qn}\" } }", "$ holds the key 'notebook' twice")]
+    [InlineData("{ \"notebook\": { \"namePattern\": \"SFP \\ud800 {Qn}\" } }", "$.notebook.namePattern holds an unpaired UTF-16 surrogate escape")]
+    [InlineData("{ \"notebook\": { \"\\ud800\": 1 } }", "$.notebook holds an unpaired UTF-16 surrogate escape")]
+    public void Merge_reports_a_duplicate_key_or_an_unpaired_surrogate_in_the_user_manifest_as_a_manifest_error(string userJson, string message)
+    {
+        string userPath = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, userPath);
+
+        act.Should().Throw<ManifestException>().WithMessage($"Manifest '{userPath}' is not valid JSON: {message}*");
+    }
+
     [Fact]
     public void Page_size_must_hold_exactly_two_entries()
     {
@@ -303,6 +399,35 @@ public class ManifestLoaderTests : IDisposable
         Action act = () => _loader.Load(path);
 
         act.Should().Throw<ManifestException>().WithMessage("*pageCount*");
+    }
+
+    [Theory]
+    [InlineData("{ \"colors\": { \"sectionTints\": [\"#F0E6D8\", \"#E4D6C4\", \"D8C8B2\"] } }", "colors.sectionTints[2] must be a color in the form #RRGGBB, found 'D8C8B2'.")]
+    [InlineData("{ \"colors\": { \"sectionTints\": [\"#F0E6D8FF\"] } }", "colors.sectionTints[0] must be a color in the form #RRGGBB, found '#F0E6D8FF'.")]
+    [InlineData("{ \"colors\": { \"background\": \"#DED4C\" } }", "colors.background must be a color in the form #RRGGBB, found '#DED4C'.")]
+    [InlineData("{ \"colors\": { \"ink\": \"#1E1E2G\" } }", "colors.ink must be a color in the form #RRGGBB, found '#1E1E2G'.")]
+    [InlineData("{ \"colors\": { \"dayBox\": \"#F2E7DD \" } }", "colors.dayBox must be a color in the form #RRGGBB, found '#F2E7DD '.")]
+    [InlineData("{ \"onenote\": { \"pageColor\": \"DED4C8\" } }", "onenote.pageColor must be a color in the form #RRGGBB or \"automatic\", found 'DED4C8'.")]
+    [InlineData("{ \"onenote\": { \"pageColor\": \"Automatic\" } }", "onenote.pageColor must be a color in the form #RRGGBB or \"automatic\", found 'Automatic'.")]
+    public void A_color_not_in_the_form_hash_rrggbb_is_a_load_error_naming_its_path(string userJson, string message)
+    {
+        string user = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, user);
+
+        act.Should().Throw<ManifestException>().WithMessage($"Manifest '*{Path.GetFileName(user)}': {message}");
+    }
+
+    [Theory]
+    [InlineData("{ \"onenote\": { \"pageColor\": \"automatic\" } }")]
+    [InlineData("{ \"colors\": { \"background\": \"#ded4c8\", \"sectionTints\": [\"#f0E6d8\"] }, \"onenote\": { \"pageColor\": \"#dEd4C8\" } }")]
+    public void Hex_digits_in_either_case_and_an_automatic_page_color_load(string userJson)
+    {
+        string user = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, user);
+
+        act.Should().NotThrow();
     }
 
     [Fact]
@@ -327,6 +452,58 @@ public class ManifestLoaderTests : IDisposable
         Action act = () => _loader.Load(path);
 
         act.Should().Throw<ManifestException>().WithMessage("*weekly*").WithMessage("*beyond pageCount*");
+    }
+
+    [Fact]
+    public void Weekly_run_bound_is_computed_without_int_overflow()
+    {
+        // 16 + 2^30 * 2 + 8 wraps negative in int arithmetic and used to pass the bound.
+        string path = WriteModified(root =>
+        {
+            root["pageTypes"]!["weekly"]!["stride"] = 1 << 30;
+            root["pageTypes"]!["weekly"]!["count"] = 3;
+        });
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage("*pageTypes.weekly ends on page 2147483672, beyond pageCount 132.");
+    }
+
+    [Fact]
+    public void Weekly_runs_must_not_overlap()
+    {
+        string path = WriteModified(root => root["pageTypes"]!["weekly"]!["stride"] = 1);
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage("*pageTypes.weekly.stride must be at least 9, the pages of one week run, so the runs do not overlap; found 1.");
+    }
+
+    [Theory]
+    [InlineData("overview,mon,tue,wed,thu,fri,sat,cover,reflection")]
+    [InlineData("reflection,mon,tue,wed,thu,fri,sat,sun,overview")]
+    public void Weekly_pages_must_be_overview_mon_to_sun_and_reflection_in_that_order(string pages)
+    {
+        string path = WriteModified(root =>
+        {
+            JsonNode weekly = root["pageTypes"]!["weekly"]!;
+            weekly["pages"] = new JsonArray(pages.Split(',').Select(p => (JsonNode?)JsonValue.Create(p)).ToArray());
+            weekly["probes"]!.AsObject()["cover"] = "Quarterly Planner";
+        });
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage(
+            $"*pageTypes.weekly.pages must be overview, mon, tue, wed, thu, fri, sat, sun, reflection in that order, found {pages.Replace(",", ", ", StringComparison.Ordinal)}.");
+    }
+
+    [Fact]
+    public void Pdf_page_for_a_weekly_spec_built_in_code_throws_on_overflow_instead_of_wrapping()
+    {
+        WeeklyPagesSpec weekly = _loader.Load(TestPaths.ManifestPath).PageTypes.Weekly with { Stride = 1 << 30, Count = 3 };
+
+        weekly.PdfPageFor(2, PageNames.Overview).Should().Be(weekly.FirstPdfPage + (1 << 30));
+        weekly.Invoking(w => w.PdfPageFor(3, PageNames.Overview)).Should().Throw<OverflowException>();
     }
 
     [Fact]
@@ -387,8 +564,14 @@ public class ManifestLoaderTests : IDisposable
     {
         JsonNode root = JsonNode.Parse(File.ReadAllText(TestPaths.ManifestPath))!;
         mutate(root);
+        return WriteText(root.ToJsonString());
+    }
+
+    /// <summary>Writes raw JSON text, for files a JsonNode cannot hold (a duplicate key).</summary>
+    private string WriteText(string json)
+    {
         string path = Path.Combine(_tempDir, Guid.NewGuid().ToString("N")[..8] + ".json");
-        File.WriteAllText(path, root.ToJsonString());
+        File.WriteAllText(path, json);
         return path;
     }
 }

@@ -41,8 +41,15 @@ public sealed record Manifest
     public double PageHeightPt => PageSizePt[1];
 }
 
-/// <summary>A rectangle in PDF points, top-left origin.</summary>
-public readonly record struct RectPt(double X, double Y, double W, double H)
+/// <summary>
+/// A rectangle in PDF points, top-left origin. Here and in every other positional manifest record each member is
+/// [JsonRequired]: System.Text.Json would otherwise load a left-out value-type member as 0.
+/// </summary>
+public readonly record struct RectPt(
+    [property: JsonRequired] double X,
+    [property: JsonRequired] double Y,
+    [property: JsonRequired] double W,
+    [property: JsonRequired] double H)
 {
     [JsonIgnore]
     public double Right => X + W;
@@ -65,7 +72,11 @@ public readonly record struct RectPt(double X, double Y, double W, double H)
 }
 
 /// <summary>A line segment in PDF points.</summary>
-public sealed record LinePt(double X1, double Y1, double X2, double Y2);
+public sealed record LinePt(
+    [property: JsonRequired] double X1,
+    [property: JsonRequired] double Y1,
+    [property: JsonRequired] double X2,
+    [property: JsonRequired] double Y2);
 
 public sealed record FontSpec
 {
@@ -141,7 +152,11 @@ public sealed record WeeklyPagesSpec
     /// <summary>Probe text per page name.</summary>
     public required IReadOnlyDictionary<string, string> Probes { get; init; }
 
-    /// <summary>1-based PDF page for a page name in week run <paramref name="run1"/> (1-based, clamped to <see cref="Count"/>).</summary>
+    /// <summary>
+    /// 1-based PDF page for a page name in week run <paramref name="run1"/> (1-based, clamped to <see cref="Count"/>).
+    /// Checked arithmetic: a spec the loader did not check (built in code) throws <see cref="OverflowException"/> instead
+    /// of wrapping to a negative page.
+    /// </summary>
     public int PdfPageFor(int run1, string pageName)
     {
         int run = Math.Clamp(run1, 1, Count);
@@ -151,7 +166,7 @@ public sealed record WeeklyPagesSpec
             throw new ArgumentException($"Unknown weekly page name '{pageName}'.", nameof(pageName));
         }
 
-        return FirstPdfPage + (Stride * (run - 1)) + offset;
+        return checked(FirstPdfPage + (Stride * (run - 1)) + offset);
     }
 }
 
@@ -244,7 +259,10 @@ public sealed record AnnualTitleSlot
     public RectPt Rect(int blockIndex) => Rect(BlockTops[blockIndex]);
 }
 
-public sealed record DateField(string Name, TextAlign Align, double X);
+public sealed record DateField(
+    [property: JsonRequired] string Name,
+    [property: JsonRequired] TextAlign Align,
+    [property: JsonRequired] double X);
 
 public sealed record DateSlot
 {
@@ -264,7 +282,7 @@ public sealed record DateSlot
     public required RectPt SlashErase { get; init; }
 }
 
-public sealed record Span(double From, double To);
+public sealed record Span([property: JsonRequired] double From, [property: JsonRequired] double To);
 
 public sealed record WeeksRemainingSlot
 {
@@ -301,7 +319,10 @@ public sealed record MonthNameSlot
     public MonthRule? Rule { get; init; }
 }
 
-public sealed record MonthRule(double X1, double X2, double Y);
+public sealed record MonthRule(
+    [property: JsonRequired] double X1,
+    [property: JsonRequired] double X2,
+    [property: JsonRequired] double Y);
 
 public sealed record DayGridSlot
 {
@@ -335,9 +356,15 @@ public sealed record DayGridSlot
     public RectPt Cell(int row, int column) => new(ColumnX[column], RowY[row], ColumnPitch, RowPitch);
 }
 
-public sealed record TrackerStripSpec(double BoxPt, int Count, double HeightFromCellBottom);
+public sealed record TrackerStripSpec(
+    [property: JsonRequired] double BoxPt,
+    [property: JsonRequired] int Count,
+    [property: JsonRequired] double HeightFromCellBottom);
 
-public sealed record NotesColumnSpec(double X, double Right, int Lines);
+public sealed record NotesColumnSpec(
+    [property: JsonRequired] double X,
+    [property: JsonRequired] double Right,
+    [property: JsonRequired] int Lines);
 
 public sealed record CoverLabelSlot
 {
@@ -697,7 +724,10 @@ public sealed record GeneratedSpec
     public required SetupPageSpec Setup { get; init; }
 }
 
-public sealed record HeadingSpec(double X, double BaselineY, double SizePt);
+public sealed record HeadingSpec(
+    [property: JsonRequired] double X,
+    [property: JsonRequired] double BaselineY,
+    [property: JsonRequired] double SizePt);
 
 public sealed record NotesPageSpec
 {
@@ -753,7 +783,10 @@ public sealed record ScorecardPageSpec
     public RectPt RowLabel(int rowIndex) => new(RowLabelX, FirstRowTop + (RowPitch * rowIndex) + 4, RowLabelW, 14);
 }
 
-public sealed record LabelSpec(string Text, double X, double BaselineY);
+public sealed record LabelSpec(
+    [property: JsonRequired] string Text,
+    [property: JsonRequired] double X,
+    [property: JsonRequired] double BaselineY);
 
 public sealed record SetupPageSpec
 {
@@ -784,7 +817,7 @@ public sealed record SetupPageSpec
     public IReadOnlyList<LabelSpec> Hints { get; init; } = Array.Empty<LabelSpec>();
 }
 
-public sealed record PointPt(double X, double Y);
+public sealed record PointPt([property: JsonRequired] double X, [property: JsonRequired] double Y);
 
 /// <summary>OneNote writer settings measured in the M0 spike.</summary>
 public sealed record OneNoteSpec

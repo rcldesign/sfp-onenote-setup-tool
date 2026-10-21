@@ -4,8 +4,9 @@ namespace Sfp.Core.Manifests;
 
 /// <summary>
 /// Structural sanity and token validation run on every loaded manifest: no null where the record needs a value, page
-/// size and count, the nine-page week run, PDF page numbers inside the document, known page names in every
-/// <c>appliesTo</c> list and page template, and the PRD token set in every section name and page title pattern. Each
+/// size and count, every color in the form #RRGGBB, the nine-page week run, PDF page numbers inside the document, known page names in every
+/// <c>appliesTo</c> list and page template, the PRD token set in every section name and page title pattern, and a week
+/// token in the name of every section repeated per week. Each
 /// failure is a <see cref="ManifestException"/> naming the manifest and the offending value.
 /// </summary>
 public static class ManifestChecks
@@ -27,6 +28,7 @@ public static class ManifestChecks
         ArgumentNullException.ThrowIfNull(sourceName);
         ManifestNullChecks.Run(manifest, sourceName);
         CheckPage(manifest, sourceName);
+        CheckColors(manifest, sourceName);
         CheckPageTypes(manifest, sourceName);
         CheckSlots(manifest, sourceName);
         CheckNotebook(manifest, sourceName);
@@ -49,6 +51,42 @@ public static class ManifestChecks
             Fail(source, $"pageCount must be greater than 0, found {m.PageCount.ToString(CultureInfo.InvariantCulture)}.");
         }
     }
+
+    /// <summary>
+    /// Every color is "#RRGGBB": the form the renderer's ColorParser reads (background, ink, dayBox) and OneNote's color
+    /// attribute accepts (section tints, page color). The page color may also be "automatic", OneNote's own color.
+    /// Checked at load so a bad tint fails before a full render instead of at the first section OneNote refuses.
+    /// </summary>
+    private static void CheckColors(Manifest m, string source)
+    {
+        CheckHexColor(source, "colors.background", m.Colors.Background);
+        CheckHexColor(source, "colors.ink", m.Colors.Ink);
+        CheckHexColor(source, "colors.dayBox", m.Colors.DayBox);
+        for (int i = 0; i < m.Colors.SectionTints.Count; i++)
+        {
+            CheckHexColor(source, $"colors.sectionTints[{Int(i)}]", m.Colors.SectionTints[i]);
+        }
+
+        string pageColor = m.OneNote.PageColor;
+        if (!IsHexColor(pageColor) && !string.Equals(pageColor, AutomaticPageColor, StringComparison.Ordinal))
+        {
+            Fail(source, $"onenote.pageColor must be a color in the form #RRGGBB or \"{AutomaticPageColor}\", found '{pageColor}'.");
+        }
+    }
+
+    private const string AutomaticPageColor = "automatic";
+
+    private static void CheckHexColor(string source, string path, string value)
+    {
+        if (!IsHexColor(value))
+        {
+            Fail(source, $"{path} must be a color in the form #RRGGBB, found '{value}'.");
+        }
+    }
+
+    /// <summary>'#' and six hex digits in either case, nothing else (no whitespace, no alpha, no short form).</summary>
+    private static bool IsHexColor(string value) =>
+        value.Length == 7 && value[0] == '#' && value.Skip(1).All(char.IsAsciiHexDigit);
 
     private static void CheckPageTypes(Manifest m, string source)
     {
@@ -79,18 +117,13 @@ public static class ManifestChecks
             Fail(source, $"pageTypes.weekly.pages must list {Int(WeeklyRunLength)} names (overview, mon to sun, reflection), found {Int(weekly.Pages.Count)}.");
         }
 
-        if (weekly.Pages.Distinct(StringComparer.Ordinal).Count() != weekly.Pages.Count)
+        if (!weekly.Pages.SequenceEqual(WeeklyRunPages, StringComparer.Ordinal))
         {
-            Fail(source, "pageTypes.weekly.pages holds a duplicate name.");
+            Fail(source, $"pageTypes.weekly.pages must be {string.Join(", ", WeeklyRunPages)} in that order, found {string.Join(", ", weekly.Pages)}.");
         }
 
         foreach (string page in weekly.Pages)
         {
-            if (!PageNames.IsKnown(page))
-            {
-                Fail(source, $"pageTypes.weekly.pages holds unknown page name '{page}'.");
-            }
-
             if (!weekly.Probes.ContainsKey(page))
             {
                 Fail(source, $"pageTypes.weekly.probes has no probe text for '{page}'.");
@@ -102,12 +135,25 @@ public static class ManifestChecks
             Fail(source, "pageTypes.weekly needs firstPdfPage >= 1, stride > 0 and count > 0.");
         }
 
-        int lastPage = weekly.FirstPdfPage + (weekly.Stride * (weekly.Count - 1)) + weekly.Pages.Count - 1;
+        if (weekly.Stride < weekly.Pages.Count)
+        {
+            Fail(source, $"pageTypes.weekly.stride must be at least {Int(weekly.Pages.Count)}, the pages of one week run, so the runs do not overlap; found {Int(weekly.Stride)}.");
+        }
+
+        // In long: stride * (count - 1) can pass int.MaxValue, and a wrapped (negative) last page would pass the bound.
+        long lastPage = weekly.FirstPdfPage + ((long)weekly.Stride * (weekly.Count - 1)) + weekly.Pages.Count - 1;
         if (lastPage > m.PageCount)
         {
-            Fail(source, $"pageTypes.weekly ends on page {Int(lastPage)}, beyond pageCount {Int(m.PageCount)}.");
+            Fail(source, $"pageTypes.weekly ends on page {lastPage.ToString(CultureInfo.InvariantCulture)}, beyond pageCount {Int(m.PageCount)}.");
         }
     }
+
+    /// <summary>The page names of a week run in PDF order: overview, mon to sun, reflection.</summary>
+    private static readonly string[] WeeklyRunPages =
+    {
+        PageNames.Overview, PageNames.Mon, PageNames.Tue, PageNames.Wed, PageNames.Thu, PageNames.Fri, PageNames.Sat, PageNames.Sun,
+        PageNames.Reflection,
+    };
 
     private static void CheckSlots(Manifest m, string source)
     {
@@ -193,6 +239,10 @@ public static class ManifestChecks
             string sectionPath = $"notebook.sections[{Int(s)}]";
             string sectionContext = section.EachWeek ? "in the name of a section with eachWeek" : "in the name of a section without eachWeek";
             ValidatePattern(source, $"{sectionPath}.name", section.Name, SectionNameTokens(section.EachWeek), sectionContext);
+            if (section.EachWeek && !TokenExpander.TokensIn(section.Name).Any(t => WeekTokens.Contains(t, StringComparer.Ordinal)))
+            {
+                Fail(source, $"{sectionPath}.name '{section.Name}' repeats once per week (eachWeek) but uses none of {{NN}}, {{start}} or {{end}}, so every week's section would get the same name.");
+            }
 
             if (section.Pages.Count == 0)
             {

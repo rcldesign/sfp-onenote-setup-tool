@@ -195,6 +195,10 @@ public class PlanCommandTests
             "{ \"notebook\": { \"sections\": [ { \"name\": \"Loose\", \"pages\": [ { \"type\": \"overview\", \"level\": 1 } ] } ] } }",
             "Page template type 'overview' is only valid inside a section with eachWeek."
         },
+        {
+            "{ \"notebook\": { \"sections\": [ { \"name\": \"Reviews\", \"pages\": [ { \"type\": \"scorecard\", \"level\": 1 } ] }, { \"name\": \"reviews\", \"pages\": [ { \"type\": \"quarterlyReview\", \"level\": 1 } ] } ] } }",
+            "The notebook template produces sections named 'Reviews' and 'reviews', the same name ignoring case (from notebook.sections[0].name 'Reviews' and notebook.sections[1].name 'reviews')"
+        },
     };
 
     [Theory]
@@ -251,6 +255,32 @@ public class PlanCommandTests
             code.Should().Be(ExitCodes.ValidationError);
             output.Should().BeEmpty();
             err.Should().Contain(fragment).And.NotContain("   at ");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("{ \"pageCount\": 132, \"pageCount\": 132 }", "$ holds the key 'pageCount' twice")]
+    [InlineData("{ \"slots\": { \"date\": { \"$comment\": \"a\", \"$comment\": \"b\" } } }", "$.slots.date holds the key '$comment' twice")]
+    [InlineData("{ \"notebook\": { \"namePattern\": \"A {Qn}\" }, \"notebook\": { \"namePattern\": \"B {Qn}\" } }", "$ holds the key 'notebook' twice")]
+    [InlineData("{ \"notebook\": { \"namePattern\": \"SFP \\ud800 {Qn}\" } }", "$.notebook.namePattern holds an unpaired UTF-16 surrogate escape")]
+    public void A_manifest_with_a_duplicate_key_or_an_unpaired_surrogate_exits_2_with_one_line(string userJson, string fragment)
+    {
+        string dir = TestPaths.NewTempDir("plan-malformed");
+        try
+        {
+            string user = Path.Combine(dir, "user.json");
+            File.WriteAllText(user, userJson);
+
+            (int code, string output, string err) = Run(Request("2027-01") with { ManifestPath = user });
+
+            code.Should().Be(ExitCodes.ValidationError);
+            output.Should().BeEmpty();
+            err.Should().StartWith($"Manifest '{user}' is not valid JSON: ").And.Contain(fragment).And.EndWith("\n").And.NotContain("   at ");
+            err.TrimEnd('\n').Should().NotContain("\n", "the error is one stderr line");
         }
         finally
         {

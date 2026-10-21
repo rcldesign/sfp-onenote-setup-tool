@@ -24,8 +24,9 @@ namespace Sfp.Core.Plan;
 /// <see cref="Tokens.Extra"/> values. dayOfQuarter on an out-of-quarter day page is the signed offset from the
 /// quarter start (0 for the day before it, length + 1 for the day after), with inQuarter "false".
 /// Errors: a manifest the loader accepted can still make a plan that cannot exist, reported as
-/// <see cref="ManifestException"/> (a week page outside an eachWeek section, an index outside its instances, a page key
-/// produced twice, checked whatever the Links option); Notes page names that are blank or collide are an
+/// <see cref="ManifestException"/> (a week page outside an eachWeek section, an index outside its instances, two section
+/// names equal ignoring case, a page key produced twice, checked whatever the Links option); Notes page names that are
+/// blank or collide are an
 /// <see cref="ArgumentException"/> from <see cref="ValidateNotesPages"/>.
 /// </remarks>
 public sealed class PlanBuilder : IPlanBuilder
@@ -71,21 +72,26 @@ public sealed class PlanBuilder : IPlanBuilder
 
         Context ctx = new(m, q, o, _dates.Weeks(q));
         List<SectionSpec> sections = new();
-        foreach (SectionTemplate template in m.Notebook.Sections)
+        List<int> templateOf = new();
+        for (int t = 0; t < m.Notebook.Sections.Count; t++)
         {
+            SectionTemplate template = m.Notebook.Sections[t];
             if (template.EachWeek)
             {
                 foreach (Week week in ctx.Weeks)
                 {
                     sections.Add(BuildSection(template, ctx, week));
+                    templateOf.Add(t);
                 }
             }
             else
             {
                 sections.Add(BuildSection(template, ctx, null));
+                templateOf.Add(t);
             }
         }
 
+        CheckUniqueSectionNames(sections, templateOf, m.Notebook.Sections);
         CheckUniqueKeys(sections);
         return new NotebookPlan(NotebookName(m, q, o), q, sections, _links.Build(m, q, sections, o));
     }
@@ -370,6 +376,39 @@ public sealed class PlanBuilder : IPlanBuilder
             }
         }
     }
+
+    /// <summary>
+    /// No two sections share a name, ignoring case: the writer keys sections by name and OneNote names a section's file
+    /// after it, so a second "Reviews" (or "reviews") would take the first one's place. The message names the manifest
+    /// key of each section template involved.
+    /// </summary>
+    private static void CheckUniqueSectionNames(IReadOnlyList<SectionSpec> sections, IReadOnlyList<int> templateOf, IReadOnlyList<SectionTemplate> templates)
+    {
+        Dictionary<string, int> firstWithName = new(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < sections.Count; i++)
+        {
+            if (firstWithName.TryAdd(sections[i].Name, i))
+            {
+                continue;
+            }
+
+            int earlier = firstWithName[sections[i].Name];
+            string first = sections[earlier].Name;
+            string second = sections[i].Name;
+            string names = string.Equals(first, second, StringComparison.Ordinal)
+                ? $"two sections named '{second}'"
+                : $"sections named '{first}' and '{second}', the same name ignoring case";
+            string origin = templateOf[earlier] == templateOf[i]
+                ? $"both from {SectionNameKey(templateOf[i], templates)}, which repeats once per week"
+                : $"from {SectionNameKey(templateOf[earlier], templates)} and {SectionNameKey(templateOf[i], templates)}";
+            throw new ManifestException(
+                $"The notebook template produces {names} ({origin}); every section needs its own name, ignoring case, "
+                + "because OneNote and the writer tell sections apart by name.");
+        }
+    }
+
+    private static string SectionNameKey(int template, IReadOnlyList<SectionTemplate> templates) =>
+        $"notebook.sections[{Int(template)}].name '{templates[template].Name}'";
 
     private static void Add(Dictionary<string, string> target, IReadOnlyDictionary<string, string> source)
     {
