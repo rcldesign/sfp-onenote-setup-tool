@@ -940,7 +940,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// The PRD's "three consecutive failures raise a Windows toast", updated once per real run from how it ended: a run
     /// that succeeded clears the streak; a run whose every Setup calendar source failed (exit 6), that OneNote failed
     /// (exit 3 or 5), that the opener stopped with a <see cref="NotebookOpener.Problem"/> (exit 2: another notebook of the
-    /// same name, the save guard, or the URL the sidecar records would not open), or that was refused by a stale lock that
+    /// same name, an old folder that still holds notebook files while the notebook of that name is at a URL, or the URL
+    /// the sidecar records would not open), or that was refused by a stale lock that
     /// could not be taken over (exit 5, <see cref="RefreshLock.IsStuck"/>) adds one, and from the third in a row on each
     /// such run raises the toast with the run's error. Dry runs, cancelled runs, a notebook that was simply not found
     /// (exit 2 with no Problem), a run refused because another run of the notebook really holds its lock, and runs whose
