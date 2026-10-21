@@ -1,3 +1,4 @@
+using Sfp.Core.Dates;
 using Sfp.Core.Plan;
 using Sfp.TestSupport;
 using SkiaSharp;
@@ -109,6 +110,97 @@ public sealed class RenderOnlyRunnerTests
             RenderOnlyRunner runner = new(f.Renderer, maxDegreeOfParallelism: 1);
             Action act = () => runner.Run(f.Q1Plan, new RenderOptions(Path.Combine(dir, "missing.pdf"), 72, f.Q1Options), dir);
             act.Should().Throw<FileNotFoundException>().WithMessage("*missing.pdf*");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_cancelled_run_from_a_folder_with_a_previous_index_leaves_no_index_and_none_of_its_pngs()
+    {
+        string dir = TestPaths.NewTempDir("runner-stale-cancel");
+        try
+        {
+            IReadOnlyList<string> previous = PreviousRun(dir);
+            using CancellationTokenSource cts = new();
+            cts.Cancel();
+            RenderOnlyRunner runner = new(new TinyImageRenderer(), maxDegreeOfParallelism: 2);
+
+            Action act = () => runner.Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir, null, cts.Token);
+
+            act.Should().Throw<OperationCanceledException>();
+            File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse("no index describes a run that did not finish");
+            previous.Should().OnlyContain(png => !File.Exists(Path.Combine(dir, png)), "the previous run's PNGs go with its index");
+            StrangersSurvive(dir);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_failed_run_from_a_folder_with_a_previous_index_leaves_no_index()
+    {
+        string dir = TestPaths.NewTempDir("runner-stale-fail");
+        try
+        {
+            PreviousRun(dir);
+            PageKey failing = PageKey.Day(new DateOnly(2027, 1, 4));
+            RenderOnlyRunner runner = new(new TinyImageRenderer(failing, new InvalidOperationException("boom")), maxDegreeOfParallelism: 1);
+
+            Action act = () => runner.Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir);
+
+            act.Should().Throw<InvalidOperationException>().WithMessage("boom");
+            File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse("no index describes a run that did not finish");
+            File.Exists(Path.Combine(dir, RenderOnlyRunner.FileNameFor(failing))).Should().BeFalse("the previous run's PNG of the page that failed went with its index");
+            StrangersSurvive(dir);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_run_after_a_plan_change_leaves_no_png_of_a_page_the_plan_dropped()
+    {
+        string dir = TestPaths.NewTempDir("runner-stale-plan");
+        try
+        {
+            PreviousRun(dir);
+            NotebookPlan q2 = f.Plan(f.Q1Options with { Start = new QuarterSpec(2027, 4) });
+
+            RenderOnlyResult result = new RenderOnlyRunner(new TinyImageRenderer()).Run(q2, f.Options(f.Q1Options, dpi: 72), dir);
+
+            IEnumerable<string> listed = RenderIndex.Parse(File.ReadAllText(result.IndexPath)).Pages.Select(p => p.Png).OfType<string>();
+            Directory.GetFiles(dir, "*.png").Select(p => Path.GetFileName(p)).Should().BeEquivalentTo(listed.Append(StrangerPng), "the folder holds the new run's PNGs and a PNG the tool never wrote, nothing of the old plan");
+            File.Exists(Path.Combine(dir, "day-2027-01-04.png")).Should().BeFalse("Mon Jan 4 is not in the Q2 plan");
+            StrangersSurvive(dir);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void An_unreadable_previous_index_stops_the_run_and_deletes_nothing()
+    {
+        string dir = TestPaths.NewTempDir("runner-stale-bad");
+        try
+        {
+            string index = Path.Combine(dir, RenderOnlyRunner.IndexFileName);
+            File.WriteAllText(index, "{ not an index");
+            File.WriteAllBytes(Path.Combine(dir, "cover.png"), new byte[] { 7 });
+
+            Action act = () => new RenderOnlyRunner(new TinyImageRenderer()).Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir);
+
+            act.Should().Throw<InvalidDataException>().WithMessage("*pages.json is not an index this tool can read*nothing was deleted*");
+            File.ReadAllText(index).Should().Be("{ not an index");
+            File.ReadAllBytes(Path.Combine(dir, "cover.png")).Should().Equal(new byte[] { 7 });
         }
         finally
         {
@@ -240,6 +332,43 @@ public sealed class RenderOnlyRunnerTests
 
         public RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions o) =>
             page.Key == failing ? throw error : new RenderedPage(page.Key, Array.Empty<byte>(), 0, 0, Array.Empty<AnchorPlacement>());
+    }
+
+    private const string StrangerPng = "my-scan.png";
+
+    private const string StrangerText = "notes.txt";
+
+    /// <summary>A finished run of the Q1 2027 plan in the folder plus two files the tool never wrote; the PNG names its index lists.</summary>
+    private IReadOnlyList<string> PreviousRun(string dir)
+    {
+        RenderOnlyResult result = new RenderOnlyRunner(new TinyImageRenderer()).Run(f.Q1Plan, f.Options(f.Q1Options, dpi: 72), dir);
+        File.WriteAllText(Path.Combine(dir, StrangerText), "mine");
+        File.WriteAllBytes(Path.Combine(dir, StrangerPng), new byte[] { 7 });
+        List<string> pngs = RenderIndex.Parse(File.ReadAllText(result.IndexPath)).Pages.Select(p => p.Png).OfType<string>().ToList();
+        pngs.Should().NotBeEmpty().And.OnlyContain(png => File.Exists(Path.Combine(dir, png)));
+        return pngs;
+    }
+
+    private static void StrangersSurvive(string dir)
+    {
+        File.ReadAllText(Path.Combine(dir, StrangerText)).Should().Be("mine", "a file the tool never wrote stays");
+        File.ReadAllBytes(Path.Combine(dir, StrangerPng)).Should().Equal(new byte[] { 7 }, "a PNG no index listed stays");
+    }
+
+    /// <summary>A renderer that returns a few bytes as every page's image, and throws the given exception for one page when set.</summary>
+    private sealed class TinyImageRenderer : IPageRenderer
+    {
+        private readonly PageKey? failing;
+        private readonly Exception? error;
+
+        public TinyImageRenderer(PageKey? failing = null, Exception? error = null)
+        {
+            this.failing = failing;
+            this.error = error;
+        }
+
+        public RenderedPage Render(PageSpec page, NotebookPlan plan, RenderOptions o) =>
+            error is not null && page.Key == failing ? throw error : new RenderedPage(page.Key, new byte[] { 1, 2, 3 }, 1, 1, Array.Empty<AnchorPlacement>());
     }
 
     /// <summary>Progress that records on the calling thread (Progress&lt;T&gt; would post to a context the test cannot wait on).</summary>
