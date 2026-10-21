@@ -408,7 +408,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
 
         try
         {
-            NextQuarterLinkResult result = _nextQuarterLinks().Link(previous, nb, coverHref);
+            NextQuarterLinkResult result = _nextQuarterLinks().Link(previous, nb, coverHref, state.Cancellation);
             if (result.Warning is not null)
             {
                 state.Warnings.Add(result.Warning);

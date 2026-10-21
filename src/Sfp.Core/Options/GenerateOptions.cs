@@ -38,7 +38,7 @@ public enum PageSizeMode
     /// <summary>PageSize Automatic (default; iPad ignores custom sizes).</summary>
     Automatic,
 
-    /// <summary>Custom 1112 x 770 pt page for people who print.</summary>
+    /// <summary>Custom page for people who print: the placed sheet plus the title offset (1112 x 806 pt by default).</summary>
     Custom,
 }
 

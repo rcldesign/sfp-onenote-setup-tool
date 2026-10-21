@@ -104,11 +104,13 @@ public class GeneratePreflightTests
     /// <summary>
     /// onenote-5: CoCreateInstance failing with E_ACCESSDENIED (a DCOM launch permission) or ERROR_FILE_NOT_FOUND (a
     /// registration whose server is gone) reaches the code as UnauthorizedAccessException or FileNotFoundException, not as
-    /// a COMException; it still says OneNote is installed but could not be started, with exit 3.
+    /// a COMException; it still says OneNote is installed but could not be started, with exit 3. Round 4 onenote-6: so
+    /// does E_OUTOFMEMORY (the server could not be started, as on an exhausted desktop heap), raised as OutOfMemoryException.
     /// </summary>
     [Theory]
     [InlineData(unchecked((int)0x80070005), typeof(UnauthorizedAccessException))]
     [InlineData(unchecked((int)0x80070002), typeof(FileNotFoundException))]
+    [InlineData(unchecked((int)0x8007000E), typeof(OutOfMemoryException))]
     public void An_activation_failure_the_runtime_raises_as_a_dotnet_exception_says_onenote_could_not_be_started_with_exit_3(int hresult, Type raisedAs)
     {
         Exception raised = System.Runtime.InteropServices.Marshal.GetExceptionForHR(hresult)!;

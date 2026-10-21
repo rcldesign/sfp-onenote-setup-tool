@@ -201,7 +201,8 @@ internal sealed class OneNoteSession : IOneNoteApp
         catch (Exception ex) when (OneNoteHResults.IsActivationFailure(ex))
         {
             // The activator's COMException, or the .NET exception the runtime raises for some HRESULTs
-            // (UnauthorizedAccessException for E_ACCESSDENIED, FileNotFoundException for ERROR_FILE_NOT_FOUND).
+            // (UnauthorizedAccessException for E_ACCESSDENIED, FileNotFoundException for ERROR_FILE_NOT_FOUND,
+            // OutOfMemoryException for E_OUTOFMEMORY; any other OutOfMemoryException is not caught here).
             OneNoteException mapped = OneNoteHResults.MapActivation(ex);
             _log.Error("OneNote activation failed: {HResult} {ExceptionType}", OneNoteHResults.Describe(mapped.HResult), ex.GetType().Name);
             throw mapped;

@@ -117,6 +117,38 @@ public class NextQuarterLinkWriterTests
         LinkOutlines(previous.Read(app)).Should().ContainSingle();
     }
 
+    /// <summary>
+    /// Round 4 onenote-1: with a textFormat that names the notebook ("{title} ›"), the link text changes with the next
+    /// notebook's name. The tool's own outline, untouched in OneNote, is judged by its shape (one paragraph, one onenote:
+    /// link, no text outside it), not by the text this run would write, so it is updated in place rather than kept as an
+    /// edit with a second link added below it.
+    /// </summary>
+    [Fact]
+    public void A_link_whose_text_names_the_notebook_is_updated_in_place_when_the_next_notebook_has_another_name()
+    {
+        Manifest titled = M with { Links = M.Links with { NextQuarter = M.Links.NextQuarter with { TextFormat = "{title} ›" } } };
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        NextQuarterLinkWriter writer = new(app, new SidecarStore(), titled, MonJan4.Options(titled), new CapturingSink().CreateLogger());
+        NextQuarterLinkResult first = writer.Link(previous.Folder, Next with { Name = "SFP Q1 2027 trial" }, CoverHref);
+        first.Outcome.Should().Be(NextQuarterLinkOutcome.Added, first.Warning);
+        previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId).PlainText.Should().Be("SFP Q1 2027 trial ›");
+        int outlines = previous.Read(app).Outlines.Count;
+
+        NextQuarterLinkResult second = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+
+        second.Outcome.Should().Be(NextQuarterLinkOutcome.Updated, second.Warning);
+        second.Warning.Should().BeNull("the outline holds only the tool's link, so it is not reported as edited");
+        second.ObjectId.Should().Be(first.ObjectId);
+        PageXml page = previous.Read(app);
+        page.Outlines.Should().HaveCount(outlines, "the link is updated in place, not joined by a second one");
+        OutlineInfo link = page.Outlines.Single(o => o.ObjectId == first.ObjectId);
+        link.PlainText.Should().Be("SFP Q1 2027 ›");
+        link.TextRuns.Single().Html.Should().Contain(WebUtility.HtmlEncode(OtherCoverHref)).And.NotContain(WebUtility.HtmlEncode(CoverHref));
+        page.Outlines.Should().NotContain(o => o.PlainText.Contains("trial", StringComparison.Ordinal), "the link to the trial notebook is gone");
+        previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId].Should().Be(first.ObjectId);
+    }
+
     [Fact]
     public void An_edit_the_user_makes_between_the_read_and_the_write_survives_the_add_and_the_update()
     {
@@ -221,6 +253,52 @@ public class NextQuarterLinkWriterTests
         second.Warning.Should().Contain("its link outline was edited in OneNote and is kept as it is").And.Contain("text 'January: hire two PMs'");
         app.CallsOf("UpdatePageContent").Should().HaveCount(writes, "nothing is sent");
         previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId).PlainText.Should().Be("Read the Q4 retro notes first " + LinkText);
+    }
+
+    /// <summary>
+    /// Round 4 onenote-2: a rebuilt state file can record the user's edited link outline as nextQuarter again (a Refresh
+    /// rebuild re-finds the anchor in the slot), while the tool's fresh link below it, from the run that kept the edit,
+    /// goes unrecorded. The next run takes that fresh link over instead of reporting it as something not the tool's: it
+    /// is updated in place and recorded, the edited outline stays exactly as it is, and nothing is added.
+    /// </summary>
+    [Fact]
+    public void After_a_rebuild_records_the_edited_outline_the_tools_fresh_link_below_it_is_updated_in_place_and_recorded()
+    {
+        const string thirdHref = "onenote:#Cover&section-id={third-quarter}{1}{B0}&page-id={third-cover}{1}{B0}&end";
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        NextQuarterLinkWriter writer = Writer(app);
+        NextQuarterLinkResult first = writer.Link(previous.Folder, Next, CoverHref);
+        XElement link = previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId).Element;
+        XElement run = link.Descendants(One + "T").Single();
+        run.ReplaceNodes(new XCData(run.Value + " (after the Q4 retro)"));
+        app.UpdatePageContent(OneNoteXml.Serialize(new XElement(One + "Page", new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName), new XAttribute("ID", previous.PageId), link)), DateTime.MinValue);
+        NextQuarterLinkResult second = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+        second.Outcome.Should().Be(NextQuarterLinkOutcome.Added, second.Warning);
+        OutlineInfo edited = previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId);
+
+        // The rebuild: the state file records the edited outline as nextQuarter again.
+        Sidecar sidecar = previous.Sidecar();
+        SidecarPage review = sidecar.Pages[PageKey.QuarterlyReview.Value];
+        Dictionary<string, string> rebuilt = new(review.Anchors, StringComparer.Ordinal) { [NextQuarterLinkWriter.AnchorId] = first.ObjectId! };
+        new SidecarStore().Save(previous.SidecarPath, sidecar with
+        {
+            Pages = new Dictionary<string, SidecarPage>(sidecar.Pages, StringComparer.Ordinal) { [PageKey.QuarterlyReview.Value] = review with { Anchors = rebuilt } },
+        });
+        int outlines = previous.Read(app).Outlines.Count;
+
+        NextQuarterLinkResult third = writer.Link(previous.Folder, Next with { Id = "{nb:third}{1}{B0}" }, thirdHref);
+
+        third.Outcome.Should().Be(NextQuarterLinkOutcome.Updated, third.Warning);
+        third.Warning.Should().BeNull();
+        third.ObjectId.Should().Be(second.ObjectId, "the tool's fresh link below the edited outline is the one updated");
+        PageXml page = previous.Read(app);
+        page.Outlines.Should().HaveCount(outlines, "nothing is added");
+        page.Outlines.Single(o => o.ObjectId == first.ObjectId).TextRuns.Select(r => r.Html).Should().Equal(edited.TextRuns.Select(r => r.Html), "the edited outline is left exactly as it is");
+        OutlineInfo fresh = page.Outlines.Single(o => o.ObjectId == second.ObjectId);
+        fresh.PlainText.Should().Be(LinkText);
+        fresh.TextRuns.Single().Html.Should().Contain(WebUtility.HtmlEncode(thirdHref)).And.NotContain(WebUtility.HtmlEncode(OtherCoverHref));
+        previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId].Should().Be(second.ObjectId, "the fresh link is recorded again");
     }
 
     /// <summary>Replaces the text of the user's "Q4 went well" outline, sending that outline alone as OneNote's own editor does.</summary>
@@ -396,6 +474,85 @@ public class NextQuarterLinkWriterTests
         LinkOutlines(page).Should().BeEmpty();
     }
 
+    /// <summary>
+    /// Round 4 onenote-3: a picture, attached file, media file or content from a later OneNote version that the user put
+    /// on the page itself (outside any outline, the way OneNote inserts a picture on empty page space) over the Next
+    /// quarter slot is the user's content: no link is written over it, and the warning names it.
+    /// </summary>
+    [Theory]
+    [InlineData("Image", "a picture")]
+    [InlineData("InsertedFile", "an attached file")]
+    [InlineData("MediaFile", "a media file")]
+    [InlineData("FutureObject", "an object")]
+    public void A_picture_file_or_other_object_on_the_page_over_the_slot_is_left_alone_and_reported(string kind, string named)
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        FixedAnchor slot = M.Links.NextQuarter;
+        Send(app, previous, PageObject(kind, slot.X - 10, slot.Y + M.OneNote.TitleOffsetPt - 10, 220, 140));
+        previous.Read(app).PageObjects.Should().ContainSingle().Which.Kind.Should().Be(kind);
+        int writes = app.CallsOf("UpdatePageContent").Count;
+
+        NextQuarterLinkResult result = Writer(app).Link(previous.Folder, Next, CoverHref);
+
+        result.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
+        result.Warning.Should().Be("The Next quarter link was not written to the previous notebook " + previous.Folder + ": something that is not the tool's sits where the link goes (" + named + ").");
+        app.CallsOf("UpdatePageContent").Should().HaveCount(writes, "nothing is written over it");
+        LinkOutlines(previous.Read(app)).Should().BeEmpty();
+        previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors.Should().NotContainKey(NextQuarterLinkWriter.AnchorId);
+    }
+
+    /// <summary>
+    /// Round 4 onenote-3: below a link outline the user edited, a picture the user put on the page where the fresh link
+    /// would go is the user's content too: the edited outline is kept, nothing is written, and the warning names it.
+    /// </summary>
+    [Fact]
+    public void A_picture_on_the_page_below_an_edited_link_outline_is_left_alone_and_no_fresh_link_is_written()
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        NextQuarterLinkWriter writer = Writer(app);
+        NextQuarterLinkResult first = writer.Link(previous.Folder, Next, CoverHref);
+        OutlineInfo link = previous.Read(app).Outlines.Single(o => o.ObjectId == first.ObjectId);
+        XElement edited = new(link.Element);
+        edited.Element(One + "OEChildren")!.AddFirst(new XElement(One + "OE", new XElement(One + "T", new XCData("Read the Q4 retro notes first"))));
+        Send(app, previous, edited, PageObject("Image", link.X + 5, link.Y + link.Height + 2, 180, 120));
+        int writes = app.CallsOf("UpdatePageContent").Count;
+
+        NextQuarterLinkResult second = writer.Link(previous.Folder, Next with { Id = "{nb:again}{1}{B0}" }, OtherCoverHref);
+
+        second.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
+        second.Warning.Should().Be("The Next quarter link was not written to the previous notebook " + previous.Folder
+            + ": its link outline was edited in OneNote and is kept as it is, and something that is not the tool's sits below it where a new link would go (a picture).");
+        app.CallsOf("UpdatePageContent").Should().HaveCount(writes, "nothing is written over the picture");
+        PageXml page = previous.Read(app);
+        page.Outlines.Single(o => o.ObjectId == first.ObjectId).PlainText.Should().Be("Read the Q4 retro notes first " + LinkText);
+        LinkOutlines(page).Should().BeEmpty("no fresh link outline was added");
+        previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId].Should().Be(first.ObjectId, "the state file is left as it was");
+    }
+
+    /// <summary>Sends <paramref name="elements"/> to the review page, as OneNote's own editor does with what the user changed.</summary>
+    private static void Send(FakeOneNoteApp app, PreviousNotebook previous, params XElement[] elements) =>
+        app.UpdatePageContent(OneNoteXml.Serialize(new XElement(One + "Page", new XAttribute(XNamespace.Xmlns + "one", One.NamespaceName), new XAttribute("ID", previous.PageId), elements)), DateTime.MinValue);
+
+    /// <summary>A picture, file, media file or later-version object placed on the page itself, outside any outline.</summary>
+    private static XElement PageObject(string kind, double x, double y, double width, double height)
+    {
+        XElement element = new(One + kind, OneNoteXml.Position(One, x, y, 3), OneNoteXml.Size(One, width, height, true));
+        switch (kind)
+        {
+            case "Image":
+                element.Add(new XAttribute("format", "png"), new XElement(One + "Data", Convert.ToBase64String(MonJan4.Png)));
+                break;
+            case "InsertedFile":
+            case "MediaFile":
+                element.Add(new XAttribute("pathSource", @"C:\Users\me\Documents\Q4 retro"), new XAttribute("preferredName", "Q4 retro"));
+                break;
+        }
+
+        return element;
+    }
+
     [Fact]
     public void The_link_goes_over_the_slot_of_a_sheet_placed_without_a_title_and_at_another_scale()
     {
@@ -510,6 +667,64 @@ public class NextQuarterLinkWriterTests
         waits.Should().Be(3, "the writer goes ahead as soon as the Refresh releases its lock");
         previous.Sidecar().Pages[PageKey.QuarterlyReview.Value].Anchors[NextQuarterLinkWriter.AnchorId].Should().Be(result.ObjectId);
         File.Exists(RefreshLock.PathBeside(previous.SidecarPath)).Should().BeFalse("the writer releases the lock when it is done");
+    }
+
+    /// <summary>
+    /// Round 4 onenote-5: a run cancelled (Ctrl+C, the app's Cancel) while the writer waits for a Refresh to release the
+    /// previous notebook's lock stops waiting at the poll it was cancelled in, not after 30 seconds, and leaves the link
+    /// unwritten with a warning that says why; nothing is read from or written to OneNote and the Refresh's lock is left.
+    /// </summary>
+    [Fact]
+    public void A_run_cancelled_while_the_writer_waits_for_the_lock_stops_waiting_and_leaves_the_link_unwritten()
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        DateTimeOffset now = new(2026, 10, 21, 5, 0, 0, TimeSpan.Zero);
+        using RefreshLock refresh = RefreshLock.TryAcquire(previous.SidecarPath, now, new CapturingSink().CreateLogger(), out _)!;
+        using CancellationTokenSource run = new();
+        int waits = 0;
+        NextQuarterLinkWriter writer = new(app, new SidecarStore(), M, MonJan4.Options(M), new CapturingSink().CreateLogger(), () => now, wait =>
+        {
+            now += wait;
+            if (++waits == 2)
+            {
+                run.Cancel();
+            }
+        });
+        string before = File.ReadAllText(previous.SidecarPath);
+        int calls = app.Calls.Count;
+
+        NextQuarterLinkResult result = writer.Link(previous.Folder, Next, CoverHref, run.Token);
+
+        result.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
+        waits.Should().Be(2, "the wait ends at the poll the run was cancelled in");
+        result.Warning.Should().Be(
+            "The Next quarter link was not written to the previous notebook " + previous.Folder + ": the run was cancelled while it waited for another run that uses it (process "
+            + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + " on " + Environment.MachineName + ", since 2026-10-21 05:00) to release its lock.");
+        app.Calls.Should().HaveCount(calls, "nothing is read from or written to OneNote");
+        File.ReadAllText(previous.SidecarPath).Should().Be(before, "the state file is left to the Refresh");
+        File.Exists(RefreshLock.PathBeside(previous.SidecarPath)).Should().BeTrue("the Refresh's lock is left to it");
+    }
+
+    /// <summary>
+    /// Round 4 onenote-5: without a test hook the writer waits on the run's cancellation token, so a cancel ends the wait
+    /// for the lock at once instead of after the 30 seconds a plain sleep would run out.
+    /// </summary>
+    [Fact]
+    public void The_wait_for_the_lock_ends_as_soon_as_the_run_is_cancelled()
+    {
+        using FakeOneNoteApp app = new();
+        PreviousNotebook previous = Previous(app);
+        using RefreshLock refresh = RefreshLock.TryAcquire(previous.SidecarPath, DateTimeOffset.Now, new CapturingSink().CreateLogger(), out _)!;
+        using CancellationTokenSource run = new(TimeSpan.FromMilliseconds(300));
+        System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+
+        NextQuarterLinkResult result = Writer(app).Link(previous.Folder, Next, CoverHref, run.Token);
+
+        clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10), "the cancel ends the wait, which would otherwise last 30 seconds");
+        result.Outcome.Should().Be(NextQuarterLinkOutcome.NotWritten);
+        result.Warning.Should().Contain("the run was cancelled while it waited for another run that uses it");
+        File.Exists(RefreshLock.PathBeside(previous.SidecarPath)).Should().BeTrue("the Refresh's lock is left to it");
     }
 
     /// <summary>

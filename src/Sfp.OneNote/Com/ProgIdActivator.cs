@@ -29,8 +29,9 @@ internal sealed class ProgIdActivator : IOneNoteActivator
         }
         catch (Exception ex) when (OneNoteHResults.IsActivationFailure(ex))
         {
-            // COMException for most HRESULTs, but the runtime raises E_ACCESSDENIED as UnauthorizedAccessException and
-            // ERROR_FILE_NOT_FOUND as FileNotFoundException; all of them are OneNote not starting (exit 3).
+            // COMException for most HRESULTs, but the runtime raises E_ACCESSDENIED as UnauthorizedAccessException,
+            // ERROR_FILE_NOT_FOUND as FileNotFoundException and E_OUTOFMEMORY as OutOfMemoryException; all of them are
+            // OneNote not starting (exit 3). Any other OutOfMemoryException is not caught here.
             throw OneNoteHResults.MapActivation(ex);
         }
 

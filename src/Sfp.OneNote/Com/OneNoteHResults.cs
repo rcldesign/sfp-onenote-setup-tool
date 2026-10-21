@@ -21,6 +21,9 @@ public static class OneNoteHResults
     public const int ObjectNotConnected = unchecked((int)0x800401FD);
     public const int MonikerUnavailable = unchecked((int)0x800401E3);
 
+    /// <summary>E_OUTOFMEMORY, which the runtime raises as OutOfMemoryException; from activation it is the server's (<see cref="IsActivationFailure"/>).</summary>
+    public const int OutOfMemory = unchecked((int)0x8007000E);
+
     // OneNote: Microsoft's "Error codes (OneNote)" table, in its order (there is no 0x80042021).
     public const int MalformedXml = unchecked((int)0x80042000);
     public const int InvalidXml = unchecked((int)0x80042001);
@@ -85,6 +88,7 @@ public static class OneNoteHResults
         [RpcDisconnected] = "RPC_E_DISCONNECTED",
         [ObjectNotConnected] = "CO_E_OBJNOTCONNECTED",
         [MonikerUnavailable] = "MK_E_UNAVAILABLE",
+        [OutOfMemory] = "E_OUTOFMEMORY",
         [MalformedXml] = "hrMalformedXML",
         [InvalidXml] = "hrInvalidXML",
         [CreatingSection] = "hrCreatingSection",
@@ -178,15 +182,23 @@ public static class OneNoteHResults
     /// <summary>
     /// True when an exception thrown while creating the OneNote.Application object is an activation failure, which
     /// <see cref="MapActivation"/> reports as OneNote not starting: anything but one the activator already mapped
-    /// (<see cref="OneNoteException"/>) or a fatal runtime failure (out of memory). The runtime throws most activation
-    /// HRESULTs as COMException, but some as the .NET exception it maps them to, carrying the HRESULT: E_ACCESSDENIED
-    /// (0x80070005, a DCOM launch permission) as UnauthorizedAccessException and ERROR_FILE_NOT_FOUND (0x80070002, a
-    /// registration whose server is gone) as FileNotFoundException. A reflection wrapper is judged by what it wraps.
+    /// (<see cref="OneNoteException"/>) or a fatal runtime failure. The runtime throws most activation HRESULTs as
+    /// COMException, but some as the .NET exception it maps them to, carrying the HRESULT: E_ACCESSDENIED (0x80070005, a
+    /// DCOM launch permission) as UnauthorizedAccessException, ERROR_FILE_NOT_FOUND (0x80070002, a registration whose
+    /// server is gone) as FileNotFoundException, and E_OUTOFMEMORY (0x8007000E, the server could not be started, as on an
+    /// exhausted desktop heap) as OutOfMemoryException. An OutOfMemoryException that carries E_OUTOFMEMORY is therefore an
+    /// activation failure (a real managed out-of-memory from that one call is implausible); any other one
+    /// (InsufficientMemoryException, for one) stays fatal and is not caught. A reflection wrapper is judged by what it wraps.
     /// </summary>
     public static bool IsActivationFailure(Exception error)
     {
         ArgumentNullException.ThrowIfNull(error);
-        return Unwrap(error) is not (OneNoteException or OutOfMemoryException);
+        return Unwrap(error) switch
+        {
+            OneNoteException => false,
+            OutOfMemoryException outOfMemory => outOfMemory.HResult == OutOfMemory,
+            _ => true,
+        };
     }
 
     /// <summary>

@@ -66,7 +66,11 @@ public interface INextQuarterLinkWriter
     /// <param name="previousNotebook">The previous notebook's folder, or the path of its state file.</param>
     /// <param name="next">The notebook just generated.</param>
     /// <param name="coverHref">onenote: URL of the new notebook's cover page.</param>
-    NextQuarterLinkResult Link(string previousNotebook, NotebookHandle next, string coverHref);
+    /// <param name="cancellationToken">
+    /// The run's cancellation. A cancel while the writer waits for the previous notebook's run lock ends the wait at once
+    /// and the link is not written (the result says so); a caller with no run to cancel passes none.
+    /// </param>
+    NextQuarterLinkResult Link(string previousNotebook, NotebookHandle next, string coverHref, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -79,14 +83,17 @@ public interface INextQuarterLinkWriter
 /// (or, when an earlier run wrote it but could not record it, by its exact position and text) and updates its text and
 /// target in place instead of adding a second one, as long as it still holds only the tool's link; an outline the user
 /// typed into, drew in or put something in is kept as it is, and a fresh link outline goes below it (recorded in its
-/// place, with a warning). Anything else overlapping the slot (the user's text or ink) is left alone and the link is not
-/// written. When the notebook is not open in OneNote, or the page ID no longer resolves, the notebook is opened from its
-/// folder once (or, when that folder is no longer on disk, from the location its state file records) and the page is
-/// tried again. Anchors are placed relative to the sheet image as it sits on the page, so a hidden-title or scaled
-/// notebook is linked correctly. The previous notebook's run lock (<see cref="RefreshLock"/>) is held from the read of
-/// its state file to the save, so a Refresh of that notebook never runs in between (while one holds it, the writer waits
-/// up to <see cref="LockWait"/> and then leaves the link unwritten with a warning); the state file is read again right
-/// before the save and only anchors["nextQuarter"] is changed on it, so nothing another writer recorded is lost.
+/// place, with a warning), unless the tool's own link from an earlier run already sits there unrecorded (a rebuilt state
+/// file recorded the edited outline instead): that one is updated in place and recorded. Anything else overlapping the
+/// slot or that spot (the user's text, ink, or a picture, file or other object placed on the page) is left alone and the
+/// link is not written. When the notebook is not open in OneNote, or the page ID no longer resolves, the notebook is
+/// opened from its folder once (or, when that folder is no longer on disk, from the location its state file records) and
+/// the page is tried again. Anchors are placed relative to the sheet image as it sits on the page, so a hidden-title or
+/// scaled notebook is linked correctly. The previous notebook's run lock (<see cref="RefreshLock"/>) is held from the read
+/// of its state file to the save, so a Refresh of that notebook never runs in between (while one holds it, the writer
+/// waits up to <see cref="LockWait"/>, or until the run is cancelled, and then leaves the link unwritten with a warning);
+/// the state file is read again right before the save and only anchors["nextQuarter"] is changed on it, so nothing
+/// another writer recorded is lost.
 /// </summary>
 public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
 {
@@ -115,7 +122,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
     /// <summary>What a link outline an earlier run wrote holds now.</summary>
     private enum LinkShape
     {
-        /// <summary>One paragraph holding only the tool's onenote: link with the link text: updated in place.</summary>
+        /// <summary>One paragraph holding only one onenote: link and no text outside it, whatever the link says: updated in place.</summary>
         Tool,
 
         /// <summary>No text and nothing else (the link's text was deleted): filled in place again.</summary>
@@ -131,7 +138,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
     private readonly PageXmlOptions _options;
     private readonly ILogger _log;
     private readonly Func<DateTimeOffset> _clock;
-    private readonly Action<TimeSpan> _sleep;
+    private readonly Action<TimeSpan>? _sleep;
 
     /// <param name="app">The run's COM session.</param>
     /// <param name="sidecars">State file store.</param>
@@ -139,7 +146,10 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
     /// <param name="options">Page XML settings of the run (font family, ink color, the manifest OneNote block).</param>
     /// <param name="log">Run log.</param>
     /// <param name="clock">The clock for the run lock and its wait; the system clock unless a test injects one.</param>
-    /// <param name="sleep">How the writer waits between tries of the run lock; Thread.Sleep unless a test injects one.</param>
+    /// <param name="sleep">
+    /// How the writer waits between tries of the run lock when a test injects it (the run's cancellation is checked before
+    /// and after each wait); by default the writer waits on the cancellation token's handle, so a cancel ends the wait at once.
+    /// </param>
     public NextQuarterLinkWriter(IOneNoteApp app, ISidecarStore sidecars, Manifest manifest, PageXmlOptions options, ILogger log, Func<DateTimeOffset>? clock = null, Action<TimeSpan>? sleep = null)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -153,7 +163,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         _options = options;
         _log = log;
         _clock = clock ?? (() => DateTimeOffset.Now);
-        _sleep = sleep ?? Thread.Sleep;
+        _sleep = sleep;
     }
 
     /// <summary>The warning line for a previous notebook that did not get its link.</summary>
@@ -161,7 +171,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         string.Format(CultureInfo.InvariantCulture, "The Next quarter link was not written to the previous notebook {0}: {1}.", previousNotebook, reason.TrimEnd('.'));
 
     /// <inheritdoc />
-    public NextQuarterLinkResult Link(string previousNotebook, NotebookHandle next, string coverHref)
+    public NextQuarterLinkResult Link(string previousNotebook, NotebookHandle next, string coverHref, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(previousNotebook);
         ArgumentNullException.ThrowIfNull(next);
@@ -169,7 +179,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         string given = previousNotebook.Trim();
         try
         {
-            return LinkCore(given, next, coverHref);
+            return LinkCore(given, next, coverHref, cancellationToken);
         }
         catch (Exception ex) when (ex is OneNoteException or IOException or UnauthorizedAccessException or JsonException or XmlException or FormatException)
         {
@@ -178,7 +188,7 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         }
     }
 
-    private NextQuarterLinkResult LinkCore(string given, NotebookHandle next, string coverHref)
+    private NextQuarterLinkResult LinkCore(string given, NotebookHandle next, string coverHref, CancellationToken cancellationToken)
     {
         (string? folder, string sidecarPath) = Locate(given);
         string missing = folder is not null && !Directory.Exists(folder)
@@ -190,7 +200,12 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         }
 
         // The run lock is held from here to the end of the save (disposed when this method returns).
-        using RefreshLock? held = TakeLock(sidecarPath, out string? holder);
+        using RefreshLock? held = TakeLock(sidecarPath, cancellationToken, out string? holder, out bool cancelled);
+        if (cancelled)
+        {
+            return NotWritten(given, given, "the run was cancelled while it waited for another run that uses it (" + holder + ") to release its lock");
+        }
+
         if (held is null && holder is not null)
         {
             return NotWritten(given, given, string.Format(
@@ -246,15 +261,14 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         // writes it, with exactly its text): either is updated in place rather than joined by a second one, while it
         // still holds only the tool's link. One the user edited is kept as it is and a fresh link goes below it.
         string? recordedId = review.Anchors.TryGetValue(AnchorId, out string? recorded) && page.Outlines.Any(o => !o.IsBackgroundImage && o.ObjectId == recorded) ? recorded : null;
-        string? existingId = recordedId ?? Adoptable(page, expected, anchor.Placement.Text, review.Anchors.Values)?.ObjectId;
-        XElement? existing = existingId is null
-            ? null
-            : root.Elements(one + "Outline").FirstOrDefault(o => string.Equals((string?)o.Attribute("objectID"), existingId, StringComparison.Ordinal));
+        string linkText = anchor.Placement.Text.Trim();
+        string? existingId = recordedId ?? Adoptable(page, expected, review.Anchors.Values, o => string.Equals(o.PlainText, linkText, StringComparison.Ordinal))?.ObjectId;
+        XElement? existing = OutlineElement(root, one, existingId);
         string? editedNote = null;
         IEnumerable<string> ownedIds = review.Anchors.Values;
         if (existing is not null)
         {
-            if (Shape(existing, one, anchor.Placement.Text) != LinkShape.Edited)
+            if (Shape(existing, one) != LinkShape.Edited)
             {
                 NextQuarterLinkResult updated = UpdateOwned(review.PageId, one, existing, html, name, existingId!);
                 return recordedId is not null ? updated : Record(updated, review, sidecarPath, name, existingId!);
@@ -265,6 +279,18 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
             outline.Element(one + "Position")!.ReplaceWith(OneNoteXml.Position(one, kept.X, below, 1));
             expected = PageXmlParser.Bounds(outline, one) ?? throw new FormatException("The anchor outline builder produced no position.");
             ownedIds = ownedIds.Append(existingId!);
+
+            // The tool's own link from an earlier run may already sit there unrecorded: a rebuilt state file can record
+            // the edited outline in the slot in its place. One with the tool's link shape, whatever its text, is taken
+            // over: updated in place and recorded. Only when nothing there can be taken over does Blocker decide.
+            string? freshId = Adoptable(page, expected, ownedIds, o => Shape(o.Element, one) == LinkShape.Tool)?.ObjectId;
+            XElement? fresh = OutlineElement(root, one, freshId);
+            if (fresh is not null)
+            {
+                _log.Information("The Next quarter link outline {ObjectId} on {Name} holds more than the tool's link; the tool's unrecorded link below it ({FreshId}) is updated in place", existingId, name, freshId);
+                return Record(UpdateOwned(review.PageId, one, fresh, html, name, freshId!), review, sidecarPath, name, freshId!);
+            }
+
             editedNote = "The Next quarter link on the quarterly review of " + name + " was edited in OneNote, so it was kept as it is and a new link was added below it.";
             _log.Information("The Next quarter link outline {ObjectId} on {Name} holds more than the tool's link; it is kept and a new link goes below it", existingId, name);
         }
@@ -301,11 +327,14 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
     /// <summary>
     /// Takes the previous notebook's run lock beside <paramref name="sidecarPath"/>. While a Refresh holds it, tries again
     /// every <see cref="LockPoll"/> for up to <see cref="LockWait"/>; then returns null with <paramref name="holder"/>
-    /// naming that run. A lock file that cannot be written at all returns null with no holder (logged by the lock): the
-    /// writer then goes ahead without it, and the reload before the save still keeps what another writer recorded.
+    /// naming that run. When the run is cancelled while it waits, returns null at once with <paramref name="cancelled"/>
+    /// set and <paramref name="holder"/> naming that run. A lock file that cannot be written at all returns null with no
+    /// holder (logged by the lock): the writer then goes ahead without it, and the reload before the save still keeps what
+    /// another writer recorded.
     /// </summary>
-    private RefreshLock? TakeLock(string sidecarPath, out string? holder)
+    private RefreshLock? TakeLock(string sidecarPath, CancellationToken cancellationToken, out string? holder, out bool cancelled)
     {
+        cancelled = false;
         DateTimeOffset started = _clock();
         while (true)
         {
@@ -322,8 +351,32 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
             }
 
             _log.Information("A Refresh of the notebook of {Path} holds its lock ({Holder}); waiting for it", sidecarPath, holder);
-            _sleep(LockPoll);
+            if (WaitCancelled(cancellationToken))
+            {
+                cancelled = true;
+                return null;
+            }
         }
+    }
+
+    /// <summary>
+    /// Waits <see cref="LockPoll"/> before the next try of the run lock; true when the run was cancelled before or during
+    /// the wait. Without a test hook the wait is on the token's handle, so a cancel ends it at once.
+    /// </summary>
+    private bool WaitCancelled(CancellationToken cancellationToken)
+    {
+        if (_sleep is null)
+        {
+            return cancellationToken.WaitHandle.WaitOne(LockPoll);
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return true;
+        }
+
+        _sleep(LockPoll);
+        return cancellationToken.IsCancellationRequested;
     }
 
     /// <summary>Two warning sentences as one line; the first may be absent.</summary>
@@ -331,11 +384,12 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
 
     /// <summary>
     /// What the link outline an earlier run wrote holds now. It has the tool's shape when it holds only the elements a
-    /// link outline holds (<see cref="ToolShapeElements"/>) and one paragraph whose only run is one onenote: link with
-    /// the link text and no text around it; it is empty when it holds no text and nothing else; anything else is the
-    /// user's edit.
+    /// link outline holds (<see cref="ToolShapeElements"/>) and one paragraph whose only run is exactly one onenote: link
+    /// with no text outside it (the run's plain text is the link's). The link's text is not compared with this run's: a
+    /// textFormat that names the notebook ("{title} ›") changes it with every new notebook name, and the tool's own
+    /// outline is still the tool's. It is empty when it holds no text and nothing else; anything else is the user's edit.
     /// </summary>
-    private static LinkShape Shape(XElement outline, XNamespace one, string linkText)
+    private static LinkShape Shape(XElement outline, XNamespace one)
     {
         if (outline.Descendants().Any(e => e.Name.Namespace != one || !ToolShapeElements.Contains(e.Name.LocalName))
             || outline.Descendants(one + "OE").Skip(1).Any())
@@ -355,12 +409,10 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         }
 
         string html = runs[0].Value;
-        string text = linkText.Trim();
         MatchCollection links = LinkElement().Matches(html);
         return links.Count == 1
             && WebUtility.HtmlDecode(links[0].Groups["href"].Value).Trim().StartsWith("onenote:", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(PageXmlParser.PlainText(links[0].Groups["inner"].Value), text, StringComparison.Ordinal)
-            && string.Equals(PageXmlParser.PlainText(html), text, StringComparison.Ordinal)
+            && string.Equals(PageXmlParser.PlainText(links[0].Groups["inner"].Value), PageXmlParser.PlainText(html), StringComparison.Ordinal)
             ? LinkShape.Tool
             : LinkShape.Edited;
     }
@@ -410,18 +462,25 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
 
     /// <summary>
     /// An outline the tool wrote for the link but did not record: not owned by any recorded anchor, within the match
-    /// tolerance of where the tool writes the link, and holding exactly its text. Null when there is not exactly one.
+    /// tolerance of where the tool writes the link (<paramref name="expected"/>), and recognized by
+    /// <paramref name="isToolLink"/> (in the slot: holding exactly the link text; below an edited outline: the tool's link
+    /// shape). Null when there is not exactly one.
     /// </summary>
-    private static OutlineInfo? Adoptable(PageXml page, RectPt expected, string text, IEnumerable<string> ownedIds)
+    private static OutlineInfo? Adoptable(PageXml page, RectPt expected, IEnumerable<string> ownedIds, Func<OutlineInfo, bool> isToolLink)
     {
         HashSet<string> owned = ownedIds.ToHashSet(StringComparer.Ordinal);
         List<OutlineInfo> matches = page.Outlines
             .Where(o => !o.IsBackgroundImage && o.ObjectId.Length > 0 && !owned.Contains(o.ObjectId))
             .Where(o => Math.Max(Math.Abs(o.X - expected.X), Math.Abs(o.Y - expected.Y)) <= MatchTolerancePt)
-            .Where(o => string.Equals(o.PlainText, text.Trim(), StringComparison.Ordinal))
+            .Where(isToolLink)
             .ToList();
         return matches.Count == 1 ? matches[0] : null;
     }
+
+    /// <summary>The one:Outline element with the given object ID among the page's top-level outlines, or null (also for a null ID).</summary>
+    private static XElement? OutlineElement(XElement root, XNamespace one, string? objectId) => objectId is null
+        ? null
+        : root.Elements(one + "Outline").FirstOrDefault(o => string.Equals((string?)o.Attribute("objectID"), objectId, StringComparison.Ordinal));
 
     /// <summary>
     /// The XML UpdatePageContent takes to add or update the link alone: the page, by its ID, holding that one outline.
@@ -587,7 +646,11 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
         };
     }
 
-    /// <summary>Something not owned by the tool (an outline or page-level ink) that overlaps the slot, described for the warning, or null.</summary>
+    /// <summary>
+    /// Something not owned by the tool that overlaps the slot, described for the warning, or null: an outline, page-level
+    /// ink, or a picture, attached file, media file or content from a later OneNote version placed on the page outside any
+    /// outline (<see cref="PageXml.PageObjects"/>), the objects Refresh's slot inspection counts as the user's.
+    /// </summary>
     private static string? Blocker(PageXml page, RectPt slot, IEnumerable<string> ownedIds)
     {
         HashSet<string> owned = ownedIds.ToHashSet(StringComparer.Ordinal);
@@ -608,8 +671,23 @@ public sealed partial class NextQuarterLinkWriter : INextQuarterLinkWriter
             return "text '" + (text.Length > max ? text[..max].TrimEnd() + "..." : text).Replace('\n', ' ') + "'";
         }
 
-        return page.InkDrawings().Any(d => d.OutlineObjectId is null && d.Bounds is RectPt bounds && Overlaps(bounds, slot)) ? "ink" : null;
+        if (page.InkDrawings().Any(d => d.OutlineObjectId is null && d.Bounds is RectPt bounds && Overlaps(bounds, slot)))
+        {
+            return "ink";
+        }
+
+        PageObjectInfo? item = page.PageObjects.FirstOrDefault(o => !owned.Contains(o.ObjectId) && Overlaps(o.Rect, slot));
+        return item is null ? null : Describe(item);
     }
+
+    /// <summary>A page object as the warning names it (the words Refresh's slot inspection uses).</summary>
+    private static string Describe(PageObjectInfo item) => item.Kind switch
+    {
+        "Image" => "a picture",
+        "InsertedFile" => "an attached file",
+        "MediaFile" => "a media file",
+        _ => "an object",
+    };
 
     /// <summary>True when an object overlaps the slot; an object without a reported size counts when its position lies in the slot (with the match tolerance).</summary>
     private static bool Overlaps(RectPt objectRect, RectPt slot)

@@ -234,12 +234,15 @@ public class OneNoteHResultsTests
     /// onenote-5: what the ProgID activator and the session catch from creating OneNote. The runtime raises
     /// E_ACCESSDENIED as UnauthorizedAccessException and ERROR_FILE_NOT_FOUND as FileNotFoundException (other HRESULTs as
     /// COMException), bare or inside a reflection wrapper; each maps to the not-started message with its HRESULT, keeping
-    /// the runtime's exception. An exception already mapped, or a fatal one, is not an activation failure.
+    /// the runtime's exception. An exception already mapped, or a fatal one, is not an activation failure. Round 4
+    /// onenote-6: E_OUTOFMEMORY, raised as OutOfMemoryException, is the server's and maps the same way; an out-of-memory
+    /// that does not carry it stays fatal.
     /// </summary>
     [Theory]
     [InlineData(unchecked((int)0x80070005))]
     [InlineData(unchecked((int)0x80070002))]
     [InlineData(unchecked((int)0x80080005))]
+    [InlineData(unchecked((int)0x8007000E))]
     public void An_activation_failure_of_any_exception_type_maps_to_the_not_started_message_with_its_hresult(int hresult)
     {
         Exception raised = Marshal.GetExceptionForHR(hresult)!;
@@ -256,7 +259,10 @@ public class OneNoteHResultsTests
         }
 
         OneNoteHResults.IsActivationFailure(new OneNoteUnavailableException()).Should().BeFalse("the activator's own mapped exception passes through unchanged");
-        OneNoteHResults.IsActivationFailure(new OutOfMemoryException()).Should().BeFalse("a fatal runtime failure is not reported as OneNote not starting");
+        InsufficientMemoryException fatal = new();
+        fatal.HResult.Should().NotBe(OneNoteHResults.OutOfMemory);
+        OneNoteHResults.IsActivationFailure(fatal).Should().BeFalse("an out-of-memory without E_OUTOFMEMORY is a fatal runtime failure, not OneNote not starting");
+        OneNoteHResults.IsActivationFailure(new System.Reflection.TargetInvocationException(fatal)).Should().BeFalse();
     }
 
     [Theory]
