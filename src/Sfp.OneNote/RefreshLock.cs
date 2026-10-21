@@ -81,12 +81,21 @@ public sealed class RefreshLock : IDisposable
                 return null;
             }
 
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The next attempt finds the lock still there and refuses the run; the caller reports the stuck lock.
+                log.Warning(ex, "The stale Refresh lock {Path} held by {Holder} could not be deleted ({Reason}), so it was not taken over", path, Describe(owner), stale);
+                continue;
+            }
+
             if (owner is not null)
             {
                 log.Warning("Taking over the stale Refresh lock {Path} held by {Holder}: {Reason}", path, Describe(owner), stale);
             }
-
-            TryDelete(path);
         }
     }
 

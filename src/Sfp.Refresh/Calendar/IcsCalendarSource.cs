@@ -29,7 +29,7 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
     private static readonly string[] UrlSchemes = { "http", "https", "webcal" };
 
     /// <summary>The zones the file being parsed on this flow defines for TZIDs no zone database knows; null when no file is being parsed.</summary>
-    private static readonly AsyncLocal<IReadOnlyDictionary<string, DateTimeZone>?> FileZones = new();
+    private static readonly AsyncLocal<DefinedZones?> FileZones = new();
 
     /// <summary>Wraps Ical.Net's TZID resolver once (see <see cref="Resolver"/>).</summary>
     private static readonly Lazy<bool> ResolverHook = new(() =>
@@ -107,8 +107,8 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
 
         CalendarCollection calendars = CalendarCollection.Load(icsText) ?? new CalendarCollection();
         _ = ResolverHook.Value;
-        IReadOnlyDictionary<string, DateTimeZone>? outer = FileZones.Value;
-        FileZones.Value = DefinedZones(calendars, from, to);
+        DefinedZones? outer = FileZones.Value;
+        FileZones.Value = new DefinedZones(calendars, from, to);
         try
         {
             return ParseEvents(calendars, from, to);
@@ -131,30 +131,81 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
 
     /// <summary>
     /// The zones of the file's VTIMEZONE blocks whose TZID is neither an IANA nor a Windows id (a legacy display name,
-    /// say). Ical.Net alone would guess such a zone from part of its name, or read the times as UTC. Each block is
-    /// expanded over the fetch window plus a year on each side, which covers every time the parse converts; a block that
-    /// changes its offset too often fails the source, naming its TZID (<see cref="VTimeZoneZone.MaxOnsets"/>).
+    /// say). Ical.Net alone would guess such a zone from part of its name, or read the times as UTC. A block is built
+    /// into a zone only when the parse first resolves its TZID (an event names it), never up front, and is expanded over
+    /// the fetch window plus a year on each side, which covers every time the parse converts. All the blocks one parse
+    /// builds share one budget of <see cref="VTimeZoneZone.MaxOnsets"/> onsets, so a file of many blocks costs no more
+    /// than a file of one; the block that crosses it fails the source, naming its TZID.
     /// </summary>
-    private static Dictionary<string, DateTimeZone> DefinedZones(CalendarCollection calendars, DateOnly from, DateOnly to)
+    private sealed class DefinedZones
     {
-        DateTime expandFrom = (from.Year > 1 ? from.AddYears(-1) : DateOnly.MinValue).ToDateTime(TimeOnly.MinValue);
-        DateTime expandTo = (to.Year < 9999 ? to.AddYears(1) : DateOnly.MaxValue).ToDateTime(TimeOnly.MinValue);
-        Dictionary<string, DateTimeZone> zones = new(StringComparer.Ordinal);
-        foreach (Ical.Net.CalendarComponents.VTimeZone definition in calendars.SelectMany(c => c.TimeZones))
-        {
-            string? id = definition.TzId;
-            if (string.IsNullOrWhiteSpace(id) || IsKnownZone(id) || zones.ContainsKey(id))
-            {
-                continue;
-            }
+        private readonly Dictionary<string, List<Ical.Net.CalendarComponents.VTimeZone>> blocks = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, DateTimeZone?> built = new(StringComparer.Ordinal);
+        private readonly HashSet<string> building = new(StringComparer.Ordinal);
+        private readonly DateTime expandFrom;
+        private readonly DateTime expandTo;
+        private int budget = VTimeZoneZone.MaxOnsets;
 
-            if (VTimeZoneZone.From(id, definition, expandFrom, expandTo) is VTimeZoneZone zone)
+        public DefinedZones(CalendarCollection calendars, DateOnly from, DateOnly to)
+        {
+            expandFrom = (from.Year > 1 ? from.AddYears(-1) : DateOnly.MinValue).ToDateTime(TimeOnly.MinValue);
+            expandTo = (to.Year < 9999 ? to.AddYears(1) : DateOnly.MaxValue).ToDateTime(TimeOnly.MinValue);
+            foreach (Ical.Net.CalendarComponents.VTimeZone definition in calendars.SelectMany(c => c.TimeZones))
             {
-                zones[id] = zone;
+                string? id = definition.TzId;
+                if (string.IsNullOrWhiteSpace(id) || IsKnownZone(id))
+                {
+                    continue;
+                }
+
+                if (!blocks.TryGetValue(id, out List<Ical.Net.CalendarComponents.VTimeZone>? list))
+                {
+                    blocks[id] = list = new();
+                }
+
+                list.Add(definition);
             }
         }
 
-        return zones;
+        /// <summary>
+        /// The zone the file defines for <paramref name="id"/>, built from its first readable block on first use; null when
+        /// the file has no block for it, none of its blocks can be read, or the block is being built already (its own
+        /// times name it), which the resolver then reports as a zone it cannot place.
+        /// </summary>
+        public DateTimeZone? Find(string id)
+        {
+            lock (built)
+            {
+                if (built.TryGetValue(id, out DateTimeZone? zone))
+                {
+                    return zone;
+                }
+
+                if (!blocks.TryGetValue(id, out List<Ical.Net.CalendarComponents.VTimeZone>? definitions) || !building.Add(id))
+                {
+                    return null;
+                }
+
+                try
+                {
+                    foreach (Ical.Net.CalendarComponents.VTimeZone definition in definitions)
+                    {
+                        zone = VTimeZoneZone.From(id, definition, expandFrom, expandTo, ref budget);
+                        if (zone is not null)
+                        {
+                            break;
+                        }
+                    }
+
+                    built[id] = zone;
+                    return zone;
+                }
+                finally
+                {
+                    building.Remove(id);
+                }
+            }
+        }
     }
 
     /// <summary>True for an IANA zone id (with or without the leading "/" Ical.Net also accepts) or a Windows zone id.</summary>
@@ -167,18 +218,19 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
 
     /// <summary>
     /// Ical.Net resolves every TZID through one process-wide function; it is wrapped once. While a file is parsed on this
-    /// flow, a TZID the file defines in a VTIMEZONE block is answered from that block, an IANA or Windows id goes to the
-    /// resolver that was there before, and any other TZID fails the source with its name instead of being guessed.
+    /// flow, a TZID the file defines in a VTIMEZONE block is answered from that block (built on first use), an IANA or
+    /// Windows id goes to the resolver that was there before, and any other TZID fails the source with its name instead of
+    /// being guessed.
     /// </summary>
     private static Func<string, DateTimeZone> Resolver(Func<string, DateTimeZone> inner) => id =>
     {
-        IReadOnlyDictionary<string, DateTimeZone>? zones = FileZones.Value;
+        DefinedZones? zones = FileZones.Value;
         if (zones is null || string.IsNullOrWhiteSpace(id))
         {
             return inner(id);
         }
 
-        if (zones.TryGetValue(id, out DateTimeZone? zone))
+        if (zones.Find(id) is DateTimeZone zone)
         {
             return zone;
         }

@@ -9,12 +9,16 @@ public sealed record OpenedNotebook(NotebookHandle Notebook, Sidecar? Sidecar, s
 
 /// <summary>
 /// Finds and opens the notebook a Refresh run names. The sidecar is looked for first (in the given folder, else in the
-/// search folders); then OneNote's open notebooks of that name are matched to it by notebook ID, then by path, and by
-/// name alone only when one is open, the sidecar records a local folder that is no longer on disk, and that notebook's
-/// own path is a URL (the notebook moved to OneDrive). Two notebooks of one name are never confused, and a sidecar is
-/// never rebuilt from the other one: a sidecar that records a URL is only ever matched by ID or path, else its URL is
-/// opened; a sidecar whose folder is still on disk has that folder opened; and a sidecar whose folder is gone while other
-/// notebooks of that name are open stops the run (<see cref="Problem"/>). When the notebook is not open,
+/// search folders); then OneNote's open notebooks of that name are matched to it by notebook ID, then by path, then,
+/// unless the sidecar records a URL, by being in the folder beside the sidecar file (a notebook moved to another folder
+/// with its sidecar: no other notebook can sit there), and by name alone only when one is open, its own path is a URL,
+/// and the local folder the sidecar records holds no notebook file (it is gone, or was left empty: the notebook moved
+/// to OneDrive). A sidecar that records a URL is only ever matched by ID or path, else its URL is opened (a notebook
+/// open beside it may be a copy left behind). A sidecar whose folder still holds notebook files while the one open
+/// notebook of that name is at a URL stops the run rather than open a copy left behind, and a sidecar whose folder is
+/// gone while other notebooks of that name are open stops it too (<see cref="Problem"/>); otherwise the recorded folder
+/// is opened. Known limit: when the real notebook is closed and its old folder is gone or empty, another notebook of
+/// that name on OneDrive (a trial) is taken for it, as no ID or path tells them apart. When the notebook is not open,
 /// OpenHierarchy is called on the folder path from the sidecar or the given folder. When the folders held no sidecar and the notebook
 /// OneNote resolved has a local folder path, the sidecar beside that folder is loaded, so a notebook generated outside
 /// the search folders keeps its sidecar instead of having it rebuilt and overwritten every run. The scheduled task may
@@ -27,6 +31,9 @@ public sealed class NotebookOpener
     public static readonly TimeSpan DefaultOpenTimeout = TimeSpan.FromSeconds(60);
 
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>What <see cref="HoldsNotebookFiles"/> looks through: every file under the folder, hidden and system files too.</summary>
+    private static readonly EnumerationOptions EveryFileInside = new() { RecurseSubdirectories = true, AttributesToSkip = 0, IgnoreInaccessible = false };
 
     private readonly IOneNoteApp app;
     private readonly ISidecarStore sidecars;
@@ -84,14 +91,25 @@ public sealed class NotebookOpener
         List<HierarchyNotebook> named = HierarchyXmlReader.Notebooks(app.GetHierarchy(null, HierarchyScope.Notebooks))
             .Where(n => string.Equals(n.Name, name, StringComparison.OrdinalIgnoreCase))
             .ToList();
-        HierarchyNotebook? open = Choose(named, sidecar, folder, name);
+        string? besideFolder = sidecarPath is null ? null : BesideSidecar(sidecarPath, name);
+        HierarchyNotebook? open = Choose(named, sidecar, folder, name, besideFolder);
         bool openedFromSidecarPath = false;
         if (open is null)
         {
             if (sidecar is not null && named.Count > 0 && IsGoneLocalFolder(sidecar.NotebookPath))
             {
                 // The recorded folder is gone and the open notebooks of that name are not the one notebook moved to OneDrive.
-                Problem = $"The sidecar at {sidecarPath} describes the notebook at {sidecar.NotebookPath}, which is no longer there, and {Paths(named)} {(named.Count == 1 ? "is another notebook" : "are other notebooks")} named '{name}'. The sidecar was left as it is. Open the notebook it describes in OneNote and close {(named.Count == 1 ? "the other" : "the others")}, or delete the sidecar if the open notebook is that notebook moved, and run Refresh again.";
+                Problem = $"The sidecar at {sidecarPath} describes the notebook at {sidecar.NotebookPath}, which is no longer there, and {Paths(named)} {(named.Count == 1 ? "is another notebook" : "are other notebooks")} named '{name}'. The sidecar was left as it is. Open the notebook it describes in OneNote and close {(named.Count == 1 ? "the other" : "the others")}, or, if {(named.Count == 1 ? "the open notebook" : "one of them")} is that notebook moved, move the sidecar file beside it and run Refresh again with --folder set to the folder that holds both.";
+                log.Warning("{Problem}", Problem);
+                return null;
+            }
+
+            if (sidecar is not null && named.Count == 1 && IsUrl(named[0].Path) && IsLocalPath(sidecar.NotebookPath) && HoldsNotebookFiles(sidecar.NotebookPath))
+            {
+                // The one notebook of that name may be the sidecar's moved to OneDrive, but the recorded folder still holds
+                // notebook files: opening that folder could open a copy left behind, and taking the notebook at the URL
+                // could rebuild the sidecar from another notebook.
+                Problem = $"The sidecar at {sidecarPath} describes the notebook at {sidecar.NotebookPath}, which still holds notebook files, and the notebook '{name}' open at {named[0].Path} may be that notebook moved to OneDrive. Refresh used neither and left the sidecar as it is. If the open notebook is the one that moved, move or rename the old folder; otherwise open the notebook the sidecar describes and close the other. Then run Refresh again.";
                 log.Warning("{Problem}", Problem);
                 return null;
             }
@@ -139,7 +157,7 @@ public sealed class NotebookOpener
         }
 
         NotebookHandle handle = new(open.Id, string.IsNullOrWhiteSpace(open.Path) ? sidecar?.NotebookPath ?? "" : open.Path, open.Name);
-        if (sidecar is not null && !openedFromSidecarPath && !string.Equals(sidecar.NotebookId, handle.Id, StringComparison.Ordinal) && DescribesAnotherNotebook(sidecar, handle.Path))
+        if (sidecar is not null && !openedFromSidecarPath && !string.Equals(sidecar.NotebookId, handle.Id, StringComparison.Ordinal) && DescribesAnotherNotebook(sidecar, handle.Path, besideFolder))
         {
             // The save guard, by the same rule as the choice: a sidecar is never rebuilt from, or saved over by, another notebook of the same name.
             Problem = $"The sidecar at {sidecarPath} describes the notebook at {sidecar.NotebookPath}, not the open notebook '{name}' at {handle.Path}, and was left as it is. Open the notebook it describes and run Refresh again.";
@@ -180,24 +198,50 @@ public sealed class NotebookOpener
     private static bool IsGoneLocalFolder(string path) => IsLocalPath(path) && !Directory.Exists(path);
 
     /// <summary>
-    /// The open notebook to use among those named like the request: with a sidecar, the one with its notebook ID, else the
-    /// one at its path, else the only one of that name when the sidecar does not describe another notebook (see
-    /// <see cref="DescribesAnotherNotebook"/>: only a notebook moved from a folder that is gone to a URL qualifies); without
-    /// a sidecar, the only one of that name, or the one in <paramref name="folder"/> when several are open. Null when a
-    /// path has to be opened instead (or the run stops).
+    /// True when the local folder holds a notebook file anywhere inside: a table of contents (.onetoc2) or a section
+    /// (.one). False when it is gone or holds neither. A folder that cannot be searched counts as holding one, so the run
+    /// stops rather than take another notebook for the one that moved.
     /// </summary>
-    private static HierarchyNotebook? Choose(List<HierarchyNotebook> named, Sidecar? sidecar, string? folder, string name)
+    private bool HoldsNotebookFiles(string folder)
+    {
+        try
+        {
+            return Directory.Exists(folder) && Directory.EnumerateFiles(folder, "*", EveryFileInside).Any(IsNotebookFile);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log.Warning(ex, "The folder {Path} could not be searched for notebook files and is taken to hold some", folder);
+            return true;
+        }
+    }
+
+    private static bool IsNotebookFile(string file)
+    {
+        string extension = Path.GetExtension(file);
+        return extension.Equals(".onetoc2", StringComparison.OrdinalIgnoreCase) || extension.Equals(".one", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The open notebook to use among those named like the request: with a sidecar, the one with its notebook ID, else the
+    /// one at its path, else the one in the folder beside the sidecar file (see <see cref="IsBesideSidecar"/>), else the
+    /// only one of that name when the sidecar does not describe another notebook (see <see cref="DescribesAnotherNotebook"/>:
+    /// only a notebook at a URL whose recorded local folder holds no notebook file qualifies); without a sidecar, the only
+    /// one of that name, or the one in <paramref name="folder"/> when several are open. Null when a path has to be opened
+    /// instead (or the run stops).
+    /// </summary>
+    private HierarchyNotebook? Choose(List<HierarchyNotebook> named, Sidecar? sidecar, string? folder, string name, string? beside)
     {
         if (sidecar is not null)
         {
             HierarchyNotebook? match = named.FirstOrDefault(n => string.Equals(n.Id, sidecar.NotebookId, StringComparison.Ordinal))
-                ?? named.FirstOrDefault(n => SamePath(n.Path, sidecar.NotebookPath));
+                ?? named.FirstOrDefault(n => SamePath(n.Path, sidecar.NotebookPath))
+                ?? named.FirstOrDefault(n => IsBesideSidecar(sidecar, n.Path, beside));
             if (match is not null)
             {
                 return match;
             }
 
-            return named.Count == 1 && !DescribesAnotherNotebook(sidecar, named[0].Path) ? named[0] : null;
+            return named.Count == 1 && !DescribesAnotherNotebook(sidecar, named[0].Path, beside) ? named[0] : null;
         }
 
         if (named.Count == 1)
@@ -210,25 +254,43 @@ public sealed class NotebookOpener
 
     /// <summary>
     /// True when the sidecar describes another notebook than the one at <paramref name="path"/>, which has another ID: the
-    /// sidecar records a URL (a notebook on OneDrive is only ever its own by ID or path), or a local folder that is still on
-    /// disk, or a local folder that is gone while <paramref name="path"/> is not a URL. Only a notebook whose old folder is
-    /// gone and that OneNote now reports at a URL (it moved to OneDrive) is taken as the sidecar's own. A sidecar that
-    /// records no path tells nothing, so it never describes another notebook.
+    /// sidecar records a URL (a notebook on OneDrive is only ever its own by ID or path), or a local folder while
+    /// <paramref name="path"/> is not a URL, or a local folder that still holds notebook files (see
+    /// <see cref="HoldsNotebookFiles"/>). Only a notebook in the folder beside the sidecar file (<see cref="IsBesideSidecar"/>),
+    /// or one that OneNote reports at a URL (it moved to OneDrive) and whose old folder is gone or holds no notebook file,
+    /// is taken as the sidecar's own. A sidecar that records no path tells nothing, so it never describes another notebook.
     /// </summary>
-    private static bool DescribesAnotherNotebook(Sidecar sidecar, string? path)
+    private bool DescribesAnotherNotebook(Sidecar sidecar, string? path, string? beside)
     {
         string recorded = sidecar.NotebookPath;
-        if (string.IsNullOrWhiteSpace(recorded) || SamePath(recorded, path))
+        if (string.IsNullOrWhiteSpace(recorded) || SamePath(recorded, path) || IsBesideSidecar(sidecar, path, beside))
         {
             return false;
         }
 
-        if (IsUrl(recorded) || Directory.Exists(recorded))
+        if (IsUrl(recorded))
         {
             return true;
         }
 
-        return !IsUrl(path);
+        return !IsUrl(path) || HoldsNotebookFiles(recorded);
+    }
+
+    /// <summary>
+    /// True when <paramref name="path"/> is the folder beside the sidecar file (<paramref name="beside"/>, see
+    /// <see cref="BesideSidecar"/>) and the sidecar does not record a URL: that notebook is the sidecar's own whatever local
+    /// folder the sidecar records, since it moved there with its sidecar and no other notebook can sit there. A sidecar
+    /// that records a URL stays in the local folder its notebook left for OneDrive, so a notebook open there may be a copy
+    /// left behind, and only its ID or its URL tells.
+    /// </summary>
+    private static bool IsBesideSidecar(Sidecar sidecar, string? path, string? beside) =>
+        !IsUrl(sidecar.NotebookPath) && SamePath(path, beside);
+
+    /// <summary>The notebook folder beside a sidecar file: the folder that holds the sidecar, plus the notebook name.</summary>
+    private static string? BesideSidecar(string sidecarPath, string name)
+    {
+        string? folder = Path.GetDirectoryName(Path.GetFullPath(sidecarPath));
+        return string.IsNullOrEmpty(folder) ? null : Path.Combine(folder, name);
     }
 
     private static bool SamePath(string? a, string? b) =>
