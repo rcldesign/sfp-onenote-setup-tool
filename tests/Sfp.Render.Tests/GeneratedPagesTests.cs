@@ -73,7 +73,8 @@ public sealed class GeneratedPagesTests
         ScorecardPageSpec s = M.Generated.Scorecard;
 
         RenderFixture.Read(sheet, HeadingRegion(330), paddingPt: 8).Should().Be("Quarter scorecard");
-        RenderFixture.Read(sheet, new RectPt(s.FinalColumnX - 10, s.HeaderBaselineY - 10, s.FinalColumnW + 20, 14)).Should().Be("Quarter");
+        double quarterX = GeneratedPages.QuarterColumnX(s, 14);
+        RenderFixture.Read(sheet, new RectPt(quarterX - 10, s.HeaderBaselineY - 10, s.FinalColumnW + 20, 14)).Should().Be("Quarter");
 
         IReadOnlyList<AnchorPlacement> weeks = page.Anchors.Where(a => a.Kind == AnchorKind.Link).ToList();
         weeks.Select(a => a.AnchorId).Should().Equal(Enumerable.Range(1, 14).Select(w => "scorecardWeek:" + w.ToString("00", System.Globalization.CultureInfo.InvariantCulture)));
@@ -101,12 +102,88 @@ public sealed class GeneratedPagesTests
     }
 
     [Fact]
+    public void Scorecard_with_links_off_bakes_every_week_number_in_its_header_cell()
+    {
+        RenderedPage page = f.Render(PageKey.Scorecard, o => o with { Links = false });
+        using SKBitmap sheet = RenderFixture.Decode(page);
+        ScorecardPageSpec s = M.Generated.Scorecard;
+
+        page.Anchors.Should().NotContain(a => a.Kind == AnchorKind.Link, "links are off");
+        for (int week = 0; week < 14; week++)
+        {
+            RectPt cell = s.WeekHeader(week);
+            f.HasInk(sheet, new RectPt(cell.X + 2, cell.Y + 1, cell.W - 4, cell.H - 2)).Should().BeTrue($"week {week + 1:00} is baked in its header cell");
+            f.HasInk(sheet, new RectPt(cell.X + 2, cell.Y + 1, (cell.W / 2) - 9, cell.H - 2)).Should().BeFalse($"week {week + 1:00} is centered in its cell, not at its left edge");
+        }
+    }
+
+    [SkippableFact]
+    public void Scorecard_with_links_off_reads_the_week_numbers_in_the_header()
+    {
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        using SKBitmap sheet = RenderFixture.Decode(f.Render(PageKey.Scorecard, o => o with { Links = false }));
+        ScorecardPageSpec s = M.Generated.Scorecard;
+
+        // Tesseract reads the fallback face's "0" as the letter O when it leads ("01" comes back as "Ol"), so the OCR
+        // check reads the cells it reads reliably; the pixel test above covers all fourteen.
+        foreach (int week in new[] { 2, 9, 10, 14 })
+        {
+            RectPt cell = s.WeekHeader(week - 1);
+            string text = RenderFixture.Read(sheet, new RectPt(cell.X + 3, cell.Y, cell.W - 6, cell.H), paddingPt: 1);
+            RenderFixture.Digits(text).Should().Be(week.ToString("00", System.Globalization.CultureInfo.InvariantCulture), "OCR read '" + text + "'");
+        }
+    }
+
+    [Fact]
     public void Q2_2024_scorecard_has_13_week_columns()
     {
         Core.Options.GenerateOptions q2 = f.Q1Options with { Start = new Core.Dates.QuarterSpec(2024, 4) };
         NotebookPlan plan = f.Plan(q2);
         RenderedPage page = f.Renderer.Render(plan.Page(PageKey.Scorecard), plan, f.Options(q2));
         page.Anchors.Count(a => a.Kind == AnchorKind.Link).Should().Be(13);
+    }
+
+    [Theory]
+    [InlineData(2027, 1, 14)]
+    [InlineData(2024, 4, 13)]
+    public void The_quarter_column_follows_the_last_week_column_with_one_rule_between(int year, int month, int weeks)
+    {
+        Core.Options.GenerateOptions options = f.Q1Options with { Start = new Core.Dates.QuarterSpec(year, month) };
+        NotebookPlan plan = f.Plan(options);
+        plan.Quarter.WeekCount.Should().Be(weeks);
+        using SKBitmap sheet = RenderFixture.Decode(f.Renderer.Render(plan.Page(PageKey.Scorecard), plan, f.Options(options)));
+        ScorecardPageSpec s = M.Generated.Scorecard;
+        double lastWeekRight = s.ColumnX0 + (s.ColumnPitch * weeks);
+        double quarterRight = lastWeekRight + s.FinalColumnW;
+        double bodyY = s.FirstRowTop + (s.RowPitch / 2);
+        double ruleY = s.FirstRowTop + s.RowPitch;
+
+        GeneratedPages.QuarterColumnX(s, weeks).Should().Be(lastWeekRight);
+        f.HasInk(sheet, new RectPt(lastWeekRight - 0.6, bodyY, 1.2, 4)).Should().BeTrue("the rule after the last week column is the Quarter column's left edge");
+        f.HasInk(sheet, new RectPt(lastWeekRight + 1, bodyY, s.FinalColumnW - 2, 4)).Should().BeFalse("one rule between week {0:00} and Quarter, and no second rule at finalColumnX", weeks);
+        f.HasInk(sheet, new RectPt(quarterRight - 0.6, bodyY, 1.2, 4)).Should().BeTrue("the Quarter column is finalColumnW wide");
+        f.HasInk(sheet, new RectPt(quarterRight + 1, s.FirstRowTop - 2, 1082 - quarterRight - 1, s.RowPitch * 2)).Should().BeFalse("no phantom column or rule stub right of Quarter");
+        f.HasInk(sheet, new RectPt(quarterRight - 4, ruleY - 0.6, 3, 1.2)).Should().BeTrue("the row rules run to the Quarter column's right edge");
+
+        double title = f.Fonts.TextWidth(GeneratedPages.QuarterColumnTitle, s.LabelSizePt);
+        double center = lastWeekRight + (s.FinalColumnW / 2);
+        f.HasInk(sheet, new RectPt(center - (title / 2), s.HeaderBaselineY - 8, title / 2, 9)).Should().BeTrue("'Quarter' is centered over its column");
+        f.HasInk(sheet, new RectPt(center, s.HeaderBaselineY - 8, title / 2, 9)).Should().BeTrue();
+        f.HasInk(sheet, new RectPt(center + (title / 2) + 1, s.HeaderBaselineY - 8, 6, 9)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Week_columns_that_would_end_past_finalColumnX_are_refused()
+    {
+        ScorecardPageSpec s = M.Generated.Scorecard;
+        Manifest wide = M with { Generated = M.Generated with { Scorecard = s with { ColumnPitch = 60 } } };
+        PageRenderer renderer = new(wide, f.Rasterizer, f.Fonts, f.Engine);
+
+        Action act = () => renderer.Render(f.Q1Plan.Page(PageKey.Scorecard), f.Q1Plan, f.Options(f.Q1Options, dpi: 72));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*generated.scorecard*14 week columns of 60 pt from x 255 end at 1095*finalColumnX 1013*");
+        GeneratedPages.QuarterColumnX(s, 14).Should().Be(1011);
+        GeneratedPages.QuarterColumnX(s, 13).Should().Be(957);
     }
 
     [SkippableFact]

@@ -41,7 +41,15 @@ public class OcrTests
         using SKBitmap crop = Ocr.Crop(source, new RectPt(90, 40, 20, 20), dpi: 72, paddingPt: 5);
         crop.Width.Should().Be(30);
         crop.Height.Should().Be(30);
+        crop.ColorType.Should().Be(source.ColorType);
         crop.GetPixel(15, 15).Should().Be(SKColors.Black);
+        for (int y = 13; y <= 17; y++)
+        {
+            for (int x = 13; x <= 17; x++)
+            {
+                crop.GetPixel(x, y).Should().Be(source.GetPixel(85 + x, 35 + y), "the crop is the source's pixels one to one");
+            }
+        }
 
         using SKBitmap edge = Ocr.Crop(source, new RectPt(1100, 760, 50, 50), dpi: 72, paddingPt: 0);
         edge.Width.Should().Be(12);

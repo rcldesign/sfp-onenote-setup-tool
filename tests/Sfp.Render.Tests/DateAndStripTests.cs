@@ -85,6 +85,12 @@ public sealed class DateAndStripTests
         IReadOnlyList<double> x = DateSlots.StripPositions(strip, numbers, t => f.Fonts.TextWidth(t, strip.SizePt));
         double cap = f.Fonts.TextWidth("0", strip.SizePt) * 1.4;
 
+        // The disc on 13 (index 1) is centered on the number's ink and is wider than it, so 13 reaches the disc's rim.
+        double r = strip.CircleDiameterPt / 2;
+        double cx = x[1] + InkCenter("13", strip.SizePt);
+        double Left(int i) => i == 1 ? cx - r - 0.3 : x[i] - 0.6;
+        double Right(int i) => i == 1 ? cx + r + 0.3 : x[i] + f.Fonts.TextWidth(numbers[i], strip.SizePt) + 0.6;
+
         // Every number has ink inside its own box and the gap before the next one is clear.
         for (int i = 0; i < 14; i++)
         {
@@ -93,8 +99,8 @@ public sealed class DateAndStripTests
             f.HasInk(sheet, box).Should().BeTrue($"number {numbers[i]} is drawn at x {x[i]:0.0}");
             if (i < 13)
             {
-                double gapLeft = x[i] + w + 0.6;
-                double gapRight = x[i + 1] - 0.6;
+                double gapLeft = Right(i);
+                double gapRight = Left(i + 1);
                 f.HasInk(sheet, new RectPt(gapLeft, strip.BaselineY - cap, gapRight - gapLeft, cap)).Should().BeFalse($"the gap between {numbers[i]} and {numbers[i + 1]} is empty");
             }
         }
@@ -108,15 +114,44 @@ public sealed class DateAndStripTests
         clusters.Max(c => c.WidthPt).Should().BeApproximately(strip.CircleDiameterPt, 1.0, "the widest cluster is the disc");
 
         // The circle sits on 13 (index 1): a filled disc with the digit in white inside it.
-        double cx = x[1] + (f.Fonts.TextWidth("13", strip.SizePt) / 2);
         double cy = strip.CircleCenterY;
-        double r = strip.CircleDiameterPt / 2;
         sheet.GetPixel(Px(cx - r + 1.5), Px(cy)).Should().Be(f.Ink, "inside the rim of the disc is ink");
         sheet.GetPixel(Px(cx), Px(cy - r + 1.5)).Should().Be(f.Ink);
         Pixels.HasWhite(sheet, new RectPt(cx - r, cy - r, 2 * r, 2 * r), RenderFixture.Dpi, f.Background).Should().BeTrue("the circled number is drawn in white");
         sheet.GetPixel(Px(cx), Px(cy + r + 2.5)).Should().Be(f.Background, "outside the disc is bare sheet");
         sheet.GetPixel(Px(x[0] + 2), Px(cy)).Should().NotBe(f.Ink, "14 is not circled");
         ColorParser.MaxChannelDistance(Pixels.Darkest(sheet, new RectPt(x[0], strip.BaselineY - cap, f.Fonts.TextWidth("14", strip.SizePt), cap), RenderFixture.Dpi), f.Ink).Should().BeLessThanOrEqualTo(8, "14 is drawn in solid ink");
+    }
+
+    /// <summary>
+    /// Wave 3 review: with the 13.4 pt disc the white number must sit in the middle of it and clear of the rim. The
+    /// disc used to be centered on the number's advance box, and the side bearings of "1" put the white "14" 0.65 pt
+    /// right of center with 0.39 pt left to the rim at 220 DPI; it is now centered on the number's ink.
+    /// </summary>
+    [Theory]
+    [InlineData(1, "14")]
+    [InlineData(2, "13")]
+    [InlineData(3, "12")]
+    [InlineData(4, "11")]
+    [InlineData(5, "10")]
+    [InlineData(13, "2")]
+    public void The_circled_number_sits_in_the_middle_of_the_disc_clear_of_its_rim(int week, string circled)
+    {
+        PageKey key = PageKey.Day(week == 1 ? new DateOnly(2027, 1, 1) : new DateOnly(2027, 1, 4).AddDays(7 * (week - 2)));
+        using SKBitmap sheet = RenderFixture.Decode(f.Render(key));
+        WeeksRemainingSlot strip = M.Slots.WeeksRemaining;
+        string[] numbers = DateSlots.StripNumbers(14);
+        IReadOnlyList<double> x = DateSlots.StripPositions(strip, numbers, t => f.Fonts.TextWidth(t, strip.SizePt));
+        int index = Array.IndexOf(numbers, circled);
+
+        DiscFit disc = Pixels.Disc(sheet, strip.Erase, RenderFixture.Dpi, f.Background);
+
+        string fit = string.Create(CultureInfo.InvariantCulture, $"disc center ({disc.CenterX:0.00}, {disc.CenterY:0.00}) r {disc.Radius:0.00}, white center ({disc.WhiteCenterX:0.00}, {disc.WhiteCenterY:0.00}), rim clearance {disc.RimClearance:0.00} pt");
+        disc.CenterX.Should().BeInRange(x[index], x[index] + f.Fonts.TextWidth(circled, strip.SizePt), "the disc is on " + circled + ": " + fit);
+        disc.Radius.Should().BeApproximately(strip.CircleDiameterPt / 2, 0.35, fit);
+        (disc.WhiteCenterX - disc.CenterX).Should().BeInRange(-0.35, 0.35, "the white number is centered across the disc: " + fit);
+        (disc.WhiteCenterY - disc.CenterY).Should().BeInRange(-0.35, 0.35, "and down it: " + fit);
+        disc.RimClearance.Should().BeGreaterThanOrEqualTo(0.6, "no white digit grazes the rim: " + fit);
     }
 
     [Fact]
@@ -333,4 +368,12 @@ public sealed class DateAndStripTests
     }
 
     private static int Px(double pt) => (int)Math.Floor(pt * RenderFixture.Dpi / 72.0);
+
+    /// <summary>The horizontal middle of a text's ink in points from its origin (where the renderer centers the disc).</summary>
+    private double InkCenter(string text, double sizePt)
+    {
+        using SKFont font = f.Fonts.Font(sizePt);
+        font.MeasureText(text, out SKRect bounds);
+        return (bounds.Left + bounds.Right) / 2;
+    }
 }

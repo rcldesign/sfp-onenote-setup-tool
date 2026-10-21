@@ -22,19 +22,22 @@ public sealed class TimeBlockColumnTests
     private TimeBlocksSlot Slot => f.Manifest.Slots.TimeBlocks;
 
     [SkippableFact]
-    public void Window_6_to_22_shows_16_labels_in_order()
+    public void Window_6_to_22_labels_all_17_rules_6_through_10_in_order()
     {
         Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
         using SKBitmap sheet = RenderFixture.Decode(f.Render(MonJan4));
         TimeBlocksSlot t = Slot;
         double pitch = t.PitchFor(16);
-        string[] expected = ["6", "7", "8", "9", "10", "11", "12", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
+        // 16 rows have 17 rules, and every rule carries its hour as the printed planner labels all 25 of its rules:
+        // the closing rule reads 10 (22:00), the end of the window.
+        string[] expected = ["6", "7", "8", "9", "10", "11", "12", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
 
         // Each row crop stops short of the rules at columnX and is 16 pt tall so the OCR helper hands it to Tesseract
         // unscaled (a lone 9 pt digit is read reliably in line mode only at its native pixels; word mode turns "11"
         // into "ll"). The whole label column as one block is read too.
         List<string> read = new();
-        for (int row = 0; row < 16; row++)
+        for (int row = 0; row <= 16; row++)
         {
             double y = t.Top + (row * pitch);
             RectPt label = new(t.LabelRightX - 16, y - 8, 17, 16);
@@ -68,6 +71,14 @@ public sealed class TimeBlockColumnTests
 
         Pixels.Mean(sheet, new RectPt(t.Erase.X + 1, t.Erase.Y + 1, t.Erase.W - 2, t.Top - t.Erase.Y - 6), RenderFixture.Dpi).Should().Be(f.Background, "above the first rule is bare sheet");
         f.HasInk(sheet, new RectPt(t.LabelRightX - 14, t.Top - 5, 14, 10)).Should().BeTrue("the first label straddles its rule");
+        for (int row = 1; row <= 16; row++)
+        {
+            double y = t.Top + (row * pitch);
+            f.HasInk(sheet, new RectPt(t.LabelRightX - 14, y - 5, 14, 10)).Should().BeTrue($"rule {row} carries its hour label, the closing rule included");
+            f.HasInk(sheet, new RectPt(t.LabelRightX - 14, y - (pitch / 2) - 3, 14, 6)).Should().BeFalse($"nothing beside the middle of row {row}");
+        }
+
+        Pixels.Mean(sheet, new RectPt(t.Erase.X + 1, t.Bottom + 6, t.Erase.W - 2, t.Erase.Bottom - t.Bottom - 7), RenderFixture.Dpi).Should().Be(f.Background, "below the closing label is bare sheet");
         f.HasInk(sheet, new RectPt(t.LabelRightX + 1, t.Top - 5, t.ColumnX - t.LabelRightX - 2, 10)).Should().BeFalse("labels end at the label right edge, before the rules start");
         (t.Bottom - t.Top).Should().BeApproximately(16 * pitch, 0.001);
     }
@@ -104,6 +115,7 @@ public sealed class TimeBlockColumnTests
         page.Anchors.Should().Contain(a => a.AnchorId == "timeBlockEvent:0").And.Contain(a => a.AnchorId == "timeBlockEvent:23");
         double pitch = t.PitchFor(24);
         f.HasInk(sheet, new RectPt(t.ColumnX + 50, t.Top + pitch - 0.6, 2, 1.2)).Should().BeTrue();
+        f.HasInk(sheet, new RectPt(t.LabelRightX - 14, t.Bottom - 4, 14, 8)).Should().BeTrue("25 labels for 24 rows, as printed: the closing rule reads 12");
     }
 
     [Theory]

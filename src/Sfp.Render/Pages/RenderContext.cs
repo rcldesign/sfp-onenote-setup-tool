@@ -95,8 +95,27 @@ internal sealed class RenderContext : IDisposable
     public void Text(string text, double x, double baselineY, TextAlign align, double sizePt, SKColor color) =>
         Sheet.Text(text, x, baselineY, align, Font(sizePt), color);
 
+    /// <summary>
+    /// Draws text in ink inside a rectangle the way a link anchor's text sits in its outline: anchored on x by the
+    /// alignment (the left edge, the center or the right edge) and, unless a baseline is given, with its capitals
+    /// centered vertically. Bakes an anchor's text into the sheet when the page has no link for it (links off).
+    /// </summary>
+    public void TextIn(RectPt rect, string text, TextAlign align, double sizePt, double? baselineY = null)
+    {
+        double x = align switch
+        {
+            TextAlign.Center => rect.CenterX,
+            TextAlign.Right => rect.Right,
+            _ => rect.X,
+        };
+        Text(text, x, baselineY ?? rect.CenterY + (CapHeight(sizePt) / 2), align, sizePt);
+    }
+
     /// <summary>Advance width of the text in points at a point size.</summary>
     public double TextWidth(string text, double sizePt) => Sheet.TextWidth(text, Font(sizePt));
+
+    /// <summary>The box the text's glyphs ink, in points relative to its origin, at a point size (see <see cref="SheetCanvas.InkBounds"/>).</summary>
+    public RectPt InkBounds(string text, double sizePt) => Sheet.InkBounds(text, Font(sizePt));
 
     /// <summary>Cap height in points at a point size.</summary>
     public double CapHeight(double sizePt) => Sheet.Measure(Font(sizePt)).CapHeight;

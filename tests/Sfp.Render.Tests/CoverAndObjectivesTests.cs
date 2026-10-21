@@ -99,6 +99,57 @@ public sealed class CoverAndObjectivesTests
     }
 
     [Fact]
+    public void Annual_pages_with_links_off_bake_each_block_label_so_the_two_pages_differ()
+    {
+        RenderedPage first = f.Render(PageKey.Annual(1), o => o with { Links = false });
+        RenderedPage second = f.Render(PageKey.Annual(2), o => o with { Links = false });
+        AnnualObjectiveAnchor a = M.Links.AnnualObjective;
+
+        first.Anchors.Should().NotContain(x => x.Kind == AnchorKind.Link, "links are off");
+        first.Png.Should().NotEqual(second.Png, "page 1 names objectives 1 to 4 and page 2 names 5 to 8");
+        using SKBitmap sheet = RenderFixture.Decode(first);
+        for (int block = 0; block < a.BlockTops.Count; block++)
+        {
+            RectPt label = a.Rect(block);
+            f.HasInk(sheet, new RectPt(label.X, label.Y + 1, 12, label.H - 2)).Should().BeTrue($"'Objective {block + 1}' starts at the label's left edge");
+            f.HasInk(sheet, label).Should().BeTrue();
+        }
+    }
+
+    [SkippableFact]
+    public void Annual_page_with_links_off_reads_Objective_n_in_each_block()
+    {
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        using SKBitmap sheet = RenderFixture.Decode(f.Render(PageKey.Annual(2), o => o with { Links = false }));
+        AnnualObjectiveAnchor a = M.Links.AnnualObjective;
+
+        RenderFixture.Read(sheet, a.Rect(0), paddingPt: 2).Should().Be("Objective 5");
+        RenderFixture.Read(sheet, a.Rect(3), paddingPt: 2).Should().Be("Objective 8");
+    }
+
+    [Fact]
+    public void Objective_pages_with_links_off_bake_their_number_beside_the_heading()
+    {
+        RenderedPage third = f.Render(PageKey.Objective(3), o => o with { Links = false });
+        RenderedPage fourth = f.Render(PageKey.Objective(4), o => o with { Links = false });
+
+        third.Anchors.Should().ContainSingle().Which.AnchorId.Should().Be("objectiveHeading", "links are off; the heading slot stays for Refresh");
+        third.Png.Should().NotEqual(fourth.Png, "each detail page names its objective");
+        using SKBitmap sheet = RenderFixture.Decode(third);
+        RectPt back = M.Links.ObjectiveBack.Rect;
+        f.HasInk(sheet, new RectPt(back.X, back.Y + 2, 14, back.H - 4)).Should().BeTrue("'Objective 3' starts at the back link's left edge");
+    }
+
+    [SkippableFact]
+    public void Objective_page_with_links_off_reads_Objective_3()
+    {
+        Skip.If(!Ocr.IsAvailable, "No OCR engine on this machine.");
+        using SKBitmap sheet = RenderFixture.Decode(f.Render(PageKey.Objective(3), o => o with { Links = false }));
+
+        RenderFixture.Read(sheet, M.Links.ObjectiveBack.Rect, paddingPt: 2).Should().Be("Objective 3");
+    }
+
+    [Fact]
     public void Objective_page_art_passes_through_untouched()
     {
         RenderedPage page = f.Render(PageKey.Objective(3));

@@ -1,5 +1,6 @@
 using System.Globalization;
 using Sfp.Core;
+using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
 using Sfp.Core.Plan;
@@ -9,7 +10,8 @@ namespace Sfp.Render.Pages;
 /// <summary>
 /// M2.8: the pages the tool draws itself in the template style from manifest.generated: Setup (labels, numbered ruled
 /// slots, the time-block window boxes with hint digits, hint lines), the Quarter scorecard (objective rows, week
-/// columns whose headers are link placements, a final Quarter column, row label cells as propagated placements), the
+/// columns whose headers are link placements, or baked week numbers when links are off, the Quarter column right after
+/// the last week column, row label cells as propagated placements), the
 /// monthly and quarterly reviews (the week-13 reflection art with its heading erased and the review title drawn), and
 /// the ruled Notes pages. Headings use generated.heading, the same spot as the printed page titles.
 /// </summary>
@@ -61,17 +63,28 @@ internal static class GeneratedPages
         Heading(c, c.Page.Title);
 
         int weeks = c.Plan.Quarter.WeekCount;
-        double right = s.FinalColumnX + s.FinalColumnW;
+        double quarterX = QuarterColumnX(s, weeks);
+        double right = quarterX + s.FinalColumnW;
         double top = s.FirstRowTop;
         double bottom = s.FirstRowTop + (s.RowPitch * s.RowCount);
 
-        foreach (LinkSpec link in c.LinksOfType(ScorecardWeekAnchor))
+        for (int week = 1; week <= weeks; week++)
         {
-            int week = int.Parse(link.AnchorInstance ?? "", CultureInfo.InvariantCulture);
-            c.AddLink(link.AnchorId, s.WeekHeader(week - 1), link.Text, header.Align, header.SizePt);
+            string nn = PlannerText.WeekNumber(week);
+            RectPt cell = s.WeekHeader(week - 1);
+            LinkSpec? link = c.Link(ScorecardWeekAnchor + ":" + nn);
+            if (link is not null)
+            {
+                c.AddLink(link.AnchorId, cell, link.Text, header.Align, header.SizePt);
+            }
+            else
+            {
+                // No link to the week's reflection (links off): the column header is baked so the grid still reads.
+                c.TextIn(cell, nn, header.Align, header.SizePt, s.HeaderBaselineY);
+            }
         }
 
-        c.Text(QuarterColumnTitle, s.FinalColumnX + (s.FinalColumnW / 2), s.HeaderBaselineY, TextAlign.Center, s.LabelSizePt);
+        c.Text(QuarterColumnTitle, quarterX + (s.FinalColumnW / 2), s.HeaderBaselineY, TextAlign.Center, s.LabelSizePt);
 
         for (int row = 0; row <= s.RowCount; row++)
         {
@@ -79,6 +92,7 @@ internal static class GeneratedPages
             c.Rule(s.RowLabelX, y, right, y, s.RuleWidthPt);
         }
 
+        // The rule after the last week column (column == weeks) is the Quarter column's left edge.
         c.Rule(s.RowLabelX, top, s.RowLabelX, bottom, s.RuleWidthPt);
         for (int column = 0; column <= weeks; column++)
         {
@@ -86,13 +100,37 @@ internal static class GeneratedPages
             c.Rule(x, top, x, bottom, s.RuleWidthPt);
         }
 
-        c.Rule(s.FinalColumnX, top, s.FinalColumnX, bottom, s.RuleWidthPt);
         c.Rule(right, top, right, bottom, s.RuleWidthPt);
 
         for (int row = 0; row < s.RowCount; row++)
         {
             c.AddPropagated(ScorecardRowSlot + ":" + (row + 1).ToString(CultureInfo.InvariantCulture), s.RowLabel(row), s.LabelSizePt);
         }
+    }
+
+    /// <summary>
+    /// Left edge of the scorecard's Quarter column: immediately after the last week column (columnX0 + columnPitch *
+    /// weeks), so 13 and 14 weeks alike get one rule between the last week and Quarter and no blank column.
+    /// generated.scorecard.finalColumnX is the furthest right the Quarter column may start.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The week columns end past finalColumnX.</exception>
+    public static double QuarterColumnX(ScorecardPageSpec s, int weeks)
+    {
+        ArgumentNullException.ThrowIfNull(s);
+        double x = s.ColumnX0 + (s.ColumnPitch * weeks);
+        if (x > s.FinalColumnX)
+        {
+            throw new InvalidOperationException(string.Format(
+                CultureInfo.InvariantCulture,
+                "generated.scorecard: {0} week columns of {1} pt from x {2} end at {3}, past finalColumnX {4}, the furthest right the Quarter column may start.",
+                weeks,
+                s.ColumnPitch,
+                s.ColumnX0,
+                x,
+                s.FinalColumnX));
+        }
+
+        return x;
     }
 
     /// <summary>A monthly or quarterly review: the reflection art with the printed heading and the empty date slot erased, retitled.</summary>

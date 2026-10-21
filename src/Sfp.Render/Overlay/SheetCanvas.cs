@@ -114,6 +114,22 @@ public sealed class SheetCanvas : IDisposable
     /// <summary>Advance width of the text in points for a font at this sheet's pixel size.</summary>
     public double TextWidth(string text, SKFont font) => string.IsNullOrEmpty(text) ? 0 : font.MeasureText(text) / Scale;
 
+    /// <summary>
+    /// The box the text's glyphs actually ink, in points relative to its origin (x from the start of the advance, y from
+    /// the baseline, negative upward). Unlike the advance width it leaves out the side bearings, which differ between
+    /// glyphs (a "1" sits inside a wide advance), so it is what centers text on a mark.
+    /// </summary>
+    public RectPt InkBounds(string text, SKFont font)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return default;
+        }
+
+        font.MeasureText(text, out SKRect bounds);
+        return new RectPt(bounds.Left / Scale, bounds.Top / Scale, bounds.Width / Scale, bounds.Height / Scale);
+    }
+
     /// <summary>Ascent, descent, cap height and x-height in points for a font at this sheet's pixel size.</summary>
     public TextMetricsPt Measure(SKFont font)
     {

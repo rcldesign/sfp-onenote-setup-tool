@@ -9,29 +9,40 @@ namespace Sfp.Render;
 /// PDFium rasterizer (through PDFtoImage). Pages render with antialiasing on, annotations and form fill off, and the
 /// manifest background color behind the page. The pixel size is set explicitly from the page size so that
 /// 1112 x 770 pt at 220 DPI is exactly 3398 x 2353 px. Rendered pages are kept in a small least-recently-used cache
-/// keyed by (path, page, dpi) and handed out as copies, so callers can draw on their copy without touching the cache.
+/// keyed by (path, page, dpi) and handed out as pixel copies (<see cref="BitmapCopy"/>, never SKBitmap.Copy, whose
+/// shader would keep an evicted page alive), so callers can draw on their copy without touching the cache. The cache
+/// is bounded by the bytes its pixels hold (256 MB by default: eight pages at 220 DPI, four at 300 DPI) as well as by a
+/// page count, so a higher DPI cannot grow it past the memory budget; a page larger than the byte budget is not cached.
 /// PDFium is not thread-safe, so every render runs under one lock.
 /// </summary>
 public sealed class Rasterizer : IRasterizer
 {
-    /// <summary>Default number of rendered pages kept in memory (about 32 MB each at 220 DPI).</summary>
+    /// <summary>Default upper bound on the number of rendered pages kept in memory.</summary>
     public const int DefaultCacheCapacity = 12;
+
+    /// <summary>Default upper bound on the pixel bytes the cached pages hold: 256 MB, eight pages at 220 DPI (32 MB each) and four at 300 DPI (59 MB each).</summary>
+    public const long DefaultCacheBytes = 256L * 1024 * 1024;
 
     private readonly object gate = new();
     private readonly SKColor background;
     private readonly int cacheCapacity;
+    private readonly long cacheBytes;
     private readonly Dictionary<string, OpenDocument> documents = new(StringComparer.Ordinal);
     private readonly Dictionary<CacheKey, LinkedListNode<CacheEntry>> cache = new();
     private readonly LinkedList<CacheEntry> recency = new();
+    private long cachedBytes;
     private bool disposed;
 
     /// <param name="background">Color painted behind the page (the manifest's colors.background).</param>
-    /// <param name="cacheCapacity">Rendered pages kept in memory; 0 disables the cache.</param>
-    public Rasterizer(SKColor background, int cacheCapacity = DefaultCacheCapacity)
+    /// <param name="cacheCapacity">Most rendered pages kept in memory; 0 disables the cache.</param>
+    /// <param name="cacheBytes">Most pixel bytes the cached pages may hold together; a page larger than this is rendered but never cached; 0 disables the cache.</param>
+    public Rasterizer(SKColor background, int cacheCapacity = DefaultCacheCapacity, long cacheBytes = DefaultCacheBytes)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(cacheCapacity);
+        ArgumentOutOfRangeException.ThrowIfNegative(cacheBytes);
         this.background = background;
         this.cacheCapacity = cacheCapacity;
+        this.cacheBytes = cacheBytes;
     }
 
     /// <summary>Pages currently held in the cache.</summary>
@@ -42,6 +53,18 @@ public sealed class Rasterizer : IRasterizer
             lock (gate)
             {
                 return cache.Count;
+            }
+        }
+    }
+
+    /// <summary>Pixel bytes the cached pages hold together (never more than the byte budget).</summary>
+    public long CachedBytes
+    {
+        get
+        {
+            lock (gate)
+            {
+                return cachedBytes;
             }
         }
     }
@@ -66,7 +89,7 @@ public sealed class Rasterizer : IRasterizer
             {
                 recency.Remove(node);
                 recency.AddFirst(node);
-                return node.Value.Bitmap.Copy();
+                return BitmapCopy.Clone(node.Value.Bitmap);
             }
 
             PdfPageSize size = doc.PageSizes[index];
@@ -96,14 +119,16 @@ public sealed class Rasterizer : IRasterizer
                     pdfPage1Based, pdfPath, rendered.Width, rendered.Height, widthPx, heightPx));
             }
 
-            if (cacheCapacity == 0)
+            long bytes = ByteSize(rendered);
+            if (cacheCapacity == 0 || bytes > cacheBytes)
             {
+                // The cache is off, or this page alone would exceed the byte budget: the caller gets the only copy.
                 return rendered;
             }
 
             rendered.SetImmutable();
-            Remember(key, rendered);
-            return rendered.Copy();
+            Remember(key, rendered, bytes);
+            return BitmapCopy.Clone(rendered);
         }
     }
 
@@ -140,6 +165,7 @@ public sealed class Rasterizer : IRasterizer
 
             recency.Clear();
             cache.Clear();
+            cachedBytes = 0;
         }
     }
 
@@ -158,16 +184,22 @@ public sealed class Rasterizer : IRasterizer
         }
     }
 
-    private void Remember(CacheKey key, SKBitmap bitmap)
+    /// <summary>Pixel bytes of a bitmap (row bytes times height).</summary>
+    private static long ByteSize(SKBitmap bitmap) => (long)bitmap.RowBytes * bitmap.Height;
+
+    /// <summary>Adds a page as the most recent entry, then evicts the least recent ones until both bounds hold (the new page always fits).</summary>
+    private void Remember(CacheKey key, SKBitmap bitmap, long bytes)
     {
-        LinkedListNode<CacheEntry> node = new(new CacheEntry(key, bitmap));
+        LinkedListNode<CacheEntry> node = new(new CacheEntry(key, bitmap, bytes));
         recency.AddFirst(node);
         cache[key] = node;
-        while (recency.Count > cacheCapacity)
+        cachedBytes += bytes;
+        while (recency.Count > cacheCapacity || cachedBytes > cacheBytes)
         {
             LinkedListNode<CacheEntry> oldest = recency.Last!;
             recency.RemoveLast();
             cache.Remove(oldest.Value.Key);
+            cachedBytes -= oldest.Value.Bytes;
             oldest.Value.Bitmap.Dispose();
         }
     }
@@ -195,7 +227,7 @@ public sealed class Rasterizer : IRasterizer
 
     private readonly record struct CacheKey(string Path, int Page, int Dpi);
 
-    private sealed record CacheEntry(CacheKey Key, SKBitmap Bitmap);
+    private sealed record CacheEntry(CacheKey Key, SKBitmap Bitmap, long Bytes);
 
     private sealed class OpenDocument
     {

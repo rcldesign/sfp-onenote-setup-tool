@@ -7,8 +7,9 @@ namespace Sfp.Render.Pages;
 
 /// <summary>
 /// M2.7: the Time Blocks column rebuilt for the configured window. The printed 24-row column (7 pt labels) is erased
-/// and one row per hour is drawn: a rule at the top of each row (and one closing rule at the bottom), the 12-hour
-/// label centered on the rule as the planner prints it, and a propagated "timeBlockEvent:{hour}" slot per row for
+/// and one row per hour is drawn: a rule at the top of each row and one closing rule at the bottom, each carrying its
+/// 12-hour label centered on it as the planner prints them (25 labels for 24 rows, so the closing rule reads the
+/// window's end hour: 6 through 10 for 06:00 to 22:00), and a propagated "timeBlockEvent:{hour}" slot per row for
 /// the calendar import. The column is always rebuilt, even for a 24-row window, so every page carries the 9 pt labels.
 /// </summary>
 internal static class TimeBlockColumn
@@ -47,6 +48,7 @@ internal static class TimeBlockColumn
         }
 
         c.Rule(slot.ColumnX, slot.Bottom, slot.ColumnRight, slot.Bottom, slot.RuleWidthPt);
+        c.Text(HourLabel(window.EndHour), slot.LabelRightX, slot.Bottom + (cap / 2), TextAlign.Right, slot.LabelSizePt);
     }
 
     /// <summary>The printed 12-hour label of an hour: 0 and 12 give "12", 13 gives "1", 22 gives "10".</summary>

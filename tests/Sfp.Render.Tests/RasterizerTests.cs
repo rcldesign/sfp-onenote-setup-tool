@@ -110,6 +110,69 @@ public class RasterizerTests
         using SKBitmap page = rasterizer.Render(SyntheticTemplate.Build(), 1, 72);
         page.Width.Should().Be(1112);
         rasterizer.CachedPages.Should().Be(0);
+
+        using Rasterizer noBytes = new(Background, cacheBytes: 0);
+        using SKBitmap other = noBytes.Render(SyntheticTemplate.Build(), 1, 72);
+        other.Width.Should().Be(1112);
+        noBytes.CachedPages.Should().Be(0);
+        noBytes.CachedBytes.Should().Be(0);
+    }
+
+    [Fact]
+    public void Cache_is_bounded_by_the_bytes_its_pages_hold()
+    {
+        // A 72 DPI page is 1112 x 770 px at 4 bytes: 3,424,960 bytes. Two and a half pages of budget hold two.
+        const long PageBytes = 1112L * 4 * 770;
+        using Rasterizer rasterizer = new(Background, cacheCapacity: 12, cacheBytes: (PageBytes * 5) / 2);
+        string pdf = SyntheticTemplate.Build();
+        rasterizer.Render(pdf, 1, 72).Dispose();
+        rasterizer.CachedBytes.Should().Be(PageBytes);
+        rasterizer.Render(pdf, 2, 72).Dispose();
+        rasterizer.Render(pdf, 3, 72).Dispose();
+
+        rasterizer.CachedPages.Should().Be(2, "the page count allows 12 but the bytes allow two");
+        rasterizer.CachedBytes.Should().Be(2 * PageBytes);
+
+        rasterizer.ClearCache();
+        rasterizer.CachedBytes.Should().Be(0);
+        rasterizer.CachedPages.Should().Be(0);
+    }
+
+    [Fact]
+    public void A_page_larger_than_the_byte_budget_is_rendered_but_not_cached()
+    {
+        using Rasterizer rasterizer = new(Background, cacheBytes: 1_000_000);
+        using SKBitmap page = rasterizer.Render(SyntheticTemplate.Build(), 17, 72);
+
+        (page.Width, page.Height).Should().Be((1112, 770));
+        page.IsImmutable.Should().BeFalse("the caller owns the only copy and may draw on it");
+        page.Erase(SKColors.Red);
+        rasterizer.CachedPages.Should().Be(0);
+        rasterizer.CachedBytes.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(220, 8)]
+    [InlineData(300, 4)]
+    public void The_default_byte_budget_keeps_256_MB_of_pages(int dpi, int expectedPages)
+    {
+        using Rasterizer rasterizer = new(Background);
+        string pdf = SyntheticTemplate.Build();
+        for (int page = 16; page < 16 + 10; page++)
+        {
+            rasterizer.Render(pdf, page, dpi).Dispose();
+        }
+
+        rasterizer.CachedPages.Should().Be(expectedPages, "256 MB holds {0} pages at {1} DPI", expectedPages, dpi);
+        rasterizer.CachedBytes.Should().BeLessThanOrEqualTo(Rasterizer.DefaultCacheBytes);
+        Rasterizer.DefaultCacheBytes.Should().Be(256L * 1024 * 1024);
+    }
+
+    [Fact]
+    public void A_negative_byte_budget_is_refused()
+    {
+        Action act = () => _ = new Rasterizer(Background, cacheBytes: -1);
+        act.Should().Throw<ArgumentOutOfRangeException>();
     }
 
     [Fact]

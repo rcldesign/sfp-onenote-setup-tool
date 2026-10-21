@@ -11,9 +11,107 @@ internal sealed record InkCluster(double LeftPt, double RightPt)
     public double WidthPt => RightPt - LeftPt;
 }
 
+/// <summary>
+/// The weeks-remaining disc measured on a rendered sheet, in points: its center and radius, the center of the white
+/// digits on it, and the clearance between those digits and the rim (the radius minus the farthest white pixel corner).
+/// </summary>
+internal sealed record DiscFit(double CenterX, double CenterY, double Radius, double WhiteCenterX, double WhiteCenterY, double RimClearance);
+
 /// <summary>Pixel arithmetic for assertions on rendered bitmaps.</summary>
 internal static class Pixels
 {
+    /// <summary>
+    /// Finds the disc in a band (points) as the widest run of inked pixel columns, then the white pixels on it (at least
+    /// <paramref name="minLightening"/> lighter than the background in the red channel) and how they sit in it.
+    /// </summary>
+    public static DiscFit Disc(SKBitmap bitmap, RectPt band, int dpi, SKColor background, int minDarkening = 40, int minLightening = 20)
+    {
+        double s = dpi / 72.0;
+        SKRectI r = ToPixels(band, dpi, bitmap);
+        bool Dark(int x, int y) => bitmap.GetPixel(x, y).Red <= background.Red - minDarkening;
+
+        int bestLeft = -1, bestRight = -1, runLeft = -1, last = r.Left - 2;
+        for (int x = r.Left; x < r.Right; x++)
+        {
+            bool inked = false;
+            for (int y = r.Top; y < r.Bottom && !inked; y++)
+            {
+                inked = Dark(x, y);
+            }
+
+            if (!inked)
+            {
+                continue;
+            }
+
+            if (x - last > 1)
+            {
+                runLeft = x;
+            }
+
+            last = x;
+            if (bestLeft < 0 || x - runLeft > bestRight - bestLeft)
+            {
+                (bestLeft, bestRight) = (runLeft, x);
+            }
+        }
+
+        if (bestLeft < 0)
+        {
+            throw new InvalidOperationException("No ink in the band " + band + ".");
+        }
+
+        int top = int.MaxValue, bottom = int.MinValue;
+        for (int x = bestLeft; x <= bestRight; x++)
+        {
+            for (int y = r.Top; y < r.Bottom; y++)
+            {
+                if (Dark(x, y))
+                {
+                    top = Math.Min(top, y);
+                    bottom = Math.Max(bottom, y);
+                }
+            }
+        }
+
+        double cx = (bestLeft + bestRight + 1) / 2.0;
+        double cy = (top + bottom + 1) / 2.0;
+        double radius = (bestRight - bestLeft + 1) / 2.0;
+        int whiteLeft = int.MaxValue, whiteRight = int.MinValue, whiteTop = int.MaxValue, whiteBottom = int.MinValue;
+        double farthest = 0;
+        for (int y = top; y <= bottom; y++)
+        {
+            for (int x = bestLeft; x <= bestRight; x++)
+            {
+                if (bitmap.GetPixel(x, y).Red < background.Red + minLightening)
+                {
+                    continue;
+                }
+
+                whiteLeft = Math.Min(whiteLeft, x);
+                whiteRight = Math.Max(whiteRight, x);
+                whiteTop = Math.Min(whiteTop, y);
+                whiteBottom = Math.Max(whiteBottom, y);
+                double dx = Math.Abs(x + 0.5 - cx) + 0.5;
+                double dy = Math.Abs(y + 0.5 - cy) + 0.5;
+                farthest = Math.Max(farthest, Math.Sqrt((dx * dx) + (dy * dy)));
+            }
+        }
+
+        if (whiteLeft == int.MaxValue)
+        {
+            throw new InvalidOperationException("No white digits on the disc found in " + band + ".");
+        }
+
+        return new DiscFit(
+            cx / s,
+            cy / s,
+            radius / s,
+            (whiteLeft + whiteRight + 1) / 2.0 / s,
+            (whiteTop + whiteBottom + 1) / 2.0 / s,
+            (radius - farthest) / s);
+    }
+
     /// <summary>A region in points as a pixel rectangle at a DPI, clipped to the bitmap.</summary>
     public static SKRectI ToPixels(RectPt rect, int dpi, SKBitmap bitmap)
     {
@@ -141,6 +239,50 @@ internal static class Pixels
         }
 
         return clusters;
+    }
+
+    /// <summary>
+    /// Pixels inside <paramref name="region"/> (points) whose color differs from the background by more than
+    /// <paramref name="tolerance"/> in some channel and whose center lies outside every allowed rectangle: printed art
+    /// an erase missed, or overlay ink outside the boxes it was drawn in. Only whole pixels inside the region are
+    /// checked, so a partly covered pixel on the region's edge never counts. Returns how many there are and up to five
+    /// of them (in points) for a failure message.
+    /// </summary>
+    public static (int Count, IReadOnlyList<(double XPt, double YPt)> Samples) StrayInk(SKBitmap bitmap, RectPt region, IReadOnlyList<RectPt> allowed, int dpi, SKColor background, int tolerance = 3)
+    {
+        double s = dpi / 72.0;
+        int left = Math.Max(0, (int)Math.Ceiling(region.X * s));
+        int top = Math.Max(0, (int)Math.Ceiling(region.Y * s));
+        int right = Math.Min(bitmap.Width, (int)Math.Floor(region.Right * s));
+        int bottom = Math.Min(bitmap.Height, (int)Math.Floor(region.Bottom * s));
+        int count = 0;
+        List<(double, double)> samples = new();
+        for (int y = top; y < bottom; y++)
+        {
+            for (int x = left; x < right; x++)
+            {
+                SKColor c = bitmap.GetPixel(x, y);
+                if (Math.Abs(c.Red - background.Red) <= tolerance && Math.Abs(c.Green - background.Green) <= tolerance && Math.Abs(c.Blue - background.Blue) <= tolerance)
+                {
+                    continue;
+                }
+
+                double xPt = (x + 0.5) / s;
+                double yPt = (y + 0.5) / s;
+                if (allowed.Any(a => xPt >= a.X && xPt <= a.Right && yPt >= a.Y && yPt <= a.Bottom))
+                {
+                    continue;
+                }
+
+                count++;
+                if (samples.Count < 5)
+                {
+                    samples.Add((xPt, yPt));
+                }
+            }
+        }
+
+        return (count, samples);
     }
 
     /// <summary>The most frequent color, sampling every <paramref name="step"/> pixels in each direction.</summary>

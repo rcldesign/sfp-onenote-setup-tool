@@ -89,17 +89,28 @@ public sealed class GoldenSuiteTests
         differences.Should().BeEmpty("every page must match " + Path.GetFileName(path) + "; differing keys:\n" + string.Join("\n", differences));
     }
 
-    /// <summary>Renders every page of Q1 2027 at 220 DPI in parallel and hashes the PNG bytes.</summary>
+    /// <summary>
+    /// Renders every page of Q1 2027 at 220 DPI with the product's default worker count (at most four pages in flight,
+    /// as render-only and generate run) and hashes the PNG bytes. The shared rasterizer's page cache is cleared
+    /// afterwards: the last pages of a full render are of no use to the tests that follow.
+    /// </summary>
     private (IReadOnlyDictionary<string, string> Hashes, TimeSpan Elapsed) RenderAll(string pdf)
     {
         RenderOptions options = new(pdf, RenderFixture.Dpi, f.Q1Options);
         ConcurrentDictionary<string, string> hashes = new(StringComparer.Ordinal);
         Stopwatch clock = Stopwatch.StartNew();
-        Parallel.ForEach(f.Q1Plan.Pages, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, page =>
+        try
         {
-            RenderedPage art = f.Renderer.Render(page, f.Q1Plan, options);
-            hashes[page.Key.Value] = Goldens.Sha256(art.Png);
-        });
-        return (hashes, clock.Elapsed);
+            Parallel.ForEach(f.Q1Plan.Pages, new ParallelOptions { MaxDegreeOfParallelism = RenderParallelism.Default }, page =>
+            {
+                RenderedPage art = f.Renderer.Render(page, f.Q1Plan, options);
+                hashes[page.Key.Value] = Goldens.Sha256(art.Png);
+            });
+            return (hashes, clock.Elapsed);
+        }
+        finally
+        {
+            f.Rasterizer.ClearCache();
+        }
     }
 }

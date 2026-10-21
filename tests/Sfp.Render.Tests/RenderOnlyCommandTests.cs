@@ -2,8 +2,11 @@ using System.CommandLine;
 using System.Globalization;
 using Sfp.Cli;
 using Sfp.Cli.Verbs;
+using Sfp.Core.Manifests;
 using Sfp.Core.Options;
+using Sfp.Render.Colors;
 using Sfp.TestSupport;
+using SkiaSharp;
 
 namespace Sfp.Render.Tests;
 
@@ -75,6 +78,18 @@ public sealed class RenderOnlyCommandTests
             RenderIndexPage jan4 = index.Pages.Single(p => p.Key == "day:2027-01-04");
             jan4.Anchors.Should().NotContain(a => a.Kind == AnchorKind.Link);
             jan4.Anchors.Count(a => a.AnchorId.StartsWith("timeBlockEvent:", StringComparison.Ordinal)).Should().Be(10);
+
+            // --no-links bakes the labels that would otherwise be links, so pages printed from the same art still differ.
+            File.ReadAllBytes(Path.Combine(dir, "annual-1.png")).Should().NotEqual(File.ReadAllBytes(Path.Combine(dir, "annual-2.png")), "the block labels name objectives 1 to 4 and 5 to 8");
+            File.ReadAllBytes(Path.Combine(dir, "objective-1.png")).Should().NotEqual(File.ReadAllBytes(Path.Combine(dir, "objective-2.png")), "each detail page names its objective");
+            using SKBitmap scorecard = SKBitmap.Decode(Path.Combine(dir, "scorecard.png"));
+            ScorecardPageSpec s = TestManifest.Shipped.Generated.Scorecard;
+            SKColor background = ColorParser.Parse(TestManifest.Shipped.Colors.Background);
+            for (int week = 0; week < 14; week++)
+            {
+                RectPt cell = s.WeekHeader(week);
+                Pixels.HasInk(scorecard, new RectPt(cell.X + 2, cell.Y + 1, cell.W - 4, cell.H - 2), 144, background).Should().BeTrue($"week {week + 1:00} is baked in the scorecard header");
+            }
         }
         finally
         {
@@ -97,6 +112,34 @@ public sealed class RenderOnlyCommandTests
             output.Should().BeEmpty();
             err.Should().StartWith("The PDF does not match the manifest sfp-quarterly-2023:\n  Expected 132 pages, found 24\n");
             File.Exists(Path.Combine(dir, "pages.json")).Should().BeFalse();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_page_that_fails_to_render_exits_4_with_the_error_and_writes_no_index()
+    {
+        // The PDF validates and rasterizes; the user manifest leaves the strip too narrow for 14 numbers, so the first
+        // daily page fails while its overlays are drawn (a render error on a page, exit 4 in the PRD's error table).
+        string dir = TestPaths.NewTempDir("render-only-fail");
+        try
+        {
+            string manifest = Path.Combine(dir, "narrow-strip.json");
+            File.WriteAllText(manifest, """{ "slots": { "weeksRemaining": { "numberSpan": { "from": 537, "to": 560 } } } }""");
+            string outDir = Path.Combine(dir, "out");
+
+            (int code, string output, string err) = Run(Request(outDir, dir) with { ManifestPath = manifest });
+
+            code.Should().Be(ExitCodes.RenderError);
+            err.Should().StartWith("Render failed: slots.weeksRemaining.numberSpan (537 to 560, 23 pt) is too narrow for 14 numbers at 10 pt");
+            err.Should().Contain("\nLog: ");
+            output.Should().NotContain("Rendered ", "there is no success summary");
+            File.Exists(Path.Combine(outDir, RenderOnlyRunner.IndexFileName)).Should().BeFalse("a failed run writes no pages.json");
+            string log = Directory.GetFiles(dir, "*render-only.log").Should().ContainSingle().Subject;
+            File.ReadAllText(log).Should().Contain("Render failed").And.Contain("too narrow for 14 numbers");
         }
         finally
         {
