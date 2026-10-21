@@ -718,6 +718,38 @@ public class GenerateOrchestratorTests
     }
 
     [Fact]
+    public void A_render_only_folder_another_render_is_using_exits_2_naming_the_folder_with_no_partial_notebook_sentence()
+    {
+        // Another render-only or generate --render-only run holds the folder's lock file for its whole run; here the test
+        // holds it. The refused run stops before it renders, deletes or writes anything.
+        Harness h = new();
+        h.WriterFactory = () => throw new InvalidOperationException("render-only must not create a writer");
+        string dir = Path.Combine(h.Root, "png");
+        Directory.CreateDirectory(dir);
+        GenerateRequest request = h.Request(h.Options(), dir);
+        GenerateResult result;
+        using (new FileStream(Path.Combine(dir, RenderOnlyRunner.LockFileName), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose))
+        {
+            result = h.Run(request);
+        }
+
+        string inUse = $"Another render is using the folder {Path.GetFullPath(dir)}: wait for it to finish, or render into another folder.";
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(2, "a folder in use is a usage error, as the render-only verb reports it, not a render failure");
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.Error.Should().Be("Rendering pages: " + inUse);
+        result.FailedPage.Should().BeNull();
+        h.Renderer.Rendered.Should().BeEmpty();
+        File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse();
+
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+        Sfp.Cli.Verbs.GenerateCommand.Print(result, request, stdout, stderr, quiet: false);
+        stderr.ToString().Should().Contain("Error: Rendering pages: " + inUse).And.NotContainEquivalentOf("partial notebook");
+        stdout.ToString().Should().BeEmpty();
+    }
+
+    [Fact]
     public void A_failed_preflight_returns_its_first_exit_code_and_every_message_without_touching_the_writer()
     {
         Harness h = new()

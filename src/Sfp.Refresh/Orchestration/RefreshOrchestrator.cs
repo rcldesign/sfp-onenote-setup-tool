@@ -56,11 +56,19 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     public const string ConflictReason = "The page changed while Refresh was writing it (twice in a row); nothing was written to it and it will be tried again on the next run.";
 
     /// <summary>
-    /// Error of a run refused because another run of the same notebook holds the lock beside its sidecar ({0}: the
-    /// notebook, {1}: the run that holds it); exit 5. The failure streak is left alone while the holder is a live run,
-    /// and advances when the lock turned out to be stale and could not be taken over (<see cref="RefreshLock.IsStuck"/>).
+    /// Error of a run refused because the lock beside the notebook's sidecar is held ({0}: the notebook, {1}: the run that
+    /// holds it); exit 5. The holder is another Refresh of the notebook, a Generate --previous run (its Next quarter link
+    /// writer takes the same lock), or a stale lock that could not be taken over, which adds <see cref="StuckLockFormat"/>.
+    /// The failure streak is left alone while the holder is a live run, and advances when the lock turned out to be stale
+    /// and could not be taken over (<see cref="RefreshLock.IsStuck"/>).
     /// </summary>
-    public const string AlreadyRunningFormat = "Another Refresh of '{0}' is running ({1}); this run was not started. Try again when it has finished.";
+    public const string AlreadyRunningFormat = "Another run that uses '{0}' is in progress ({1}); this run was not started. Try again when it has finished.";
+
+    /// <summary>
+    /// Sentence added to <see cref="AlreadyRunningFormat"/> when the lock is stale but could not be removed
+    /// (<see cref="RefreshLock.IsStuck"/>), so every run of the notebook is refused until the file goes ({0}: the lock file).
+    /// </summary>
+    public const string StuckLockFormat = "The lock file {0} is stale and could not be removed; delete it by hand.";
 
     /// <summary>
     /// Error of a run whose end-of-run sidecar save failed on every attempt ({0}: the sidecar path, {1}: the attempts,
@@ -216,8 +224,15 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         if (state.Lock is null && holder is not null)
         {
             state.Refused = true;
+            state.StuckLock = RefreshLock.IsStuck(opened.SidecarPath, services.Clock());
             services.Log.Information("Refresh of {Name} not started: {Holder} holds the lock beside its sidecar", request.NotebookName, holder);
-            return Fail(WriteFailureExitCode, string.Format(CultureInfo.InvariantCulture, AlreadyRunningFormat, request.NotebookName, holder), clock);
+            string refusal = string.Format(CultureInfo.InvariantCulture, AlreadyRunningFormat, request.NotebookName, holder);
+            if (state.StuckLock)
+            {
+                refusal += " " + string.Format(CultureInfo.InvariantCulture, StuckLockFormat, RefreshLock.PathBeside(opened.SidecarPath));
+            }
+
+            return Fail(WriteFailureExitCode, refusal, clock);
         }
 
         // From here on the run uses the sidecar as read under the lock; the first read only found the path and chose the notebook.
@@ -943,7 +958,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         {
             if (state.Refused)
             {
-                if (!RefreshLock.IsStuck(state.SidecarPath, services.Clock()))
+                if (!state.StuckLock)
                 {
                     // Another run really holds the lock: this run is no failure of the notebook.
                     return;
@@ -1018,6 +1033,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         /// <summary>True when another run of the notebook held the lock, so this one did not start.</summary>
         public bool Refused { get; set; }
+
+        /// <summary>
+        /// True when the lock that refused this run is stale but could not be taken over (<see cref="RefreshLock.IsStuck"/>,
+        /// read once at the refusal), so the refusal says to delete it and the run counts toward the streak.
+        /// </summary>
+        public bool StuckLock { get; set; }
 
         /// <summary>True when the opener stopped the run with a <see cref="NotebookOpener.Problem"/> (exit 2), which counts toward the streak.</summary>
         public bool OpenerStopped { get; set; }
