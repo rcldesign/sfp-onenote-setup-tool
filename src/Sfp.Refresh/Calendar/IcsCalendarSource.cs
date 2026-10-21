@@ -78,10 +78,19 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
         return ParseEvents(text, from, to);
     }
 
-    /// <summary>Parses iCalendar text already in hand (no I/O) into the events that touch [<paramref name="from"/>, <paramref name="to"/>].</summary>
+    /// <summary>
+    /// Parses iCalendar text already in hand (no I/O) into the events that touch [<paramref name="from"/>, <paramref name="to"/>].
+    /// Text without a BEGIN:VCALENDAR line (an empty file or response, a file caught mid-rewrite, an error page) throws
+    /// <see cref="InvalidDataException"/>: it is a failed fetch, never an empty calendar whose events would all be removed.
+    /// </summary>
     public IReadOnlyList<CalendarEvent> ParseEvents(string icsText, DateOnly from, DateOnly to)
     {
         ArgumentNullException.ThrowIfNull(icsText);
+        if (icsText.IndexOf("BEGIN:VCALENDAR", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidDataException("The source returned no calendar data: the text is empty or has no BEGIN:VCALENDAR line.");
+        }
+
         CalendarCollection calendars = CalendarCollection.Load(icsText) ?? new CalendarCollection();
         IEnumerable<Ical.Net.Calendar> selected = calendars;
         if (!string.IsNullOrWhiteSpace(source.CalendarName))
