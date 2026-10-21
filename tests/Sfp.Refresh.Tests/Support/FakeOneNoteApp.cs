@@ -80,6 +80,30 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     public void Close(string notebookId) => notebooks[notebookId].Open = false;
 
     /// <summary>
+    /// Deletes a page the way OneNote does: it moves to the notebook's recycle bin, which GetHierarchy lists as the
+    /// OneNote_RecycleBin section group (isRecycleBin) holding a Deleted Pages section (isInRecycleBin). The fake lists
+    /// the bin ahead of the notebook's sections, so a reader that relied on document order would meet it first.
+    /// </summary>
+    public void MoveToRecycleBin(string pageId)
+    {
+        Page page = pages[pageId];
+        Section section = sections[page.SectionId];
+        section.PageIds.Remove(pageId);
+        notebooks[section.NotebookId].RecycleBin.Add(pageId);
+    }
+
+    /// <summary>Puts a copy of a page (same content and sfp.key, new page ID) in the notebook's recycle bin, as deleting a duplicated page leaves one; returns its ID.</summary>
+    public string CopyToRecycleBin(string pageId)
+    {
+        Page source = pages[pageId];
+        Page copy = new(NewId("p"), source.SectionId) { Name = source.Name, Level = source.Level, ImageData = source.ImageData, Modified = source.Modified };
+        copy.Xml = source.Xml?.Replace(source.Prefix, copy.Prefix, StringComparison.Ordinal).Replace("ID=\"" + pageId + "\"", "ID=\"" + copy.Id + "\"", StringComparison.Ordinal);
+        pages[copy.Id] = copy;
+        notebooks[sections[source.SectionId].NotebookId].RecycleBin.Add(copy.Id);
+        return copy.Id;
+    }
+
+    /// <summary>
     /// Gives the notebook, its sections, its pages and every objectID inside them new IDs, the way IDs change after a
     /// notebook moves to OneDrive. Returns the notebook's new ID.
     /// </summary>
@@ -498,6 +522,27 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         XElement element = new(one + "Notebook", new XAttribute("name", nb.Name), new XAttribute("ID", nb.Id), new XAttribute("path", nb.Path));
         if (scope is HierarchyScope.Sections or HierarchyScope.Pages)
         {
+            if (nb.RecycleBin.Count > 0)
+            {
+                XElement deleted = new(
+                    one + "Section",
+                    new XAttribute("name", "Deleted Pages"),
+                    new XAttribute("ID", nb.Id + "{deleted}"),
+                    new XAttribute("isInRecycleBin", "true"),
+                    new XAttribute("isDeletedPages", "true"));
+                if (scope == HierarchyScope.Pages)
+                {
+                    deleted.Add(nb.RecycleBin.Select(id => PageElement(one, pages[id])));
+                }
+
+                element.Add(new XElement(
+                    one + "SectionGroup",
+                    new XAttribute("name", "OneNote_RecycleBin"),
+                    new XAttribute("ID", nb.Id + "{bin}"),
+                    new XAttribute("isRecycleBin", "true"),
+                    deleted));
+            }
+
             foreach (string sectionId in nb.SectionIds)
             {
                 element.Add(SectionElement(one, sections[sectionId], scope));
@@ -554,6 +599,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         public bool Open { get; set; } = true;
 
         public List<string> SectionIds { get; } = new();
+
+        /// <summary>IDs of the deleted pages in the notebook's recycle bin.</summary>
+        public List<string> RecycleBin { get; } = new();
     }
 
     private sealed class Section

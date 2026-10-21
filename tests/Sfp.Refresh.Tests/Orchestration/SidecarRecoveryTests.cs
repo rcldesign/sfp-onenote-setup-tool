@@ -113,6 +113,32 @@ public class SidecarRecoveryTests
     }
 
     [Fact]
+    public void Pages_in_the_recycle_bin_are_not_the_notebooks_pages_for_the_check_or_the_rebuild()
+    {
+        FakeNotebook nb = FakeNotebook.Generate();
+        PageKey key = PageKey.Day(new DateOnly(2027, 1, 4));
+        string monday = nb.PageIds[key];
+        string deletedCopy = nb.App.CopyToRecycleBin(monday);
+        string xml = nb.App.GetHierarchy(nb.NotebookId, HierarchyScope.Pages);
+        xml.Should().Contain("isRecycleBin=\"true\"").And.Contain("isInRecycleBin=\"true\"").And.Contain(deletedCopy, "the fixture lists the bin, ahead of the sections");
+        HierarchyNotebook tree = HierarchyXmlReader.Notebook(xml);
+
+        tree.Pages.Should().HaveCount(144).And.NotContain(p => p.Page.Id == deletedCopy);
+        tree.SectionGroups.Should().BeEmpty("the recycle bin is not one of the notebook's section groups");
+        SidecarRecovery.IsConsistent(nb.Sidecar, tree).Should().BeTrue();
+        Recovery(nb).Rebuild(nb.Handle, tree, null, "1.2.3").Sidecar.Pages[key.Value].PageId
+            .Should().Be(monday, "a deleted copy with the same sfp.key is not taken for the live page, even listed first");
+
+        nb.App.MoveToRecycleBin(monday);
+        HierarchyNotebook afterDelete = HierarchyXmlReader.Notebook(nb.App.GetHierarchy(nb.NotebookId, HierarchyScope.Pages));
+
+        SidecarRecovery.IsConsistent(nb.Sidecar, afterDelete).Should().BeFalse("a page the user deleted no longer resolves, so the sidecar is stale");
+        RecoveryResult rebuilt = Recovery(nb).Recover(nb.Handle, nb.Sidecar, "1.2.3");
+        rebuilt.Rebuilt.Should().BeTrue();
+        rebuilt.Sidecar.Pages.Should().HaveCount(143).And.NotContainKey(key.Value, "only the recycle bin holds Mon Jan 4 now");
+    }
+
+    [Fact]
     public void Section_groups_must_resolve_too_and_a_rebuild_records_them_from_the_hierarchy()
     {
         FakeNotebook nb = FakeNotebook.Generate();
