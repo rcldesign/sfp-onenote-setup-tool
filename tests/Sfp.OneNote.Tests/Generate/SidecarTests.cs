@@ -58,8 +58,64 @@ public class SidecarTests
         sidecar.Generated.Should().Be(Now);
         sidecar.PreviousNotebook.Should().Be("/out/SFP Q4 2026");
         sidecar.TimeBlocks.Should().Be(TimeBlockWindow.Default, "the window the daily pages were generated with");
+        sidecar.PlanOptions.Should().BeEquivalentTo(SidecarPlanOptions.From(new GenerateOptions { Start = new QuarterSpec(2027, 1) }), "the default plan options are recorded too");
         sidecar.LastRefresh.Should().BeNull();
         sidecar.FrozenThrough.Should().BeNull();
+    }
+
+    [Fact]
+    public void The_plan_shaping_options_of_the_run_are_recorded_validate_and_rebuild_the_same_options()
+    {
+        NotebookPlan plan = TestPlans.Small();
+        FakeNotebookWriter writer = new();
+        NotebookHandle nb = writer.CreateNotebook("/out", plan.Name);
+        Dictionary<string, SectionHandle> sections = plan.Sections.ToDictionary(s => s.Name, s => writer.CreateSection(nb, s), StringComparer.Ordinal);
+        Dictionary<PageKey, PageHandle> pages = plan.Pages.ToDictionary(p => p.Key, p => writer.CreatePage(sections[plan.SectionOf(p.Key).Name], p));
+        GenerateOptions options = new()
+        {
+            Start = new QuarterSpec(2027, 1),
+            IncludeOutOfQuarterDays = true,
+            ReflectionDateIsWeekStart = true,
+            NotesPages = new[] { "Backlog", "Someday" },
+            GroupWeeks = true,
+            ColorSectionsByMonth = false,
+            Links = false,
+            SixthRow = SixthRowMode.Drop,
+            DateOrder = DateFieldOrder.DayMonthYear,
+            PadDateFields = false,
+            Dpi = 300,
+            PageScale = 0.8,
+        };
+        GenerateRequest request = new(options, M, TestPaths.TemplatesDir, false, null);
+
+        Sidecar sidecar = SidecarBuilder.Build(request, plan, nb, sections, pages, new Dictionary<PageKey, IReadOnlyDictionary<string, string>>(), "1.0.0", Now);
+
+        SidecarStore store = new();
+        string path = store.PathFor(Path.Combine(TestPaths.NewTempDir("sidecar-plan-options"), plan.Name));
+        store.Save(path, sidecar);
+        string json = File.ReadAllText(path);
+        JsonSchemaLite.AssertValid(File.ReadAllText(SchemaPath), json);
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement recorded = doc.RootElement.GetProperty("planOptions");
+        recorded.GetProperty("includeOutOfQuarterDays").GetBoolean().Should().BeTrue();
+        recorded.GetProperty("reflectionDateIsWeekStart").GetBoolean().Should().BeTrue();
+        recorded.GetProperty("notesPages").EnumerateArray().Select(e => e.GetString()).Should().Equal("Backlog", "Someday");
+        recorded.GetProperty("sixthRow").GetString().Should().Be("drop");
+        recorded.GetProperty("dateOrder").GetString().Should().Be("dayMonthYear");
+        recorded.TryGetProperty("dpi", out _).Should().BeFalse("only the options the plan builder reads are recorded");
+        recorded.TryGetProperty("pageScale", out _).Should().BeFalse();
+
+        GenerateOptions rebuilt = SidecarPlanOptions.ToGenerateOptions(new QuarterSpec(2027, 1), store.Load(path)!.PlanOptions);
+        rebuilt.Should().BeEquivalentTo(
+            options with { Dpi = new GenerateOptions { Start = options.Start }.Dpi, PageScale = 1.0 },
+            "Refresh rebuilds the plan with the options the notebook was generated with");
+        new PlanBuilder(new DateEngine()).Build(M, new DateEngine().Build(options.Start), rebuilt).Pages.Select(p => p.Key)
+            .Should().Equal(new PlanBuilder(new DateEngine()).Build(M, new DateEngine().Build(options.Start), options).Pages.Select(p => p.Key), "the same pages as the generated plan");
+
+        JsonSchemaLite.Validate(File.ReadAllText(SchemaPath), json.Replace("\"drop\"", "\"sideways\"", StringComparison.Ordinal))
+            .Should().Contain(p => p.Contains("sixthRow", StringComparison.Ordinal), "the schema names the sixth-row modes");
+        JsonSchemaLite.Validate(File.ReadAllText(SchemaPath), json.Replace("\"includeOutOfQuarterDays\": true", "\"includeOutOfQuarterDays\": \"yes\"", StringComparison.Ordinal))
+            .Should().Contain(p => p.Contains("includeOutOfQuarterDays", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -166,14 +222,37 @@ public class SidecarTests
         JsonObject node = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
         node.Remove("sectionGroups").Should().BeTrue();
         node.Remove("timeBlocks").Should().BeTrue();
+        node.Remove("planOptions").Should().BeTrue();
         File.WriteAllText(path, node.ToJsonString());
 
         Sidecar loaded = store.Load(path)!;
 
         loaded.SectionGroups.Should().BeEmpty();
         loaded.TimeBlocks.Should().BeNull("Refresh then falls back to the Setup page's window");
+        loaded.PlanOptions.Should().BeNull();
+        SidecarPlanOptions.ToGenerateOptions(loaded.Quarter, loaded.PlanOptions).Should().BeEquivalentTo(new GenerateOptions { Start = loaded.Quarter }, "an older file keeps the default plan options");
         loaded.Sections.Should().Equal(sidecar.Sections);
         JsonSchemaLite.AssertValid(File.ReadAllText(SchemaPath), File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void Confirmed_inked_values_are_saved_by_setup_slot_validate_and_a_bad_slot_id_is_rejected()
+    {
+        (Sidecar built, _) = Build();
+        built.ConfirmedInked.Should().BeEmpty("Generate confirms nothing");
+        Sidecar sidecar = built with { ConfirmedInked = new Dictionary<string, string> { ["objective:3"] = "Launch v2", ["habit:12"] = "Read" } };
+        SidecarStore store = new();
+        string path = store.PathFor(Path.Combine(TestPaths.NewTempDir("sidecar-confirmed"), "SFP Q1 2027"));
+
+        store.Save(path, sidecar);
+
+        string json = File.ReadAllText(path);
+        JsonSchemaLite.AssertValid(File.ReadAllText(SchemaPath), json);
+        store.Load(path)!.ConfirmedInked.Should().Equal(sidecar.ConfirmedInked);
+        JsonSchemaLite.Validate(File.ReadAllText(SchemaPath), json.Replace("\"habit:12\"", "\"timeBlockStart\"", StringComparison.Ordinal))
+            .Should().Contain(p => p.Contains("timeBlockStart", StringComparison.Ordinal), "only objectives, standing goals, metric names and habits are confirmed");
+        JsonSchemaLite.Validate(File.ReadAllText(SchemaPath), json.Replace("\"Launch v2\"", "\"\"", StringComparison.Ordinal))
+            .Should().NotBeEmpty("a confirmed value has text");
     }
 
     [Fact]

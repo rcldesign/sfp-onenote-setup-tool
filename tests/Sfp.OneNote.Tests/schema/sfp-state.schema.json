@@ -44,9 +44,37 @@
     "lastRefresh": { "type": "string", "format": "date-time" },
     "frozenThrough": { "type": "string", "format": "date", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
     "previousNotebook": { "type": "string" },
+    "planOptions": { "$ref": "#/definitions/planOptions" },
+    "confirmedInked": {
+      "description": "Setup slot id (objective:3, standingGoal:1, metricName:2, habit:4) to the inked text a Refresh run told to write inked values wrote; while the Setup slot still reads that text, a run without the confirmation treats it as typed. Absent or empty in older files.",
+      "type": "object",
+      "propertyNames": { "pattern": "^(objective|standingGoal|metricName|habit):[0-9]+$" },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "unreadPages": {
+      "description": "IDs of the pages a sidecar rebuild could not read; the next run reads them, and any page the sidecar does not record, before planning. Absent or empty when every page was read.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
     "timeBlocks": { "$ref": "#/definitions/timeBlockWindow" }
   },
   "definitions": {
+    "planOptions": {
+      "description": "The Generate options that shaped the notebook's plan (the options the plan builder reads), so Refresh rebuilds the plan the notebook was generated with. Absent in files written before they were recorded, which keep the defaults; a member left out keeps its default.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "includeOutOfQuarterDays": { "type": "boolean" },
+        "reflectionDateIsWeekStart": { "type": "boolean" },
+        "notesPages": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "groupWeeks": { "type": "boolean" },
+        "colorSectionsByMonth": { "type": "boolean" },
+        "links": { "type": "boolean" },
+        "sixthRow": { "type": "string", "enum": [ "stack", "drop" ] },
+        "dateOrder": { "type": "string", "enum": [ "monthDayYear", "dayMonthYear" ] },
+        "padDateFields": { "type": "boolean" }
+      }
+    },
     "timeBlockWindow": {
       "description": "The Time Blocks window the daily pages were generated with: first row hour and the hour after the last row, 24-hour clock. Absent in files written before it was recorded.",
       "type": "object",

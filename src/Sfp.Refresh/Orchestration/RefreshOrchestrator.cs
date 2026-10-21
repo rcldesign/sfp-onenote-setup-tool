@@ -53,6 +53,30 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// <summary>Reason recorded on a change not written because the page changed under the write twice in a row.</summary>
     public const string ConflictReason = "The page changed while Refresh was writing it (twice in a row); nothing was written to it and it will be tried again on the next run.";
 
+    /// <summary>
+    /// Error of a run refused because another run of the same notebook holds the lock beside its sidecar ({0}: the
+    /// notebook, {1}: the run that holds it); exit 5, and the failure streak is left alone.
+    /// </summary>
+    public const string AlreadyRunningFormat = "Another Refresh of '{0}' is running ({1}); this run was not started. Try again when it has finished.";
+
+    /// <summary>
+    /// Error of a run whose end-of-run sidecar save failed on every attempt ({0}: the sidecar path, {1}: the attempts,
+    /// {2}: the last error); the run fails (exit 5) and the next run re-adopts the objects it wrote.
+    /// </summary>
+    public const string SidecarSaveFailedFormat = "The sidecar {0} could not be saved after {1} attempts ({2}). What this run wrote is on the pages; the next run re-adopts those objects.";
+
+    /// <summary>How many times the end-of-run sidecar save is tried before the run reports it failed.</summary>
+    public const int SidecarSaveAttempts = 3;
+
+    /// <summary>The waits before the second and the third save attempt.</summary>
+    private static readonly TimeSpan[] SidecarSaveWaits = { TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(1500) };
+
+    /// <summary>
+    /// Error of a run in which at least one page write was made and OneNote refused every one as a conflict ({0}: how
+    /// many pages); such a run fails (exit 5) and counts toward the failure streak.
+    /// </summary>
+    public const string AllWritesConflictedFormat = "OneNote refused every page write of this run ({0} page(s)): each page was reported as changed since Refresh read it (hrLastModifiedDateDidNotMatch). If nobody was editing those pages, the page time stamp check (dateExpectedLastModified) may be rejecting unchanged pages; see the log.";
+
     private readonly RefreshServices services;
 
     public RefreshOrchestrator(RefreshServices services)
@@ -67,9 +91,17 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         ArgumentNullException.ThrowIfNull(request);
         Stopwatch clock = Stopwatch.StartNew();
         RunState state = new();
-        RefreshResult result = RunGuarded(request, progress, cancellationToken, clock, state);
-        TrackStreak(request, state, result);
-        return result;
+        try
+        {
+            RefreshResult result = RunGuarded(request, progress, cancellationToken, clock, state);
+            TrackStreak(request, state, result);
+            return result;
+        }
+        finally
+        {
+            // Held from the moment the sidecar's path is known until the streak beside it is updated.
+            state.Lock?.Dispose();
+        }
     }
 
     private RefreshResult RunGuarded(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken, Stopwatch clock, RunState state)
@@ -118,6 +150,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
 
         state.SidecarPath = opened.SidecarPath;
+        state.Lock = RefreshLock.TryAcquire(opened.SidecarPath, services.Clock(), services.Log, out string? holder);
+        if (state.Lock is null && holder is not null)
+        {
+            state.Refused = true;
+            services.Log.Warning("Refresh of {Name} not started: {Holder} holds the lock beside its sidecar", request.NotebookName, holder);
+            return Fail(WriteFailureExitCode, string.Format(CultureInfo.InvariantCulture, AlreadyRunningFormat, request.NotebookName, holder), clock);
+        }
 
         progress?.Report("Checking the sidecar");
         SidecarRecovery recovery = new(services.App, manifest, services.Dates, services.Plans, services.Log);
@@ -131,7 +170,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         cancellationToken.ThrowIfCancellationRequested();
         Quarter quarter = services.Dates.Build(sidecar.Quarter);
-        NotebookPlan plan = services.Plans.Build(manifest, quarter, new GenerateOptions { Start = sidecar.Quarter });
+        NotebookPlan plan = services.Plans.Build(manifest, quarter, SidecarPlanOptions.ToGenerateOptions(sidecar.Quarter, sidecar.PlanOptions));
         PageCache pages = new(services.App, sidecar, services.Log, recovered.Pages);
         Dictionary<string, string> titles = plan.Pages.ToDictionary(p => p.Key.Value, p => p.Title, StringComparer.Ordinal);
 
@@ -201,12 +240,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         catch
         {
             // Cancelled, OneNote gone or an unexpected failure part way through: the outlines written so far are still
-            // recorded, or the next run would find them unowned and block their own slots.
-            SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, afterFailure: true);
+            // recorded, or the next run would find them unowned and block their own slots. A run that did not finish
+            // confirms no inked value.
+            SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, sidecar.ConfirmedInked, afterFailure: true);
             throw;
         }
 
-        sidecar = SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, afterFailure: false);
+        (sidecar, string? saveError) = SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, Propagator.ConfirmedInked(values, sidecar, request.WriteInkedValues), afterFailure: false);
 
         RefreshSummary summary = new()
         {
@@ -223,9 +263,10 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             FrozenThrough = sidecar.FrozenThrough,
         };
 
-        if (written.Error is not null)
+        if (written.Error is not null || saveError is not null)
         {
-            return new RefreshResult { Success = false, ExitCode = WriteFailureExitCode, Summary = summary, Error = written.Error, Elapsed = clock.Elapsed, LogPath = services.LogPath };
+            string error = string.Join(" ", new[] { written.Error, saveError }.OfType<string>());
+            return new RefreshResult { Success = false, ExitCode = WriteFailureExitCode, Summary = summary, Error = error, Elapsed = clock.Elapsed, LogPath = services.LogPath };
         }
 
         progress?.Report("Syncing");
@@ -281,41 +322,65 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     }
 
     /// <summary>
-    /// The sidecar with what the write phase recorded (anchors and the texts written), LastRefresh and FrozenThrough,
-    /// saved. After a failure part way through the save is best effort: a save error is logged so the failure itself
-    /// still reaches the result.
+    /// The sidecar with what the write phase recorded (anchors and the texts written), LastRefresh, FrozenThrough and
+    /// the confirmed inked values, saved: up to <see cref="SidecarSaveAttempts"/> times with short waits, since a sync
+    /// client or a virus scanner may hold the file for a moment. When every attempt fails the error to report is returned
+    /// (<see cref="SidecarSaveFailedFormat"/>, naming the path); after a failure part way through it is only logged, so the
+    /// failure itself still reaches the result.
     /// </summary>
-    private Sidecar SaveWritten(string path, Sidecar sidecar, WriteState state, CalendarOutcome? calendar, bool afterFailure)
+    private (Sidecar Updated, string? Error) SaveWritten(string path, Sidecar sidecar, WriteState state, CalendarOutcome? calendar, IReadOnlyDictionary<string, string> confirmedInked, bool afterFailure)
     {
         Sidecar updated = sidecar with
         {
             Pages = state.Pages(sidecar),
             LastRefresh = services.Clock(),
             FrozenThrough = calendar?.FrozenThrough ?? sidecar.FrozenThrough,
+            ConfirmedInked = confirmedInked,
         };
-        if (!afterFailure)
+        Exception? failure = SaveWithRetry(path, updated);
+        if (failure is null)
         {
-            services.Sidecars.Save(path, updated);
-            return updated;
+            if (afterFailure)
+            {
+                services.Log.Information("The run stopped part way; the objects written so far were recorded in {Path}", path);
+            }
+
+            return (updated, null);
         }
 
-        try
-        {
-            services.Sidecars.Save(path, updated);
-            services.Log.Information("The run stopped part way; the objects written so far were recorded in {Path}", path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            services.Log.Error(ex, "The run stopped part way and the sidecar {Path} could not be saved", path);
-        }
+        services.Log.Error(failure, "The sidecar {Path} could not be saved after {Attempts} attempts; the next run re-adopts the objects this run wrote", path, SidecarSaveAttempts);
+        return (updated, string.Format(CultureInfo.InvariantCulture, SidecarSaveFailedFormat, path, SidecarSaveAttempts, failure.Message));
+    }
 
-        return updated;
+    /// <summary>Saves the sidecar, trying again after a short wait when the file cannot be written; returns the last error, or null once saved.</summary>
+    private Exception? SaveWithRetry(string path, Sidecar sidecar)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                services.Sidecars.Save(path, sidecar);
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt >= SidecarSaveAttempts)
+                {
+                    return ex;
+                }
+
+                services.Log.Warning(ex, "Saving the sidecar {Path} failed (attempt {Attempt} of {Attempts}); trying again", path, attempt, SidecarSaveAttempts);
+                (services.Sleep ?? Thread.Sleep)(SidecarSaveWaits[attempt - 1]);
+            }
+        }
     }
 
     /// <summary>
     /// Writes the unblocked changes page by page (<see cref="WritePage"/>); inked values are skipped unless confirmed; the
     /// first OneNote failure stops the run with the page named. What each page write did is recorded in
-    /// <paramref name="state"/> as soon as it is done, so a run that stops part way still saves it.
+    /// <paramref name="state"/> as soon as it is done, so a run that stops part way still saves it. When page writes were
+    /// made and OneNote refused every one of them as a conflict, the run fails (<see cref="AllWritesConflictedFormat"/>):
+    /// a run that only some conflicts held back still succeeds.
     /// </summary>
     private WriteOutcome WriteAll(
         List<PlannedChange> changes,
@@ -333,6 +398,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         int touched = 0;
         int valuesWritten = 0;
         int eventsWritten = 0;
+        int attempted = 0;
+        int conflicted = 0;
         string? error = null;
 
         foreach (IGrouping<PageKey, PlannedChange> group in changes.GroupBy(c => c.Page))
@@ -396,6 +463,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             outcome.AddRange(page.Changes);
             warnings.AddRange(page.Warnings);
             touched += page.Touched ? 1 : 0;
+            attempted += page.Attempted ? 1 : 0;
+            conflicted += page.Conflicted ? 1 : 0;
             foreach ((PlannedChange planned, PlannedChange written) in page.Written.Where(w => w.Written.Kind != ChangeKind.Remove))
             {
                 if (calendarChanges.Contains(planned))
@@ -407,6 +476,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                     valuesWritten++;
                 }
             }
+        }
+
+        if (error is null && attempted > 0 && conflicted == attempted)
+        {
+            error = string.Format(CultureInfo.InvariantCulture, AllWritesConflictedFormat, conflicted);
+            services.Log.Error("Every page write was refused as a conflict ({Count} pages); check how OneNote compares the dateExpectedLastModified stamp", conflicted);
         }
 
         return new WriteOutcome(outcome, touched, valuesWritten, eventsWritten, warnings, error);
@@ -431,14 +506,14 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             PageXml? fresh = pages.Read(spec.Key);
             if (fresh is null)
             {
-                return new PageWrite(pending.Select(c => c with { Blocked = true, Reason = Propagator.UnreadablePageReason }).ToList(), new(), false, new());
+                return new PageWrite(pending.Select(c => c with { Blocked = true, Reason = Propagator.UnreadablePageReason }).ToList(), new(), false, new()) { Attempted = attempt > 1 };
             }
 
             (List<(PlannedChange Planned, AnchorWrite Write)> writes, List<PlannedChange> settled, List<string> gone) = Recheck(spec, pending, fresh, catalog, state);
             if (writes.Count == 0)
             {
                 state.Forget(spec.Key, gone);
-                return new PageWrite(settled, new(), false, new());
+                return new PageWrite(settled, new(), false, new()) { Attempted = attempt > 1 };
             }
 
             AnchorWriteResult result;
@@ -468,7 +543,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                 List<PlannedChange> conflicted = settled
                     .Concat(writes.Select(w => removed.Contains(w.Write) ? w.Write.Change : w.Write.Change with { Blocked = true, Reason = ConflictReason }))
                     .ToList();
-                return new PageWrite(conflicted, new(), false, new() { $"Page {spec.Title} changed while Refresh was writing it; its changes were not written and will be tried again on the next run." });
+                return new PageWrite(conflicted, new(), false, new() { $"Page {spec.Title} changed while Refresh was writing it; its changes were not written and will be tried again on the next run." }) { Attempted = true, Conflicted = true };
             }
 
             pages.Invalidate(spec.Key);
@@ -481,7 +556,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                 settled.Concat(writes.Select(w => w.Write.Change)).ToList(),
                 writes.Select(w => (w.Planned, w.Write.Change)).ToList(),
                 true,
-                warnings);
+                warnings) { Attempted = true };
         }
     }
 
@@ -726,12 +801,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// The PRD's "three consecutive failures raise a Windows toast", updated once per real run from how it ended: a run
     /// that succeeded clears the streak; a run whose every Setup calendar source failed (exit 6) or that OneNote failed
     /// (exit 3 or 5) adds one, and from the third in a row on each such run raises the toast. Dry runs, cancelled runs, a
-    /// notebook that was not found (exit 2) and runs whose sidecar path never became known leave the streak alone. The
+    /// notebook that was not found (exit 2), a run refused because another run of the notebook holds its lock, and runs
+    /// whose sidecar path never became known leave the streak alone. The
     /// counter file lives beside the sidecar; failing to update it is logged, never fatal.
     /// </summary>
     private void TrackStreak(RefreshRequest request, RunState state, RefreshResult result)
     {
-        if (request.DryRun || state.Cancelled || state.SidecarPath is null)
+        if (request.DryRun || state.Cancelled || state.Refused || state.SidecarPath is null)
         {
             return;
         }
@@ -797,6 +873,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         public CalendarFetchResult? SetupFetch { get; set; }
 
         public bool Cancelled { get; set; }
+
+        /// <summary>The lock beside the sidecar this run holds, released when the run has ended.</summary>
+        public RefreshLock? Lock { get; set; }
+
+        /// <summary>True when another run of the notebook held the lock, so this one did not start.</summary>
+        public bool Refused { get; set; }
     }
 
     private sealed record WriteOutcome(
@@ -812,7 +894,14 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         List<PlannedChange> Changes,
         List<(PlannedChange Planned, PlannedChange Written)> Written,
         bool Touched,
-        List<string> Warnings);
+        List<string> Warnings)
+    {
+        /// <summary>True when the page was written to OneNote at least once (whether or not OneNote took it).</summary>
+        public bool Attempted { get; init; }
+
+        /// <summary>True when OneNote refused the page's write as a conflict on every attempt, so nothing of it was written.</summary>
+        public bool Conflicted { get; init; }
+    }
 
     /// <summary>
     /// The sidecar's ownership records (slot to object ID, slot to the text the tool wrote) as the write phase changes

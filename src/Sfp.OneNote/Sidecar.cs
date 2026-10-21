@@ -46,10 +46,110 @@ public sealed record Sidecar
     public string? PreviousNotebook { get; init; }
 
     /// <summary>
+    /// The Generate options that shaped the notebook's plan (out-of-quarter day pages, the reflection date rule, the Notes
+    /// pages and the other options the plan builder reads), so Refresh rebuilds the plan the notebook was generated with;
+    /// null in files written before they were recorded, which keep the default options.
+    /// </summary>
+    public SidecarPlanOptions? PlanOptions { get; init; }
+
+    /// <summary>
+    /// Setup slot id ("objective:3") to the inked text a Refresh run told to write inked values (--write-inked, or the
+    /// app's tick) wrote; while that Setup slot still reads the same text, a run without the confirmation treats it as
+    /// typed, so the daily task never takes it out of a legend. Empty in files written before it was recorded.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ConfirmedInked { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// IDs of the pages a sidecar rebuild could not read (OneNote still downloading a moved notebook, say): the next run
+    /// reads them, and any page of the notebook the sidecar does not record, before planning. Empty when every page was read.
+    /// </summary>
+    public IReadOnlyList<string> UnreadPages { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// The Time Blocks window the daily pages were generated with (their rows are baked art), so Refresh places calendar
     /// events in the rows the pages show; null in files written before it was recorded.
     /// </summary>
     public TimeBlockWindow? TimeBlocks { get; init; }
+}
+
+/// <summary>
+/// The Generate options that shape a notebook's plan, every <see cref="GenerateOptions"/> member the plan builder (and
+/// the link graph it builds) reads, recorded in the sidecar so Refresh plans for the pages the notebook really has. A
+/// member left out (null) keeps that option's default.
+/// </summary>
+public sealed record SidecarPlanOptions
+{
+    /// <summary>The days of week 1 and week N that fall outside the quarter have daily pages.</summary>
+    public bool? IncludeOutOfQuarterDays { get; init; }
+
+    /// <summary>The Weekly Reflection is dated with the week's Monday instead of its Sunday.</summary>
+    public bool? ReflectionDateIsWeekStart { get; init; }
+
+    /// <summary>Names of the ruled pages in the Notes section.</summary>
+    public IReadOnlyList<string>? NotesPages { get; init; }
+
+    /// <summary>The week sections sit in one "Weeks" section group.</summary>
+    public bool? GroupWeeks { get; init; }
+
+    /// <summary>The week sections are colored by month.</summary>
+    public bool? ColorSectionsByMonth { get; init; }
+
+    /// <summary>Link anchors were written.</summary>
+    public bool? Links { get; init; }
+
+    /// <summary>How the month grids place a sixth-row day, which the calendar day links follow.</summary>
+    public SixthRowMode? SixthRow { get; init; }
+
+    /// <summary>Order of the date fields in the text of the date links.</summary>
+    public DateFieldOrder? DateOrder { get; init; }
+
+    /// <summary>Zero-padded month and day in the text of the date links.</summary>
+    public bool? PadDateFields { get; init; }
+
+    /// <summary>The plan-shaping members of the options a notebook is generated with.</summary>
+    public static SidecarPlanOptions From(GenerateOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return new SidecarPlanOptions
+        {
+            IncludeOutOfQuarterDays = options.IncludeOutOfQuarterDays,
+            ReflectionDateIsWeekStart = options.ReflectionDateIsWeekStart,
+            NotesPages = options.NotesPages.ToArray(),
+            GroupWeeks = options.GroupWeeks,
+            ColorSectionsByMonth = options.ColorSectionsByMonth,
+            Links = options.Links,
+            SixthRow = options.SixthRow,
+            DateOrder = options.DateOrder,
+            PadDateFields = options.PadDateFields,
+        };
+    }
+
+    /// <summary>
+    /// The options to rebuild the plan of a notebook of <paramref name="quarter"/> with: every option
+    /// <paramref name="recorded"/> holds, the default for the rest (all defaults when the sidecar records none).
+    /// </summary>
+    public static GenerateOptions ToGenerateOptions(QuarterSpec quarter, SidecarPlanOptions? recorded)
+    {
+        ArgumentNullException.ThrowIfNull(quarter);
+        GenerateOptions defaults = new() { Start = quarter };
+        if (recorded is null)
+        {
+            return defaults;
+        }
+
+        return defaults with
+        {
+            IncludeOutOfQuarterDays = recorded.IncludeOutOfQuarterDays ?? defaults.IncludeOutOfQuarterDays,
+            ReflectionDateIsWeekStart = recorded.ReflectionDateIsWeekStart ?? defaults.ReflectionDateIsWeekStart,
+            NotesPages = recorded.NotesPages ?? defaults.NotesPages,
+            GroupWeeks = recorded.GroupWeeks ?? defaults.GroupWeeks,
+            ColorSectionsByMonth = recorded.ColorSectionsByMonth ?? defaults.ColorSectionsByMonth,
+            Links = recorded.Links ?? defaults.Links,
+            SixthRow = recorded.SixthRow ?? defaults.SixthRow,
+            DateOrder = recorded.DateOrder ?? defaults.DateOrder,
+            PadDateFields = recorded.PadDateFields ?? defaults.PadDateFields,
+        };
+    }
 }
 
 /// <summary>One page's IDs and its tool-owned objects.</summary>
