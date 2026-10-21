@@ -418,7 +418,10 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// user filled or edited since planning is blocked, a change already in place is dropped, and a removal whose outline
     /// is already gone only drops its ID. The write passes the page's lastModifiedTime, so a page the user changes between
     /// this read and the write is not written over; on hrLastModifiedDateDidNotMatch the page is read, re-checked and
-    /// written once more, and when it changed again its changes are reported as not written, for the next run.
+    /// written once more, and when it changed again its changes are reported as not written, for the next run. When the
+    /// write fails for good after some of its removals were made, the page is read again and the records of the outlines
+    /// gone from it are dropped (<see cref="RemovedBeforeFailure"/>), so the sidecar never keeps the ID of a deleted
+    /// outline; on a conflict those removals are reported done, any other failure still fails the page.
     /// </summary>
     private PageWrite WritePage(PageSpec spec, string pageId, IReadOnlyList<PlannedChange> pending, SlotCatalog catalog, PageCache pages, WriteState state)
     {
@@ -443,17 +446,28 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             {
                 result = services.Writer.Write(pageId, fresh, writes.Select(w => w.Write).ToList());
             }
-            catch (OneNoteException ex) when (ex is not OneNoteUnavailableException && ex.HResult == OneNoteHResults.LastModifiedDateDidNotMatch)
+            catch (OneNoteException ex) when (ex is not OneNoteUnavailableException)
             {
-                if (attempt == 1)
+                bool conflict = ex.HResult == OneNoteHResults.LastModifiedDateDidNotMatch;
+                if (conflict && attempt == 1)
                 {
+                    // Removals made before the refusal are found gone by the next attempt's re-check.
                     services.Log.Warning("Page {Title} changed while it was being written; reading it again", spec.Title);
                     continue;
                 }
 
-                services.Log.Warning(ex, "Page {Title} changed again while it was being written; its changes are left for the next run", spec.Title);
                 pages.Invalidate(spec.Key);
-                List<PlannedChange> conflicted = settled.Concat(writes.Select(w => w.Write.Change with { Blocked = true, Reason = ConflictReason })).ToList();
+                List<AnchorWrite> removed = RemovedBeforeFailure(spec.Key, writes.Select(w => w.Write), pages);
+                state.Forget(spec.Key, gone.Concat(removed.Select(w => w.Change.SlotId)));
+                if (!conflict)
+                {
+                    throw;
+                }
+
+                services.Log.Warning(ex, "Page {Title} changed again while it was being written; its changes are left for the next run", spec.Title);
+                List<PlannedChange> conflicted = settled
+                    .Concat(writes.Select(w => removed.Contains(w.Write) ? w.Write.Change : w.Write.Change with { Blocked = true, Reason = ConflictReason }))
+                    .ToList();
                 return new PageWrite(conflicted, new(), false, new() { $"Page {spec.Title} changed while Refresh was writing it; its changes were not written and will be tried again on the next run." });
             }
 
@@ -469,6 +483,29 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                 true,
                 warnings);
         }
+    }
+
+    /// <summary>
+    /// The removals among <paramref name="writes"/> whose outline is no longer on the page, read again after OneNote
+    /// refused the write part way: each removal is its own DeletePageContent call made before the one UpdatePageContent,
+    /// so some may be done although the write as a whole failed. None when the page cannot be read.
+    /// </summary>
+    private static List<AnchorWrite> RemovedBeforeFailure(PageKey key, IEnumerable<AnchorWrite> writes, PageCache pages)
+    {
+        List<AnchorWrite> removals = writes.Where(w => w.Change.Kind == ChangeKind.Remove && !string.IsNullOrEmpty(w.ObjectId)).ToList();
+        if (removals.Count == 0)
+        {
+            return removals;
+        }
+
+        PageXml? now = pages.Read(key);
+        if (now is null)
+        {
+            return new List<AnchorWrite>();
+        }
+
+        HashSet<string> present = now.Outlines.Select(o => o.ObjectId).ToHashSet(StringComparer.Ordinal);
+        return removals.Where(w => !present.Contains(w.ObjectId!)).ToList();
     }
 
     /// <summary>

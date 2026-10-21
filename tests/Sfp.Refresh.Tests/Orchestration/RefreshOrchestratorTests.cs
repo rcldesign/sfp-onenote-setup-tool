@@ -755,6 +755,77 @@ public class RefreshOrchestratorTests
         h.Run(Request()).Summary!.Changes.Should().ContainSingle().Which.Should().Match<PlannedChange>(c => c.Page == MonJan4 && !c.Blocked, "the next run writes it");
     }
 
+    [Theory]
+    [InlineData("the update is refused twice")]
+    [InlineData("the first delete is refused")]
+    [InlineData("the update fails")]
+    public void An_outline_deleted_before_a_page_write_was_refused_leaves_no_record_behind(string refusal)
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        h.Type(S.StandingGoals[0], "Walk 30 min");
+        h.Run(Request()).Success.Should().BeTrue();
+        string legendId = h.SavedSidecar().Pages[MonJan4.Value].Anchors["objectiveLegend"];
+        PageXml setup = h.Notebook.Read(PageKey.Setup);
+        h.Notebook.EditOutlineText(PageKey.Setup, setup.Outlines.Single(o => o.PlainText == "Ship the connector").ObjectId, "");
+        h.Notebook.EditOutlineText(PageKey.Setup, setup.Outlines.Single(o => o.PlainText == "Walk 30 min").ObjectId, "Walk 45 min");
+        string pageId = h.Notebook.PageIds[MonJan4];
+        int calls = 0;
+        h.App.BeforeWrite = id =>
+        {
+            if (id != pageId)
+            {
+                return;
+            }
+
+            calls++;
+            bool update = h.App.Calls.Last().Call == "UpdatePageContent";
+            bool edit = refusal switch
+            {
+                "the update is refused twice" => update,
+                "the first delete is refused" => update || calls == 1,
+                _ => false,
+            };
+            if (edit)
+            {
+                h.Notebook.TypeUserText(MonJan4, new RectPt(400, 380 + (20 * calls), 200, 14), "typing " + calls);
+            }
+        };
+        if (refusal == "the update fails")
+        {
+            h.App.UpdatePageContentFailure = id => id == pageId ? new OneNoteException("UpdatePageContent", OneNoteHResults.PageReadOnly, "The page is read-only.", null) : null;
+        }
+
+        RefreshResult result = h.Run(Request());
+
+        h.Notebook.Read(MonJan4).Outlines.Should().NotContain(o => o.ObjectId == legendId, "the legend's outline was deleted before the page's update was refused");
+        SidecarPage monday = h.SavedSidecar().Pages[MonJan4.Value];
+        monday.Anchors.Should().NotContainKey("objectiveLegend", "the sidecar keeps no ID of an outline the run deleted");
+        monday.AnchorTexts.Should().NotContainKey("objectiveLegend");
+        monday.Anchors.Should().ContainKey("standingGoal:1", "the goal's outline was not rewritten and is still the tool's");
+        PlannedChange goal = result.Summary!.Changes.Single(c => c.Page == MonJan4 && c.SlotId == "standingGoal:1");
+        goal.Blocked.Should().BeTrue();
+        if (refusal == "the update fails")
+        {
+            result.ExitCode.Should().Be(RefreshOrchestrator.WriteFailureExitCode);
+            goal.Reason.Should().Contain("Mon Jan 4").And.Contain("read-only");
+        }
+        else
+        {
+            result.ExitCode.Should().Be(0, result.Error);
+            goal.Reason.Should().Be(RefreshOrchestrator.ConflictReason);
+            result.Summary.Changes.Single(c => c.Page == MonJan4 && c.SlotId == "objectiveLegend")
+                .Should().Match<PlannedChange>(c => c.Kind == ChangeKind.Remove && !c.Blocked, "the removal was made");
+        }
+
+        h.App.BeforeWrite = null;
+        h.App.UpdatePageContentFailure = null;
+        RefreshResult next = h.Run(Request());
+        next.Summary!.Changes.Where(c => c.Page == MonJan4).Should().ContainSingle()
+            .Which.Should().Match<PlannedChange>(c => c.SlotId == "standingGoal:1" && c.Kind == ChangeKind.Update && !c.Blocked, "only the goal is left to write");
+        h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "Walk 45 min");
+    }
+
     [Fact]
     public void A_partial_calendar_failure_keeps_the_dead_sources_lines_writes_the_rest_and_says_so()
     {
