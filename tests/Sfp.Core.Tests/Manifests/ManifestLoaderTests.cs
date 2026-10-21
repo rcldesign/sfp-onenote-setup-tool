@@ -285,6 +285,37 @@ public class ManifestLoaderTests : IDisposable
         act.Should().Throw<ManifestException>().WithMessage("*not valid JSON*");
     }
 
+    [Theory]
+    [InlineData("\"pageCount\": 132,", "\"pageCount\": 132, \"pageCount\": 132,", "$ holds the key 'pageCount' twice")]
+    [InlineData("\"namePattern\": \"SFP {Qn} {YYYY}\",", "\"$comment\": \"a\", \"$comment\": \"b\", \"namePattern\": \"SFP {Qn} {YYYY}\",", "$.notebook holds the key '$comment' twice")]
+    [InlineData("\"font\": {", "\"font\": { \"family\": \"x\" }, \"font\": {", "$ holds the key 'font' twice")]
+    [InlineData("\"namePattern\": \"SFP {Qn} {YYYY}\",", "\"namePattern\": \"SFP \\ud800 {Qn} {YYYY}\",", "$.notebook.namePattern holds an unpaired UTF-16 surrogate escape")]
+    public void Load_reports_a_duplicate_key_or_an_unpaired_surrogate_as_a_manifest_error(string find, string replace, string message)
+    {
+        string shipped = File.ReadAllText(TestPaths.ManifestPath);
+        shipped.Should().Contain(find);
+        string path = WriteText(shipped.Replace(find, replace, StringComparison.Ordinal));
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage($"Manifest '{path}' is not valid JSON: {message}*");
+    }
+
+    [Theory]
+    [InlineData("{ \"pageCount\": 132, \"pageCount\": 132 }", "$ holds the key 'pageCount' twice")]
+    [InlineData("{ \"slots\": { \"date\": { \"$comment\": \"a\", \"$comment\": \"b\", \"baselineY\": 38.5 } } }", "$.slots.date holds the key '$comment' twice")]
+    [InlineData("{ \"notebook\": { \"namePattern\": \"A {Qn}\" }, \"notebook\": { \"namePattern\": \"B {Qn}\" } }", "$ holds the key 'notebook' twice")]
+    [InlineData("{ \"notebook\": { \"namePattern\": \"SFP \\ud800 {Qn}\" } }", "$.notebook.namePattern holds an unpaired UTF-16 surrogate escape")]
+    [InlineData("{ \"notebook\": { \"\\ud800\": 1 } }", "$.notebook holds an unpaired UTF-16 surrogate escape")]
+    public void Merge_reports_a_duplicate_key_or_an_unpaired_surrogate_in_the_user_manifest_as_a_manifest_error(string userJson, string message)
+    {
+        string userPath = WriteText(userJson);
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, userPath);
+
+        act.Should().Throw<ManifestException>().WithMessage($"Manifest '{userPath}' is not valid JSON: {message}*");
+    }
+
     [Fact]
     public void Page_size_must_hold_exactly_two_entries()
     {
@@ -387,8 +418,14 @@ public class ManifestLoaderTests : IDisposable
     {
         JsonNode root = JsonNode.Parse(File.ReadAllText(TestPaths.ManifestPath))!;
         mutate(root);
+        return WriteText(root.ToJsonString());
+    }
+
+    /// <summary>Writes raw JSON text, for files a JsonNode cannot hold (a duplicate key).</summary>
+    private string WriteText(string json)
+    {
         string path = Path.Combine(_tempDir, Guid.NewGuid().ToString("N")[..8] + ".json");
-        File.WriteAllText(path, root.ToJsonString());
+        File.WriteAllText(path, json);
         return path;
     }
 }

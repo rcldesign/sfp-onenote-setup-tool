@@ -258,6 +258,32 @@ public class PlanCommandTests
         }
     }
 
+    [Theory]
+    [InlineData("{ \"pageCount\": 132, \"pageCount\": 132 }", "$ holds the key 'pageCount' twice")]
+    [InlineData("{ \"slots\": { \"date\": { \"$comment\": \"a\", \"$comment\": \"b\" } } }", "$.slots.date holds the key '$comment' twice")]
+    [InlineData("{ \"notebook\": { \"namePattern\": \"A {Qn}\" }, \"notebook\": { \"namePattern\": \"B {Qn}\" } }", "$ holds the key 'notebook' twice")]
+    [InlineData("{ \"notebook\": { \"namePattern\": \"SFP \\ud800 {Qn}\" } }", "$.notebook.namePattern holds an unpaired UTF-16 surrogate escape")]
+    public void A_manifest_with_a_duplicate_key_or_an_unpaired_surrogate_exits_2_with_one_line(string userJson, string fragment)
+    {
+        string dir = TestPaths.NewTempDir("plan-malformed");
+        try
+        {
+            string user = Path.Combine(dir, "user.json");
+            File.WriteAllText(user, userJson);
+
+            (int code, string output, string err) = Run(Request("2027-01") with { ManifestPath = user });
+
+            code.Should().Be(ExitCodes.ValidationError);
+            output.Should().BeEmpty();
+            err.Should().StartWith($"Manifest '{user}' is not valid JSON: ").And.Contain(fragment).And.EndWith("\n").And.NotContain("   at ");
+            err.TrimEnd('\n').Should().NotContain("\n", "the error is one stderr line");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Build_defines_the_plan_command_and_its_options()
     {
