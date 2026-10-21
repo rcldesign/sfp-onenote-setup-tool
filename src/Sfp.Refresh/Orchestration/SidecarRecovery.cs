@@ -162,7 +162,10 @@ public sealed class SidecarRecovery
     /// pages that could not be read (<see cref="Sidecar.UnreadPages"/>) for the next run's completion step; the history
     /// of a stale sidecar (stamps, frozen days, previous notebook, plan options, confirmed inked values, Time Blocks
     /// window) is kept, and its plan
-    /// options shape the plan the pages are matched against.
+    /// options shape the plan the pages are matched against. The stale sidecar's journal
+    /// (<see cref="SidecarPage.PendingTexts"/>) is kept as well, for <see cref="PendingWrites.Resolve"/> to settle as
+    /// usual: it is carried for every slot whose outline is re-found, and a page that cannot be read now keeps its stale
+    /// record (same page ID), journal included, instead of being listed as unread.
     /// </summary>
     public (Sidecar Sidecar, IReadOnlyDictionary<string, PageXml> Pages) Rebuild(NotebookHandle notebook, HierarchyNotebook tree, Sidecar? previous, string toolVersion)
     {
@@ -173,12 +176,14 @@ public sealed class SidecarRecovery
         Dictionary<string, PageXml> pages = new(StringComparer.Ordinal);
         Dictionary<string, (HierarchySection Section, HierarchyPage Page)> located = new(StringComparer.Ordinal);
         List<string> unread = new();
+        Dictionary<string, HierarchySection> unreadSections = new(StringComparer.Ordinal);
         foreach ((HierarchySection section, HierarchyPage page) in tree.Pages)
         {
             PageXml? xml = TryRead(page);
             if (xml is null)
             {
                 unread.Add(page.Id);
+                unreadSections.TryAdd(page.Id, section);
                 continue;
             }
 
@@ -222,7 +227,19 @@ public sealed class SidecarRecovery
             IReadOnlyDictionary<string, string> anchors = spec is null
                 ? new Dictionary<string, string>(StringComparer.Ordinal)
                 : MatchAnchors(spec, pages[key], catalog, plan, manifest.OneNote);
-            records[key] = new SidecarPage { PageId = page.Id, SectionId = section.Id, Anchors = anchors, AnchorTexts = CarriedTexts(previous, key, anchors) };
+            records[key] = new SidecarPage { PageId = page.Id, SectionId = section.Id, Anchors = anchors, AnchorTexts = CarriedTexts(previous, key, anchors), PendingTexts = CarriedPending(previous, key, anchors) };
+        }
+
+        // A page that cannot be read now keeps the journal an earlier run left on it: its stale record still names it by
+        // page ID, so the record stays (as a run without a rebuild would have it) until the page can be read and settled.
+        foreach ((string key, SidecarPage stale) in previous?.Pages.Where(p => p.Value.PendingTexts is { Count: > 0 }) ?? Enumerable.Empty<KeyValuePair<string, SidecarPage>>())
+        {
+            if (!records.ContainsKey(key) && unreadSections.TryGetValue(stale.PageId, out HierarchySection? unreadSection))
+            {
+                records[key] = stale with { SectionId = unreadSection.Id };
+                unread.Remove(stale.PageId);
+                log.Warning("Page {Key} ({Id}) could not be read during the rebuild; its record and the texts an earlier run journaled on it are kept", key, stale.PageId);
+            }
         }
 
         log.Information("Sidecar rebuilt for {Name}: {Pages} pages, {Sections} sections, {Anchors} anchors re-found", notebook.Name, records.Count, sections.Count, records.Values.Sum(r => r.Anchors.Count));
@@ -327,6 +344,28 @@ public sealed class SidecarRecovery
         }
 
         return texts;
+    }
+
+    /// <summary>
+    /// The texts an earlier run journaled (<see cref="SidecarPage.PendingTexts"/>), carried from a stale sidecar for the
+    /// slots whose outline was re-found, so <see cref="PendingWrites.Resolve"/> records the text that run wrote and could
+    /// not record, where the older text carried by <see cref="CarriedTexts"/> would make its outline look edited by the
+    /// user. Null when there is none.
+    /// </summary>
+    private static Dictionary<string, string>? CarriedPending(Sidecar? previous, string key, IReadOnlyDictionary<string, string> anchors)
+    {
+        if (previous is null || !previous.Pages.TryGetValue(key, out SidecarPage? stale) || stale.PendingTexts is null)
+        {
+            return null;
+        }
+
+        Dictionary<string, string> pending = new(StringComparer.Ordinal);
+        foreach ((string slotId, string text) in stale.PendingTexts.Where(t => anchors.ContainsKey(t.Key)))
+        {
+            pending[slotId] = text;
+        }
+
+        return pending.Count > 0 ? pending : null;
     }
 
     /// <summary>The quarter from the page keys: the earliest "calendar:YYYY-MM", else the month of the earliest "day:YYYY-MM-DD".</summary>
