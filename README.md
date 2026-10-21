@@ -51,6 +51,8 @@ Logs: one file per run under %LOCALAPPDATA%\sfp2onenote\logs (override with SFP2
 
 ## Build from source
 
+The .NET 8 SDK is the reference (global.json); a newer SDK such as 9.0 builds and tests the solution too, because global.json rolls forward to the latest major and the projects roll forward to the installed runtime. Install one with `winget install Microsoft.DotNet.SDK.8` or use the SDK you have.
+
 ```
 dotnet build -warnaserror
 dotnet test --filter "Category!=COM"          # anywhere
