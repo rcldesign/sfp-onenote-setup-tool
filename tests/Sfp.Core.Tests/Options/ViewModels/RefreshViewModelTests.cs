@@ -57,7 +57,7 @@ public class RefreshViewModelTests
         return vm;
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_list_comes_from_the_registry_over_the_known_folders_plus_the_default_folder()
     {
         RefreshViewModel vm = await Loaded();
@@ -77,7 +77,7 @@ public class RefreshViewModelTests
         q4.ToString().Should().Be("SFP Q4 2026");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Default_folder_is_listed_once_even_when_it_is_also_a_known_folder()
     {
         RefreshViewModel vm = _h.NewRefresh();
@@ -88,7 +88,7 @@ public class RefreshViewModelTests
         vm.NotebooksStatus.Should().StartWith("No notebooks built by this tool were found under");
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_registry_failure_is_a_status_line()
     {
         _h.Registry.Throw = new NotSupportedException("The notebook registry (M4.3) is not wired into the app yet.");
@@ -102,7 +102,7 @@ public class RefreshViewModelTests
         vm.ToRequest(dryRun: true).Should().BeNull();
     }
 
-    [Fact]
+    [UiFact]
     public async Task Preview_changes_runs_a_dry_run_and_lists_every_change_with_blocked_and_inked_marks()
     {
         _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary(), Elapsed = TimeSpan.FromSeconds(3) };
@@ -147,7 +147,7 @@ public class RefreshViewModelTests
         _h.Registry.Queries.Should().HaveCount(1, "a dry run does not reload the list");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Each_run_is_dated_by_the_clock_when_it_starts_not_by_the_day_the_app_opened()
     {
         _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() };
@@ -163,7 +163,7 @@ public class RefreshViewModelTests
         _h.Env.Today.Should().Be(new DateOnly(2026, 10, 20), "the start date itself does not move");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Refresh_now_writes_and_reloads_the_list_afterwards()
     {
         _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() with { Values = SetupValues.Empty }, Elapsed = TimeSpan.FromSeconds(30) };
@@ -186,7 +186,7 @@ public class RefreshViewModelTests
         vm.SelectedNotebook!.Name.Should().Be("SFP Q1 2027", "the selection is kept across the reload");
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_failed_run_shows_the_error_and_the_log_path()
     {
         _h.Refresher.Result = new RefreshResult { Success = false, ExitCode = 6, Error = "All calendar sources failed", LogPath = @"C:\logs\refresh.log" };
@@ -199,7 +199,7 @@ public class RefreshViewModelTests
         vm.Summary.Should().BeNull();
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_orchestrator_is_given_the_run_log_and_a_failure_names_that_file()
     {
         FakeRunLogFactory logs = new();
@@ -233,7 +233,7 @@ public class RefreshViewModelTests
         vm.ErrorText.Should().Be("Writing page 'Mon Jan 4' failed Log: " + log.Path);
     }
 
-    [Fact]
+    [UiFact]
     public async Task An_orchestrator_that_throws_is_reported_not_rethrown()
     {
         _h.Refresher.Throw = new InvalidOperationException("OneNote is busy");
@@ -246,7 +246,7 @@ public class RefreshViewModelTests
         vm.IsBusy.Should().BeFalse();
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_daily_checkbox_registers_and_removes_the_scheduled_task_for_the_selected_notebook()
     {
         RefreshViewModel vm = await Loaded();
@@ -267,7 +267,7 @@ public class RefreshViewModelTests
         _h.Tasks.Folders.Should().Equal(Harness.DefaultFolder, @"D:\Notebooks");
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_notebook_moved_to_onedrive_is_refreshed_and_scheduled_from_the_folder_of_its_sidecar()
     {
         // After File, Share, Move Notebook the sidecar's notebook path is the OneDrive URL; the sidecar itself stays put.
@@ -287,7 +287,7 @@ public class RefreshViewModelTests
         RefreshViewModel.NotebooksFolderOf(moved with { SidecarPath = "" }).Should().BeNull("no sidecar path means the default folders are searched");
     }
 
-    [Fact]
+    [UiFact]
     public async Task The_daily_checkbox_follows_the_selected_notebook_and_reverts_when_the_service_refuses()
     {
         _h.Tasks.Registered.Add("SFP Q4 2026");
@@ -306,7 +306,7 @@ public class RefreshViewModelTests
         vm.ScheduleStatus.Should().Contain("M5.4");
     }
 
-    [Fact]
+    [UiFact]
     public async Task Selecting_another_notebook_clears_the_previous_results()
     {
         _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() };
@@ -322,7 +322,7 @@ public class RefreshViewModelTests
         vm.ChangesHeading.Should().BeNull();
     }
 
-    [Fact]
+    [UiFact]
     public void Setup_value_text_rules()
     {
         SetupValues values = Values();
@@ -339,7 +339,7 @@ public class RefreshViewModelTests
         SetupValueText.Lines(values).Should().StartWith(new[] { "Objective 1: Ship the connector", "Objective 2: Hire two PMs (inked)", "Standing goal 1: Inbox zero" });
     }
 
-    [Fact]
+    [UiFact]
     public async Task Any_inked_without_slot_ids_still_warns()
     {
         SetupValues values = Values() with { InkedSlots = Array.Empty<string>() };
@@ -352,7 +352,7 @@ public class RefreshViewModelTests
         vm.Changes.Should().AllSatisfy(c => c.IsInked.Should().BeFalse());
     }
 
-    [Fact]
+    [UiFact]
     public async Task Cancel_is_enabled_only_while_a_run_is_on()
     {
         _h.Refresher.Result = new RefreshResult { Success = true, ExitCode = 0, Summary = Summary() };
@@ -368,7 +368,7 @@ public class RefreshViewModelTests
         vm.CancelledText.Should().BeNull();
     }
 
-    [Fact]
+    [UiFact]
     public async Task Cancel_mid_refresh_says_cancelling_until_the_current_page_is_done_then_shows_the_cancelled_line()
     {
         using ManualResetEventSlim finishing = new(false);
@@ -380,6 +380,7 @@ public class RefreshViewModelTests
 
         Task refreshing = vm.RefreshNowCommand.ExecuteAsync(null);
         SpinWait.SpinUntil(() => _h.Refresher.WaitingForCancel, TimeSpan.FromSeconds(5)).Should().BeTrue();
+        await _h.Ui.Drain();
         vm.IsBusy.Should().BeTrue();
         vm.ProgressText.Should().Be("Writing Annual Objectives");
         vm.CancelCommand.CanExecute(null).Should().BeTrue();
@@ -388,6 +389,7 @@ public class RefreshViewModelTests
 
         vm.ProgressText.Should().Be(RefreshViewModel.CancellingText);
         SpinWait.SpinUntil(() => _h.Refresher.SawCancel, TimeSpan.FromSeconds(5)).Should().BeTrue("the run was given the token Cancel cancels");
+        await _h.Ui.Drain();
         vm.ProgressText.Should().Be("Cancelling after the current page", "the page in flight reporting does not replace the cancelling line");
         vm.IsBusy.Should().BeTrue("the run is still finishing that page");
         vm.CancelledText.Should().BeNull();
@@ -404,7 +406,7 @@ public class RefreshViewModelTests
         _h.Refresher.LastRequest!.DryRun.Should().BeFalse();
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_cancelled_preview_says_nothing_was_written()
     {
         _h.Refresher.WaitForCancel = true;
@@ -424,7 +426,7 @@ public class RefreshViewModelTests
         await previewing;
     }
 
-    [Fact]
+    [UiFact]
     public async Task A_run_that_fails_after_cancel_was_pressed_shows_its_error_not_the_cancelled_line()
     {
         _h.Refresher.WaitForCancel = true;
@@ -447,7 +449,7 @@ public class RefreshViewModelTests
         vm.ProgressText.Should().Be("Refresh failed.");
     }
 
-    [Fact]
+    [UiFact]
     public void The_cancelled_line_counts_the_pages_written_and_says_the_next_refresh_continues()
     {
         RefreshViewModel.CancelledTextFor(dryRun: false, pagesWritten: 0).Should().Be("Refresh cancelled before any page was written. The next refresh continues where this one stopped.");

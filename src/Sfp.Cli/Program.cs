@@ -20,7 +20,8 @@ public static class Program
     /// Parses and runs a command line. A parse error (unknown verb or option, a missing required option, a value of the
     /// wrong type, no verb at all) is printed to <paramref name="error"/> with a usage hint and exits with the PRD's
     /// validation code 2; System.CommandLine's own handling would print help and exit 1. Help and version requests are
-    /// not errors and print to <paramref name="output"/>.
+    /// not errors and print to <paramref name="output"/>. Response files are off: a value that starts with '@', such as
+    /// the notebook name "@Work Q1 2027" the daily refresh task passes, is taken as it is and never read as a file.
     /// </summary>
     /// <param name="args">The arguments after the executable name.</param>
     /// <param name="output">Help and version text.</param>
@@ -31,7 +32,7 @@ public static class Program
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
 
-        ParseResult parsed = BuildRoot().Parse(args);
+        ParseResult parsed = BuildRoot().Parse(args, new ParserConfiguration { ResponseFileTokenReplacer = null });
         if (parsed.Action is ParseErrorAction)
         {
             foreach (ParseError parseError in parsed.Errors)

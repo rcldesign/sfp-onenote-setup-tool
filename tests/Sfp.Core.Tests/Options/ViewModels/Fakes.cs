@@ -10,20 +10,47 @@ using Sfp.OneNote.Generate;
 using Sfp.Refresh;
 using Sfp.Render;
 using Sfp.TestSupport;
+using Xunit.Abstractions;
+using Xunit.Sdk;
 
 namespace Sfp.Core.Tests.Options.ViewModels;
 
 /// <summary>
-/// Runs posted actions inline, so a test sees every UI update as soon as the background work finishes. Inline means on
-/// the background thread, the moment the work ends: a test that looks at a state the result will replace holds the
-/// posts first (<see cref="Hold"/>), as a busy dispatcher would, and releases them after looking.
+/// The tests' stand-in for WPF's dispatcher: the <see cref="IUiThread"/> the view models get, and the synchronization
+/// context their awaits resume on. A view-model test ([UiFact] or [UiTheory]) runs from start to finish on the
+/// dispatcher's own thread, which runs one callback at a time, in the order they were queued: the test's code, the view
+/// models' code and await continuations, and every action posted through <see cref="IUiThread"/>. Post and Send only
+/// queue; nothing runs inline on the thread that posts. Background work (Task.Run bodies, the fakes' orchestrators,
+/// validator and renderer) runs on the thread pool and comes back through the queue, so a view model is never touched
+/// from two threads at once, and a result that finished work posts waits until the test yields (any await,
+/// <see cref="Harness.Settle(GenerateViewModel)"/>, <see cref="Drain"/>), as it would on a busy dispatcher. A posted
+/// action that throws fails the test, as it would crash the app.
 /// </summary>
-public sealed class ImmediateUiThread : IUiThread
+public sealed class TestDispatcher : SynchronizationContext, IUiThread
 {
-    private readonly object _gate = new();
-    private List<Action>? _held;
-    private int _posted;
+    /// <summary>How long <see cref="Drain"/> and <see cref="Harness.Settle(GenerateViewModel)"/> wait before they fail the test.</summary>
+    public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
+    [ThreadStatic]
+    private static TestDispatcher? t_current;
+
+    private readonly object _gate = new();
+    private readonly Queue<(SendOrPostCallback Callback, object? State)> _queue = new();
+    private readonly Thread _thread;
+    private int _posted;
+    private bool _closed;
+    private Exception? _error;
+
+    private TestDispatcher(Thread thread)
+    {
+        _thread = thread;
+    }
+
+    /// <summary>The dispatcher of the test running on this thread.</summary>
+    public static TestDispatcher OfThisThread => t_current ?? throw new InvalidOperationException(
+        "A view-model test runs on the test dispatcher: mark it [UiFact] or [UiTheory] instead of [Fact] or [Theory].");
+
+    /// <summary>The number of actions posted through <see cref="IUiThread.Post"/>.</summary>
     public int Posted
     {
         get
@@ -35,45 +62,304 @@ public sealed class ImmediateUiThread : IUiThread
         }
     }
 
-    /// <summary>From now on posted actions wait until <see cref="Release"/>.</summary>
-    public void Hold()
+    /// <summary>The number of callbacks queued and not run yet.</summary>
+    public int Queued
     {
-        lock (_gate)
+        get
         {
-            _held ??= new List<Action>();
-        }
-    }
-
-    /// <summary>Runs the held actions on the calling thread, in the order they were posted, and posts inline again.</summary>
-    public void Release()
-    {
-        List<Action> held;
-        lock (_gate)
-        {
-            held = _held ?? new List<Action>();
-            _held = null;
-        }
-
-        foreach (Action action in held)
-        {
-            action();
+            lock (_gate)
+            {
+                return _queue.Count;
+            }
         }
     }
 
     public void Post(Action action)
     {
+        ArgumentNullException.ThrowIfNull(action);
         lock (_gate)
         {
             _posted++;
-            if (_held is not null)
+        }
+
+        Enqueue(_ => action(), null);
+    }
+
+    public override void Post(SendOrPostCallback d, object? state) => Enqueue(d, state);
+
+    /// <summary>Queues like <see cref="Post(SendOrPostCallback, object?)"/>: nothing runs inline. The view models never send.</summary>
+    public override void Send(SendOrPostCallback d, object? state) => Enqueue(d, state);
+
+    public override SynchronizationContext CreateCopy() => this;
+
+    /// <summary>
+    /// Lets the dispatcher run everything queued, and whatever that queues in turn, until nothing is queued; then rethrows
+    /// what a posted action threw. Awaits, never blocks: each turn yields to the queue.
+    /// </summary>
+    public async Task Drain()
+    {
+        System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        while (Queued > 0)
+        {
+            if (clock.Elapsed > Timeout)
             {
-                _held.Add(action);
-                return;
+                throw new TimeoutException($"The test dispatcher still had {Queued} callbacks queued after {Timeout.TotalSeconds} s.");
+            }
+
+            await Task.Yield();
+            if (Thread.CurrentThread != _thread)
+            {
+                throw new InvalidOperationException("Drain resumed off the test dispatcher's thread; the test is not a [UiFact] or [UiTheory].");
             }
         }
 
-        action();
+        if (TakeError() is { } error)
+        {
+            throw new InvalidOperationException("An action posted to the UI thread threw.", error);
+        }
     }
+
+    /// <summary>
+    /// Blocks the calling background thread until the dispatcher has run everything queued so far. A fake run that
+    /// reported progress and returns at once calls it: on a dispatcher, a run that finishes before the view model awaits
+    /// it has its result applied first, and the view model then ignores the reports still queued. A real run reports long
+    /// before it returns.
+    /// </summary>
+    public void WaitUntilQueuedHaveRun()
+    {
+        if (Thread.CurrentThread == _thread)
+        {
+            throw new InvalidOperationException("The dispatcher's own thread cannot wait for its queue; await Drain instead.");
+        }
+
+        TaskCompletionSource ran = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (Enqueue(_ => ran.TrySetResult(), null) && !ran.Task.Wait(Timeout))
+        {
+            throw new TimeoutException($"A fake run waited {Timeout.TotalSeconds} s for its progress reports to reach the view model; the test never yielded to the dispatcher.");
+        }
+    }
+
+    /// <summary>
+    /// Runs one test case on a new thread whose synchronization context is a new dispatcher, pumping the queue until the
+    /// test case has finished. The message bus reports a passed test as failed when a posted action threw meanwhile.
+    /// </summary>
+    internal static Task<RunSummary> Run(IMessageBus messageBus, Func<IMessageBus, Task<RunSummary>> testCase)
+    {
+        TaskCompletionSource<RunSummary> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Thread thread = new(() =>
+        {
+            TestDispatcher dispatcher = new(Thread.CurrentThread);
+            t_current = dispatcher;
+            SetSynchronizationContext(dispatcher);
+            try
+            {
+                FailingBus bus = new(messageBus, dispatcher);
+                Task<RunSummary> run = testCase(bus);
+                dispatcher.PumpUntil(run);
+                RunSummary summary = run.GetAwaiter().GetResult();
+                summary.Failed += bus.Converted;
+                done.SetResult(summary);
+            }
+            catch (Exception ex)
+            {
+                done.TrySetException(ex);
+            }
+            finally
+            {
+                dispatcher.Close();
+                SetSynchronizationContext(null);
+                t_current = null;
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "Test dispatcher",
+        };
+        thread.Start();
+        return done.Task;
+    }
+
+    private bool Enqueue(SendOrPostCallback callback, object? state)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        lock (_gate)
+        {
+            // Background work that finishes after its test was reported is dropped, as a shut-down dispatcher drops it.
+            if (_closed)
+            {
+                return false;
+            }
+
+            _queue.Enqueue((callback, state));
+            Monitor.PulseAll(_gate);
+            return true;
+        }
+    }
+
+    private void PumpUntil(Task testCase)
+    {
+        testCase.ContinueWith(_ => Wake(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        while (true)
+        {
+            (SendOrPostCallback Callback, object? State) next;
+            lock (_gate)
+            {
+                while (_queue.Count == 0 && !testCase.IsCompleted)
+                {
+                    Monitor.Wait(_gate);
+                }
+
+                if (testCase.IsCompleted)
+                {
+                    return;
+                }
+
+                next = _queue.Dequeue();
+            }
+
+            try
+            {
+                next.Callback(next.State);
+            }
+            catch (Exception ex)
+            {
+                // An await continuation never throws here (its task keeps the exception); a posted action can.
+                lock (_gate)
+                {
+                    _error ??= ex;
+                }
+            }
+        }
+    }
+
+    private void Wake()
+    {
+        lock (_gate)
+        {
+            Monitor.PulseAll(_gate);
+        }
+    }
+
+    private void Close()
+    {
+        lock (_gate)
+        {
+            _closed = true;
+            _queue.Clear();
+        }
+    }
+
+    private Exception? TakeError()
+    {
+        lock (_gate)
+        {
+            Exception? error = _error;
+            _error = null;
+            return error;
+        }
+    }
+
+    /// <summary>Passes every message on, reporting a passed test as failed when a posted action threw during it.</summary>
+    private sealed class FailingBus : IMessageBus
+    {
+        private readonly IMessageBus _inner;
+        private readonly TestDispatcher _dispatcher;
+
+        public FailingBus(IMessageBus inner, TestDispatcher dispatcher)
+        {
+            _inner = inner;
+            _dispatcher = dispatcher;
+        }
+
+        public int Converted { get; private set; }
+
+        public bool QueueMessage(IMessageSinkMessage message)
+        {
+            if (message is ITestResultMessage result && _dispatcher.TakeError() is { } error && result is ITestPassed)
+            {
+                Converted++;
+                return _inner.QueueMessage(new TestFailed(result.Test, result.ExecutionTime, result.Output, new InvalidOperationException("An action posted to the UI thread threw.", error)));
+            }
+
+            return _inner.QueueMessage(message);
+        }
+
+        public void Dispose()
+        {
+            // The runner owns the inner bus and disposes it.
+        }
+    }
+}
+
+/// <summary>A fact that runs on its own <see cref="TestDispatcher"/> thread, as every view-model test does.</summary>
+[XunitTestCaseDiscoverer("Sfp.Core.Tests.Options.ViewModels.UiFactDiscoverer", "Sfp.Core.Tests")]
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+public sealed class UiFactAttribute : FactAttribute
+{
+}
+
+/// <summary>A theory whose rows each run on their own <see cref="TestDispatcher"/> thread.</summary>
+[XunitTestCaseDiscoverer("Sfp.Core.Tests.Options.ViewModels.UiTheoryDiscoverer", "Sfp.Core.Tests")]
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+public sealed class UiTheoryAttribute : TheoryAttribute
+{
+}
+
+public sealed class UiFactDiscoverer : FactDiscoverer
+{
+    public UiFactDiscoverer(IMessageSink diagnosticMessageSink)
+        : base(diagnosticMessageSink)
+    {
+    }
+
+    protected override IXunitTestCase CreateTestCase(ITestFrameworkDiscoveryOptions discoveryOptions, ITestMethod testMethod, IAttributeInfo factAttribute) =>
+        new UiTestCase(DiagnosticMessageSink, discoveryOptions.MethodDisplayOrDefault(), discoveryOptions.MethodDisplayOptionsOrDefault(), testMethod);
+}
+
+public sealed class UiTheoryDiscoverer : TheoryDiscoverer
+{
+    public UiTheoryDiscoverer(IMessageSink diagnosticMessageSink)
+        : base(diagnosticMessageSink)
+    {
+    }
+
+    protected override IEnumerable<IXunitTestCase> CreateTestCasesForDataRow(ITestFrameworkDiscoveryOptions discoveryOptions, ITestMethod testMethod, IAttributeInfo theoryAttribute, object[] dataRow) =>
+        new IXunitTestCase[] { new UiTestCase(DiagnosticMessageSink, discoveryOptions.MethodDisplayOrDefault(), discoveryOptions.MethodDisplayOptionsOrDefault(), testMethod, dataRow) };
+
+    protected override IEnumerable<IXunitTestCase> CreateTestCasesForTheory(ITestFrameworkDiscoveryOptions discoveryOptions, ITestMethod testMethod, IAttributeInfo theoryAttribute) =>
+        new IXunitTestCase[] { new UiTheoryTestCase(DiagnosticMessageSink, discoveryOptions.MethodDisplayOrDefault(), discoveryOptions.MethodDisplayOptionsOrDefault(), testMethod) };
+}
+
+public sealed class UiTestCase : XunitTestCase
+{
+    [Obsolete("Called by the de-serializer only.", error: true)]
+    public UiTestCase()
+    {
+    }
+
+    public UiTestCase(IMessageSink diagnosticMessageSink, TestMethodDisplay defaultMethodDisplay, TestMethodDisplayOptions defaultMethodDisplayOptions, ITestMethod testMethod, object[]? testMethodArguments = null)
+        : base(diagnosticMessageSink, defaultMethodDisplay, defaultMethodDisplayOptions, testMethod, testMethodArguments)
+    {
+    }
+
+    public override Task<RunSummary> RunAsync(IMessageSink diagnosticMessageSink, IMessageBus messageBus, object[] constructorArguments, ExceptionAggregator aggregator, CancellationTokenSource cancellationTokenSource) =>
+        TestDispatcher.Run(messageBus, bus => base.RunAsync(diagnosticMessageSink, bus, constructorArguments, aggregator, cancellationTokenSource));
+}
+
+public sealed class UiTheoryTestCase : XunitTheoryTestCase
+{
+    [Obsolete("Called by the de-serializer only.", error: true)]
+    public UiTheoryTestCase()
+    {
+    }
+
+    public UiTheoryTestCase(IMessageSink diagnosticMessageSink, TestMethodDisplay defaultMethodDisplay, TestMethodDisplayOptions defaultMethodDisplayOptions, ITestMethod testMethod)
+        : base(diagnosticMessageSink, defaultMethodDisplay, defaultMethodDisplayOptions, testMethod)
+    {
+    }
+
+    public override Task<RunSummary> RunAsync(IMessageSink diagnosticMessageSink, IMessageBus messageBus, object[] constructorArguments, ExceptionAggregator aggregator, CancellationTokenSource cancellationTokenSource) =>
+        TestDispatcher.Run(messageBus, bus => base.RunAsync(diagnosticMessageSink, bus, constructorArguments, aggregator, cancellationTokenSource));
 }
 
 public sealed class FakeDialogService : IDialogService
@@ -224,33 +510,16 @@ public sealed class FakeSettingsStore : ISettingsStore
 
 public sealed class ScriptedManifestValidator : IManifestValidator
 {
-    private TaskCompletionSource? _gate;
-
     public ValidationResult Result { get; set; } = ValidationResult.Ok;
 
     public int Calls { get; private set; }
 
     public string? LastPath { get; private set; }
 
-    /// <summary>
-    /// From now on every check waits in the validator until <see cref="Release"/>, so a test can look at the form while
-    /// the check is still running. A check that is not held can finish, and post its result inline through
-    /// <see cref="ImmediateUiThread"/>, before the test looks.
-    /// </summary>
-    public void Hold() => _gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    /// <summary>Lets the held check, and every later one, finish.</summary>
-    public void Release() => _gate?.TrySetResult();
-
     public ValidationResult Validate(Manifest m, string pdfPath)
     {
         Calls++;
         LastPath = pdfPath;
-        if (_gate is { } gate && !gate.Task.Wait(TimeSpan.FromSeconds(30)))
-        {
-            throw new TimeoutException("The test held the PDF check and never released it.");
-        }
-
         return Result;
     }
 }
@@ -350,6 +619,9 @@ public sealed class FakeGenerateOrchestrator : IGenerateOrchestrator
 
     public int Runs { get; private set; }
 
+    /// <summary>The test's dispatcher: a run that reports and returns at once waits for its reports to be applied first.</summary>
+    public TestDispatcher? Dispatcher { get; set; }
+
     public GenerateResult Run(GenerateRequest request, IProgress<GenerateProgress>? progress, CancellationToken cancellationToken)
     {
         Runs++;
@@ -363,6 +635,11 @@ public sealed class FakeGenerateOrchestrator : IGenerateOrchestrator
         foreach (GenerateProgress p in ProgressToReport)
         {
             progress?.Report(p);
+        }
+
+        if (!WaitForCancel && ProgressToReport.Count > 0)
+        {
+            Dispatcher?.WaitUntilQueuedHaveRun();
         }
 
         if (WaitForCancel)
@@ -412,6 +689,9 @@ public sealed class FakeRefreshOrchestrator : IRefreshOrchestrator
     /// <summary>True once the run saw the cancellation and reported <see cref="ProgressAfterCancel"/>.</summary>
     public bool SawCancel { get; private set; }
 
+    /// <summary>The test's dispatcher: a run that reports and returns at once waits for its reports to be applied first.</summary>
+    public TestDispatcher? Dispatcher { get; set; }
+
     public RefreshResult Run(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken)
     {
         Runs++;
@@ -424,6 +704,11 @@ public sealed class FakeRefreshOrchestrator : IRefreshOrchestrator
         foreach (string p in ProgressToReport)
         {
             progress?.Report(p);
+        }
+
+        if (!WaitForCancel && ProgressToReport.Count > 0)
+        {
+            Dispatcher?.WaitUntilQueuedHaveRun();
         }
 
         if (WaitForCancel)
@@ -526,6 +811,8 @@ public sealed class Harness
             Clock = () => Now,
         };
         Validator = new GenerateFormValidator(PdfValidator, Paths, Env.OneDriveRoots);
+        Generator.Dispatcher = Ui;
+        Refresher.Dispatcher = Ui;
     }
 
     /// <summary>The date <see cref="Env"/>'s clock reads; a test moves it to simulate the window staying open past midnight.</summary>
@@ -544,7 +831,8 @@ public sealed class Harness
 
     public GenerateFormValidator Validator { get; }
 
-    public ImmediateUiThread Ui { get; } = new();
+    /// <summary>The dispatcher of the running test; the harness can only be built inside a [UiFact] or [UiTheory].</summary>
+    public TestDispatcher Ui { get; } = TestDispatcher.OfThisThread;
 
     public FakeDialogService Dialogs { get; } = new();
 
@@ -577,4 +865,33 @@ public sealed class Harness
     public RefreshViewModel NewRefresh() => new(Registry, Tasks, Logs, (_, _) => Refresher, Dialogs, Ui, Env);
 
     public MainViewModel NewMain() => new(NewGenerate(), NewRefresh(), Settings);
+
+    /// <summary>
+    /// Waits, without blocking the dispatcher, until the form's PDF check and preview render have finished and every
+    /// result they posted has been applied; fails the test after <see cref="TestDispatcher.Timeout"/>.
+    /// </summary>
+    public async Task Settle(GenerateViewModel vm)
+    {
+        ArgumentNullException.ThrowIfNull(vm);
+        do
+        {
+            await Settle(vm.PendingPdfCheck, vm.Previews.Pending);
+        }
+        while (!vm.PendingPdfCheck.IsCompleted || !vm.Previews.Pending.IsCompleted);
+    }
+
+    /// <summary>Waits, without blocking the dispatcher, until <paramref name="work"/> has finished and the dispatcher has run everything queued.</summary>
+    public async Task Settle(params Task[] work)
+    {
+        try
+        {
+            await Task.WhenAll(work).WaitAsync(TestDispatcher.Timeout);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException($"The view model's background work did not finish within {TestDispatcher.Timeout.TotalSeconds} s.", ex);
+        }
+
+        await Ui.Drain();
+    }
 }

@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Sfp.Cli;
+using Sfp.Cli.Logging;
 using Sfp.Cli.Verbs;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
@@ -162,6 +163,33 @@ public sealed class RenderOnlyCommandTests
             File.Exists(Path.Combine(outDir, RenderOnlyRunner.IndexFileName)).Should().BeFalse("a failed run writes no pages.json");
             string log = Directory.GetFiles(dir, "*render-only.log").Should().ContainSingle().Subject;
             File.ReadAllText(log).Should().Contain("Render failed").And.Contain("too narrow for 14 numbers");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_log_folder_that_cannot_be_used_moves_the_log_to_the_temp_folder()
+    {
+        // The log folder lies under a file, so it can never be created: the run goes on with its log in the temp folder
+        // instead of stopping with exit 1 and an unhandled exception. The output folder lies under the same file, so the
+        // run then stops at its first write, which keeps the test short: a render error (exit 4) naming the moved log.
+        string dir = TestPaths.NewTempDir("render-only-log-fallback");
+        try
+        {
+            string file = Path.Combine(dir, "not-a-folder");
+            File.WriteAllText(file, "");
+            string logs = Path.Combine(file, "logs");
+
+            (int code, _, string err) = Run(Request(Path.Combine(file, "out"), logs));
+
+            code.Should().Be(ExitCodes.RenderError, err);
+            string[] lines = err.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            lines[0].Should().StartWith("Could not use the log folder " + logs + ": ").And.EndWith(" This run logs to " + RunLog.FallbackDirectory + " instead.");
+            lines.Should().ContainSingle(l => l.StartsWith("Render failed: ", StringComparison.Ordinal));
+            lines.Should().ContainSingle(l => l.StartsWith("Log: " + RunLog.FallbackDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal));
         }
         finally
         {

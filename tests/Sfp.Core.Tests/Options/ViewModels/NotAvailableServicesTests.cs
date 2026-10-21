@@ -61,15 +61,17 @@ public class NotAvailableServicesTests
         render.Should().Throw<NotSupportedException>().WithMessage("*M2.9*");
     }
 
-    [Fact]
-    public void Ui_progress_posts_every_report_through_the_ui_thread()
+    [UiFact]
+    public async Task Ui_progress_posts_every_report_through_the_ui_thread()
     {
-        ImmediateUiThread ui = new();
+        TestDispatcher ui = TestDispatcher.OfThisThread;
         List<int> seen = new();
         UiProgress<int> progress = new(ui, seen.Add);
 
         progress.Report(1);
         progress.Report(2);
+        seen.Should().BeEmpty("a report waits in the dispatcher's queue until the UI thread is free");
+        await ui.Drain();
 
         seen.Should().Equal(1, 2);
         ui.Posted.Should().Be(2);

@@ -49,8 +49,8 @@ public sealed record RefreshArgs
 /// [--today YYYY-MM-DD] [--manifest FILE] [--templates DIR]: reads the notebook's Setup page and propagates its values
 /// (and calendar events with --calendar) into the tool-owned objects, or lists every change with --dry-run. Composes
 /// OneNoteApp, SidecarStore, SetupReader, Propagator, AnchorWriter and RefreshOrchestrator; the integrator adds the
-/// command to Program.cs with <see cref="Build"/>. Exit codes: 0, 2 (arguments or notebook not found), 3 (OneNote
-/// unavailable), 5 (write failure), 6 (every calendar source failed).
+/// command to Program.cs with <see cref="Build"/>. Exit codes: 0, 2 (arguments or notebook not found, or no folder, the
+/// temp folder included, can hold the run log), 3 (OneNote unavailable), 5 (write failure), 6 (every calendar source failed).
 /// </summary>
 public static class RefreshCommand
 {
@@ -149,8 +149,16 @@ public static class RefreshCommand
             return ExitCodes.ValidationError;
         }
 
-        // The verb prints its own progress, listing and summary, so the log's console sink keeps to warnings and errors.
-        using RunLog log = RunLog.Start("refresh", args.Quiet, logDirectory, printsOwnProgress: true);
+        // The verb prints its own progress, listing, summary and failures, so the log's console sink keeps to warnings; the
+        // errors (the exception of a failure printed below included) go to the log file only. A log folder that cannot be
+        // used moves the log to the temp folder with a one-line notice: the unattended daily task must not stop for it.
+        RunLog? started = RunLog.StartWithFallback("refresh", args.Quiet, stderr, logDirectory, printsOwnProgress: true);
+        if (started is null)
+        {
+            return ExitCodes.ValidationError;
+        }
+
+        using RunLog log = started;
         log.Logger.Information("refresh --notebook {Notebook} calendar {Calendar} horizon {Horizon} dry-run {DryRun} today {Today}", request.NotebookName, request.Calendar, request.HorizonDays, request.DryRun, request.Today);
         IRefreshOrchestrator orchestrator;
         try
