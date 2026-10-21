@@ -5,7 +5,8 @@ namespace Sfp.Core.Manifests;
 /// <summary>
 /// Structural sanity and token validation run on every loaded manifest: no null where the record needs a value, page
 /// size and count, the nine-page week run, PDF page numbers inside the document, known page names in every
-/// <c>appliesTo</c> list and page template, and the PRD token set in every section name and page title pattern. Each
+/// <c>appliesTo</c> list and page template, the PRD token set in every section name and page title pattern, and a week
+/// token in the name of every section repeated per week. Each
 /// failure is a <see cref="ManifestException"/> naming the manifest and the offending value.
 /// </summary>
 public static class ManifestChecks
@@ -201,6 +202,10 @@ public static class ManifestChecks
             string sectionPath = $"notebook.sections[{Int(s)}]";
             string sectionContext = section.EachWeek ? "in the name of a section with eachWeek" : "in the name of a section without eachWeek";
             ValidatePattern(source, $"{sectionPath}.name", section.Name, SectionNameTokens(section.EachWeek), sectionContext);
+            if (section.EachWeek && !TokenExpander.TokensIn(section.Name).Any(t => WeekTokens.Contains(t, StringComparer.Ordinal)))
+            {
+                Fail(source, $"{sectionPath}.name '{section.Name}' repeats once per week (eachWeek) but uses none of {{NN}}, {{start}} or {{end}}, so every week's section would get the same name.");
+            }
 
             if (section.Pages.Count == 0)
             {

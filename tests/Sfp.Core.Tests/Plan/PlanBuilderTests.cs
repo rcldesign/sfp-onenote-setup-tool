@@ -459,6 +459,34 @@ public class PlanBuilderTests
     }
 
     [Fact]
+    public void Section_names_that_differ_only_in_case_are_a_manifest_error_naming_both_keys()
+    {
+        IReadOnlyList<SectionTemplate> shipped = Shipped.Notebook.Sections;
+        shipped[4].Name.Should().Be("Reviews");
+        SectionTemplate[] sections = shipped.Select((s, i) => i == 5 ? s with { Name = "reviews" } : s).ToArray();
+        Manifest m = Shipped with { Notebook = Shipped.Notebook with { Sections = sections } };
+
+        Action act = () => new PlanBuilder(Engine).Build(m, Engine.Build(Q1_2027), new GenerateOptions { Start = Q1_2027, Links = false });
+
+        act.Should().Throw<ManifestException>().WithMessage(
+            "The notebook template produces sections named 'Reviews' and 'reviews', the same name ignoring case "
+            + "(from notebook.sections[4].name 'Reviews' and notebook.sections[5].name 'reviews'); every section needs its own name*");
+    }
+
+    [Fact]
+    public void A_section_repeated_per_week_without_a_week_token_is_a_manifest_error_when_built_in_code()
+    {
+        // The loader rejects this name; a manifest built in code reaches the plan builder without that check.
+        SectionTemplate[] sections = Shipped.Notebook.Sections.Select(s => s.EachWeek ? s with { Name = "Week" } : s).ToArray();
+        Manifest m = Shipped with { Notebook = Shipped.Notebook with { Sections = sections } };
+
+        Action act = () => new PlanBuilder(Engine).Build(m, Engine.Build(Q1_2027), new GenerateOptions { Start = Q1_2027 });
+
+        act.Should().Throw<ManifestException>().WithMessage(
+            "The notebook template produces two sections named 'Week' (both from notebook.sections[3].name 'Week', which repeats once per week)*");
+    }
+
+    [Fact]
     public void Links_are_empty_when_the_option_is_off()
     {
         Build(Q1_2027, o => o with { Links = false }).Links.Should().BeEmpty();

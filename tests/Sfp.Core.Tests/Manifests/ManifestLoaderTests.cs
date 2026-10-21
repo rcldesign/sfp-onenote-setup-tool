@@ -101,6 +101,28 @@ public class ManifestLoaderTests : IDisposable
     }
 
     [Fact]
+    public void A_section_repeated_per_week_must_use_a_week_token_in_its_name()
+    {
+        string path = WriteModified(root => root["notebook"]!["sections"]![3]!["name"] = "Week");
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>()
+            .WithMessage("*notebook.sections[3].name 'Week' repeats once per week (eachWeek) but uses none of {NN}, {start} or {end}*");
+    }
+
+    [Theory]
+    [InlineData("Week {NN}")]
+    [InlineData("From {start}")]
+    [InlineData("{Qn} to {end}")]
+    public void One_week_token_is_enough_for_a_section_repeated_per_week(string name)
+    {
+        string path = WriteModified(root => root["notebook"]!["sections"]![3]!["name"] = name);
+
+        _loader.Load(path).Notebook.Sections[3].Name.Should().Be(name);
+    }
+
+    [Fact]
     public void Unknown_token_in_the_notebook_name_pattern_throws()
     {
         string path = WriteModified(root => root["notebook"]!["namePattern"] = "SFP {Quarter}");

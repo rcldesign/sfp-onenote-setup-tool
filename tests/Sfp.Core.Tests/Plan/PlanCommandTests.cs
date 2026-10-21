@@ -195,6 +195,10 @@ public class PlanCommandTests
             "{ \"notebook\": { \"sections\": [ { \"name\": \"Loose\", \"pages\": [ { \"type\": \"overview\", \"level\": 1 } ] } ] } }",
             "Page template type 'overview' is only valid inside a section with eachWeek."
         },
+        {
+            "{ \"notebook\": { \"sections\": [ { \"name\": \"Reviews\", \"pages\": [ { \"type\": \"scorecard\", \"level\": 1 } ] }, { \"name\": \"reviews\", \"pages\": [ { \"type\": \"quarterlyReview\", \"level\": 1 } ] } ] } }",
+            "The notebook template produces sections named 'Reviews' and 'reviews', the same name ignoring case (from notebook.sections[0].name 'Reviews' and notebook.sections[1].name 'reviews')"
+        },
     };
 
     [Theory]
