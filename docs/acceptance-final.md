@@ -18,7 +18,9 @@ they are listed unticked with the exact step to perform. A failed or deferred it
 | Render golden images: every PNG of a fixed-date render-only matches the stored hash | tests/Sfp.Render.Tests/GoldenSuiteTests.cs: synthetic.linux-x64.sha256 and sfp.linux-x64.sha256 (real PDF) both match; a second render gives identical hashes | pass on linux-x64; win-x64 goldens are recorded on the owner's PC with SFP_RECORD_GOLDENS=1 (Bookman Old Style changes the glyphs) |
 | Overlay placement by OCR: Fri Jan 1's date region reads "01 / 01 / 27"; the strip shows 14 numbers with the circle on 14 | tests/Sfp.Render.Tests/DateAndStripTests.cs (date fields OCR with links off, strip digit count and circle position by pixels), TimeBlockColumnTests (16 labels 6 to 9), CalendarPageTests ("January 2027", greyed 28, blank Jan 4), through python3 tesserocr | pass |
 | Manifest validation: 131 pages, wrong page size, missing probe each fail with the right message | tests/Sfp.Core.Tests/Manifests/ManifestValidatorTests.cs; the real PDF passes validation (Real_planner_pdf_passes_validation) | pass |
-| XML builder: generated page XML validates against the 2013 XSD | tests/Sfp.OneNote.Tests/Xml/PageXmlBuilderTests.cs (Mon_Jan_4_page_validates_against_the_2013_schema), SchemaStrictnessTests, PageXmlSnapshotTests | pass against the reconstructed schema subset in tests/Sfp.OneNote.Tests/schema; rerun with the official 0336.OneNoteApplication_2013.xsd on the owner's PC |
+| XML builder: generated page XML validates against the 2013 XSD | tests/Sfp.OneNote.Tests/Xml/PageXmlBuilderTests.cs (Mon_Jan_4_page_validates_against_the_2013_schema), SchemaStrictnessTests, PageXmlSnapshotTests, against Microsoft's 0336.OneNoteApplication_2013.xsd in tests/Sfp.OneNote.Tests/schema (the official file since fix round 2; the custom page size is Orientation, Dimensions in points, Margins); a full Q1 2027 run validates 144 of 144 pages in the default, hidden-title, grouped and custom-size modes | pass |
+| Manifest hardening (fix round 2): duplicate keys, unpaired surrogates, omitted members, undefined enums, malformed colors, overlapping week runs, colliding section names and an erase rectangle smaller than its printed extent all exit 2 with one line | tests/Sfp.Core.Tests/Manifests/ManifestLoaderTests.cs, PlanBuilderTests, PlanCommandTests | pass |
+| Refresh ownership (fix round 2): same-name notebooks, pictures or ink inside tool outlines, page-level pictures over a slot, unrecorded outlines, confirmed inked values, partial feed outages, all-conflict runs and overlapping runs | tests/Sfp.Refresh.Tests (SameNameNotebookTests, InsideOutlineTests, PagePictureTests, PendingWritesTests, ConfirmedInkTests, CalendarOutageTests, ConflictRunTests, RefreshLockTests) | pass |
 
 Whole suite in the build environment: `dotnet test --filter "Category!=COM"` = 1186 passed, 0 failed, 0 skipped (the real PDF present).
 COM-category tests (ComNotebookWriterComTests, the OneNoteApp integration test, SidecarRecovery, Outlook) skip here and run on the owner's PC.
@@ -27,10 +29,10 @@ COM-category tests (ComNotebookWriterComTests, the OneNoteApp integration test, 
 
 | Target (PRD) | Measured | Status |
 | --- | --- | --- |
-| Rendering under 60 s | render-only, 144 pages of Q1 2027 from the real PDF at 220 DPI: 21.4 s inside the verb (25.5 s wall with runtime start), 4 cores | pass |
-| Notebook under 60 MB at 220 DPI | 142 PNGs total 20 MB (the sheet images are the notebook's bulk) | pass |
-| Full generate under 3 minutes | not measurable without OneNote; the writer phase is one STA thread at 0.3 to 0.8 s per UpdatePageContent per the PRD, 144 pages gives 45 s to 2 min plus 21 s render overlapped | owner's PC |
-| Memory under 1.5 GB peak | render-only peak RSS 2.34 GB (polled VmHWM) | fail: open item for the implementer (rasterizer cache size, bitmap disposal, parallel degree); re-measure after the fix |
+| Rendering under 60 s | render-only, 144 pages of Q1 2027 from the real PDF at 220 DPI: 14.7 s inside the verb after fix round 1 (was 21.4 s), 4 cores | pass |
+| Notebook under 60 MB at 220 DPI | 142 PNGs total 20 MB (the sheet images are the notebook's bulk); the disk-full estimate and the app's size line share one table (140, 300, 520 KB per page at 144, 220, 300 DPI) | pass |
+| Full generate under 3 minutes | not measurable without OneNote; the writer phase is one STA thread at 0.3 to 0.8 s per UpdatePageContent per the PRD, 144 pages gives 45 s to 2 min plus 15 s render overlapped | owner's PC |
+| Memory under 1.5 GB peak | render-only peak RSS 652 MB at 220 DPI and 787 MB at 300 DPI on 4 cores, 443 MB on one core (polled VmHWM, after the PNG encoder leak fix, the byte-bounded rasterizer cache and the worker cap of 4); MemoryBudgetTests measures the child process on every build | pass |
 | Determinism: byte-identical PNGs | GoldenSuiteTests.A_second_full_render_gives_identical_hashes | pass |
 
 ## Manual on Windows (once per release)
@@ -51,6 +53,11 @@ Run on the owner's PC with OneNote desktop signed in. Tick each box and note the
 - [ ] Add an .ics source with a 9:00 meeting on Tue Jan 5, run Refresh: the meeting appears at the 9 row on Tue Jan 5 and in Tuesday's column on Week 02's overview; cancel it in the source, Refresh: it is gone from both.
 - [ ] Enable the daily task, log out and in, confirm the task ran at 05:00 from its log.
 - [ ] Generate Q2 2027 with --previous pointing at the Q1 notebook and confirm the "Next quarter" link on Q1's Quarterly Review opens the Q2 cover.
+- [ ] After moving both notebooks to OneDrive, tap the "Next quarter" link on Windows and on the iPad; it must still open the Q2 cover (the link was captured while Q2 was a local notebook).
+- [ ] Generate with "Custom page size" ticked: OneNote accepts the pages (Orientation, Dimensions in points, Margins of 0) and the page is 15.4 in wide; if the page comes out portrait, Dimensions need the paper order and the builder changes.
+- [ ] Open Mon Jan 4's page XML (or run Refresh) and confirm the sfp.anchor Meta on the tool's outlines survived the round trip through OneNote; Refresh's anchor matching prefers it.
+- [ ] Refresh on an unchanged page writes; Refresh on a page edited after the sidecar's last run is refused once and retried (dateExpectedLastModified read as the UTC stamp converted to local time). If every page reports a conflict, the run now exits 5 naming the count; that outcome means the stamp conversion is wrong and ExpectedLastModified must change.
+- [ ] Enable the daily task for a notebook under a long OneDrive folder path (over 261 characters of command line); the task is registered through the XML definition and runs at 05:00.
 
 ## Manual on iPad (once per release)
 
@@ -65,4 +72,6 @@ Run on the owner's PC with OneNote desktop signed in. Tick each box and note the
 
 - The M0 spike has not run (docs/spike-findings.md): title offset 36 pt, hex page color, anchor padding 0, link styling and page dateTime are assumptions; the writer falls back on rejection, and tools/spike/m0_9_apply.py writes the measured values into the manifest.
 - No COM call has executed against real OneNote; the late-bound invocation shapes (out parameters, DateTime.MinValue, enum arguments) are the first thing to confirm with `dotnet test --filter Category=COM`.
-- Goldens, the 2013 schema subset and the Bookman Old Style face are verified only with the fallback font on Linux.
+- Goldens and the Bookman Old Style face are verified only with the fallback font on Linux; the page XML is validated against Microsoft's 2013 schema, but OneNote's acceptance of the custom page size, of outline Meta and of the blank-page frame is confirmed only on the owner's PC.
+- The adversarial second pass (five reviewers, docs/decisions.md "Wave 3 fix round 2") found 37 confirmed defects after the first-pass fixes; all were fixed in round 2. Items it could not verify off Windows remain owner checks above: the dateExpectedLastModified stamp, the Next quarter link after the OneDrive move, schtasks registration through XML, and the real HRESULT OneNote returns for an empty one:Data.
+- Known limits recorded with their decisions: section names that collide only after the writer's file-name sanitizer are not rejected; scheduled tasks are keyed by notebook name, so two notebooks of one name in different folders share a task; Refresh's sidecar recovery still uses signature heuristics rather than the new sfp.anchor Meta; outlines left unrecorded by runs before round 2 are healed only by a sidecar rebuild; a cancelled Refresh counts its pages from the orchestrator's progress wording; during a calendar outage a reinserted old line's position is approximate until every source answers.

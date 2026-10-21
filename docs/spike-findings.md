@@ -67,6 +67,14 @@ is tools/spike/m0_7_ipad.md, and M0.8 reads the inked page back afterwards.
 
 - Applied to templates/sfp-quarterly.json: _pending_
 
+## Added by the wave 3 adversarial review (run with M0 on the owner's PC)
+
+- Outline Meta round trip: generate a notebook, read Mon Jan 4 back with GetPageContent and confirm each tool outline still carries `<one:Meta name="sfp.anchor" content="...">` (the official 2013 schema allows Meta on Outline and OE; OneMore relies on it). Result: _pending_
+- Custom page size: with "Custom page size" ticked, confirm OneNote accepts Orientation, Dimensions in points (1112 x 770) and Margins of 0, and whether landscape needs the paper order (770 x 1112) instead. Result: _pending_
+- Empty one:Data: confirm the HRESULT OneNote returns for an image element with no data (the fake models hrInsertingImage). Result: _pending_
+- dateExpectedLastModified: confirm an UpdatePageContent with the page's lastModifiedTime (UTC converted to local) succeeds on an unchanged page and is refused after a user edit. Result: _pending_
+- Next quarter link after the move: after both notebooks move to OneDrive, the "Next quarter" link captured while Q2 was local must still open Q2's cover on Windows and the iPad. Result: _pending_
+
 ## Exit gate
 
 M0.2, M0.3 and M0.7 must pass. If M0.7 fails on the locked image, stop and report to the owner before M1.

@@ -47,6 +47,8 @@ sfp-measure "C:\path\SFP_No_Dates.pdf" 17
 
 Exit codes: 0 success, 2 validation error, 3 OneNote unavailable, 4 render error, 5 write error, 6 refresh source unreachable.
 
+Logs: one file per run under %LOCALAPPDATA%\sfp2onenote\logs (override with SFP2ONENOTE_LOGDIR). If that folder cannot be used, the verb says so in one line and logs to sfp2onenote\logs in the temp folder instead; it exits 2 only when neither folder works.
+
 ## Build from source
 
 ```
