@@ -316,6 +316,60 @@ public class GenerateOrchestratorTests
         retried.OutputPath.Should().Be(notebook);
     }
 
+    /// <summary>
+    /// onenote-4: a render failure whose CloseNotebook OneNote refuses (a dialog holds it) deletes nothing, since OneNote
+    /// still lists the notebook at that folder; the output path is kept, a warning says to close the notebook in OneNote
+    /// and delete the folder before running the same command again, and the error says it was left in place. Exit 4.
+    /// </summary>
+    [Fact]
+    public void A_render_failure_whose_close_onenote_refuses_leaves_the_notebook_in_place_and_says_what_to_do()
+    {
+        Harness h = new();
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+        h.Renderer.Failure = page => page.Key == PageKey.Cover ? new InvalidOperationException("PDFium could not decode the page") : null;
+        app.CloseNotebookFailure = _ => new OneNoteBusyException("CloseNotebook", OneNoteHResults.AppInModalUI, null);
+        string notebook = Path.Combine(h.OutputFolder, "SFP Q1 2027");
+
+        GenerateResult result = h.Run();
+
+        result.ExitCode.Should().Be(4, result.Error);
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.Error.Should().EndWith("PDFium could not decode the page. The partial notebook was left in place because OneNote did not close it; the warnings say what to do before running the same command again.");
+        result.Error.Should().NotContain("closed and deleted");
+        app.CallsOf("CloseNotebook").Should().ContainSingle();
+        Directory.Exists(notebook).Should().BeTrue("the folder OneNote still lists the notebook at is not deleted under it");
+        app.GetHierarchy(null, HierarchyScope.Notebooks).Should().Contain("SFP Q1 2027");
+        result.OutputPath.Should().Be(notebook, "the front ends then say where the partial notebook is");
+        result.Warnings.Should().ContainSingle(w => GenerateMessages.IsPartialNotebookNotDeleted(w)).Which.Should()
+            .StartWith("The partial notebook at " + notebook + " could not be deleted: OneNote did not close it, so its folder was left in place. Close the notebook in OneNote and delete the folder before running the same command again. OneNote said: ")
+            .And.Contain("hrAppInModalUI (0x80042030)");
+    }
+
+    [Fact]
+    public void Cancelling_when_onenote_refuses_to_close_the_notebook_leaves_its_folder_with_the_not_deleted_warning()
+    {
+        Harness h = new() { Parallelism = 1, Capacity = 1 };
+        h.Writer.CloseNotebookFailure = new OneNoteBusyException("CloseNotebook", OneNoteHResults.AppInModalUI, null);
+        using CancellationTokenSource cts = new();
+        h.Progress.OnReport = r =>
+        {
+            if (r.Phase == GeneratePhase.WritingPages && r.Current == 2)
+            {
+                cts.Cancel();
+            }
+        };
+
+        GenerateResult result = h.Run(ct: cts.Token);
+
+        result.Cancelled.Should().BeTrue();
+        h.Writer.Calls.Last().Should().Be("CloseNotebook");
+        Directory.Exists(Path.Combine(h.OutputFolder, "SFP Q1 2027")).Should().BeTrue("the notebook OneNote still lists is not deleted under it");
+        result.Warnings.Should().ContainSingle(w => GenerateMessages.IsPartialNotebookNotDeleted(w), "the cancelled summaries then say it could not be deleted")
+            .Which.Should().Contain("Close the notebook in OneNote and delete the folder before running the same command again");
+    }
+
     [Fact]
     public void A_rejected_page_xml_maps_to_exit_5_names_the_page_and_saves_the_xml_beside_the_log()
     {

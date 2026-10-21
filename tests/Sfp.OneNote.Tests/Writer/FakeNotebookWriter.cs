@@ -153,7 +153,17 @@ public sealed class FakeNotebookWriter : INotebookWriter
 
     public void NavigateTo(PageHandle p) => _calls.Add("NavigateTo:" + p.Key.Value);
 
-    public void CloseNotebook(NotebookHandle nb) => _calls.Add("CloseNotebook");
+    /// <summary>When set, CloseNotebook throws this after recording the call (OneNote refusing to close the notebook).</summary>
+    public Exception? CloseNotebookFailure { get; set; }
+
+    public void CloseNotebook(NotebookHandle nb)
+    {
+        _calls.Add("CloseNotebook");
+        if (CloseNotebookFailure is not null)
+        {
+            throw CloseNotebookFailure;
+        }
+    }
 
     private string NewId(string kind) => "{" + kind + ":" + (++_nextId).ToString("D4", CultureInfo.InvariantCulture) + "}{1}{B0}";
 }

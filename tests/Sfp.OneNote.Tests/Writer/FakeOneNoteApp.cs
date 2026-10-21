@@ -484,9 +484,18 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         _notebooks.Remove(id);
     }
 
+    /// <summary>Decides whether a CloseNotebook call fails: given the notebook ID, return the exception to throw (the notebook then stays open) or null.</summary>
+    public Func<string, Exception?>? CloseNotebookFailure { get; set; }
+
     public void CloseNotebook(string id)
     {
         Record("CloseNotebook", id);
+        Exception? failure = CloseNotebookFailure?.Invoke(id);
+        if (failure is not null)
+        {
+            throw failure;
+        }
+
         Close(id);
     }
 
