@@ -78,6 +78,12 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     /// </summary>
     private bool _reloading;
 
+    /// <summary>
+    /// The list reloads started so far. Each reload takes the next number as it starts (the UI thread starts every reload,
+    /// so a plain counter orders them), and a listing that returns after a newer reload started is dropped.
+    /// </summary>
+    private int _reloadsStarted;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(PreviewChangesCommand))]
     [NotifyCanExecuteChangedFor(nameof(RefreshNowCommand))]
@@ -195,15 +201,20 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     /// were listed stays selected. The rows are new records, since the registry reads each sidecar again (after a run,
     /// with the new Last refreshed), so the shown results (summary, Setup values, changes) are cleared, and the daily
     /// checkbox read again, only when the selection ends up on another notebook than the one selected at the rebuild.
+    /// Reloads can overlap (Refresh now is enabled while the reload after a run lists the folders, and a Generate sets the
+    /// known folders): a listing that returns after a newer reload started is dropped, so the list always shows the
+    /// newest listing, whichever reload ends last.
     /// </summary>
     public async Task ReloadAsync()
     {
+        int reload = ++_reloadsStarted;
         IReadOnlyList<string> folders = Folders;
         IReadOnlyList<KnownNotebook> found;
+        string? status;
         try
         {
             found = await Task.Run(() => _registry.List(folders));
-            NotebooksStatus = found.Count == 0
+            status = found.Count == 0
                 ? "No notebooks built by this tool were found under " + string.Join("; ", folders)
                 : null;
         }
@@ -211,8 +222,17 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         {
             // A registry that is not wired or a folder that cannot be read is a line, not a crash.
             found = Array.Empty<KnownNotebook>();
-            NotebooksStatus = "Could not list notebooks: " + ex.Message;
+            status = "Could not list notebooks: " + ex.Message;
         }
+
+        if (reload != _reloadsStarted)
+        {
+            // A newer reload started while this one listed the folders, so its listing is the newer one (a later Last
+            // refreshed after another Refresh now, the folder a Generate just added): this one changes nothing.
+            return;
+        }
+
+        NotebooksStatus = status;
 
         // Taken now, not before the listing: the list is enabled while the folders are listed, and a notebook clicked
         // meanwhile has already cleared the results and synced the daily checkbox to its own task. Without a click this is

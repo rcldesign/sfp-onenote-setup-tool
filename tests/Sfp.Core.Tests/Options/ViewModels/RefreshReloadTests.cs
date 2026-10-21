@@ -187,6 +187,58 @@ public class RefreshReloadTests
     }
 
     [UiFact]
+    public async Task A_listing_that_returns_after_a_newer_reload_started_is_dropped()
+    {
+        // Fix round 4 cliapp-3: Refresh now is enabled while the reload after a run lists the folders. A second run's
+        // reload could finish first, and the first reload's older listing, returning last, put the first run's Last
+        // refreshed back on the row. A listing that returns after a newer reload started is now dropped.
+        _h.Registry.Notebooks.Add(Q1(null));
+        _h.Refresher.Result = Refreshed();
+        int runs = 0;
+        using RefreshViewModel vm = new(
+            _h.Registry,
+            _h.Tasks,
+            _h.Logs,
+            (_, _) => new SidecarSavingOrchestrator(_h.Refresher, () => _h.Registry.Notebooks[0] = Q1(RefreshedAt.AddMinutes(++runs))),
+            _h.Dialogs,
+            _h.Ui,
+            _h.Env);
+        vm.SetKnownFolders(Array.Empty<string>());
+        await _h.Settle(vm.PendingReload);
+        using ManualResetEventSlim older = new(false);
+        using ManualResetEventSlim newer = new(false);
+        _h.Registry.GateNextListings(older, newer);
+        Task first;
+        Task second;
+        try
+        {
+            await vm.RefreshNowCommand.ExecuteAsync(null);
+            first = vm.PendingReload;
+            await _h.WaitUntilAsync(() => _h.Registry.Listings == 2, "the first run's reload lists the folders, with its 05:01");
+            vm.RefreshNowCommand.CanExecute(null).Should().BeTrue("Refresh now is enabled while the reload lists the folders");
+
+            await vm.RefreshNowCommand.ExecuteAsync(null);
+            second = vm.PendingReload;
+            await _h.WaitUntilAsync(() => _h.Registry.Listings == 3, "the second run's reload lists the folders, with its 05:02");
+
+            newer.Set();
+            await _h.Settle(second);
+            vm.SelectedNotebook!.LastRefreshText.Should().Be("2026-10-21 05:02");
+        }
+        finally
+        {
+            newer.Set();
+            older.Set();
+        }
+
+        await _h.Settle(first);
+
+        vm.Notebooks.Should().ContainSingle().Which.LastRefreshText.Should().Be("2026-10-21 05:02", "the older listing returned last and was dropped");
+        vm.SelectedNotebook!.LastRefreshText.Should().Be("2026-10-21 05:02");
+        vm.Summary!.Headline.Should().Be("Refreshed SFP Q1 2027.", "the second run's results stay on screen");
+    }
+
+    [UiFact]
     public void The_same_notebook_is_the_same_sidecar_file_or_the_same_name_without_one()
     {
         KnownNotebookItem q1 = new(Q1(null));
