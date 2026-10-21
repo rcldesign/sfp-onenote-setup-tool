@@ -661,6 +661,123 @@ public class RefreshOrchestratorTests
         h.Run(Request()).Summary!.Changes.Should().NotContain(c => c.Blocked);
     }
 
+    [Fact]
+    public void A_slot_the_user_filled_after_planning_is_blocked_when_the_page_is_read_again_before_writing()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        h.Services = h.Services with { Propagators = (catalog, reader) => new ThenEdit(new Propagator(catalog, reader, Mono), () => h.Notebook.TypeUserText(MonJan4, M.Slots.ObjectiveLegend.Rect, "typed meanwhile")) };
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        PlannedChange legend = result.Summary!.Changes.Single(c => c.Page == MonJan4);
+        legend.Blocked.Should().BeTrue("the band was empty when the run planned and holds the user's note when it writes");
+        legend.Reason.Should().Contain("typed meanwhile");
+        h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "typed meanwhile").And.NotContain(o => o.PlainText.StartsWith("O1", StringComparison.Ordinal));
+        h.SavedSidecar().Pages[MonJan4.Value].Anchors.Should().NotContainKey("objectiveLegend");
+        result.Summary.ValuesWritten.Should().Be(103 + 3);
+    }
+
+    [Fact]
+    public void An_edit_made_after_planning_is_not_written_over()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        string note = h.Notebook.AddOutlineAt(MonJan4, new RectPt(400, 400, 200, 14), "draft", fixedWidth: false);
+        h.Services = h.Services with { Propagators = (catalog, reader) => new ThenEdit(new Propagator(catalog, reader, Mono), () => h.Notebook.EditOutlineText(MonJan4, note, "final")) };
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        PageXml monday = h.Notebook.Read(MonJan4);
+        monday.Outlines.Single(o => o.ObjectId == note).PlainText.Should().Be("final", "the page is read again before the write, so the copy read while planning is never sent back over the user's edit");
+        monday.Outlines.Should().Contain(o => o.PlainText == "O1 Ship the connector");
+    }
+
+    [Fact]
+    public void A_page_that_changes_between_the_read_and_the_write_is_read_again_and_written()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        string pageId = h.Notebook.PageIds[MonJan4];
+        int edits = 0;
+        h.App.BeforeWrite = id =>
+        {
+            if (id == pageId && edits++ == 0)
+            {
+                h.Notebook.TypeUserText(MonJan4, new RectPt(400, 400, 200, 14), "typed meanwhile");
+            }
+        };
+        int updates = h.App.UpdateCount(pageId);
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Summary!.Changes.Should().NotContain(c => c.Blocked);
+        h.App.UpdateCount(pageId).Should().Be(updates + 3, "the refused write, the user's edit inside it and the write after reading the page again");
+        h.Log.Messages(LogEventLevel.Warning).Should().Contain(m => m.Contains("Mon Jan 4", StringComparison.Ordinal) && m.Contains("changed while it was being written; reading it again", StringComparison.Ordinal));
+        PageXml monday = h.Notebook.Read(MonJan4);
+        monday.Outlines.Should().Contain(o => o.PlainText == "typed meanwhile");
+        monday.Outlines.Should().Contain(o => o.PlainText == "O1 Ship the connector");
+        h.SavedSidecar().Pages[MonJan4.Value].Anchors.Should().ContainKey("objectiveLegend");
+    }
+
+    [Fact]
+    public void A_page_that_keeps_changing_is_reported_and_left_for_the_next_run()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        string pageId = h.Notebook.PageIds[MonJan4];
+        int edits = 0;
+        h.App.BeforeWrite = id =>
+        {
+            if (id == pageId)
+            {
+                edits++;
+                h.Notebook.TypeUserText(MonJan4, new RectPt(400, 380 + (20 * edits), 200, 14), "typing " + edits);
+            }
+        };
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        result.ExitCode.Should().Be(0, "a page the user is editing is not a failure; it is tried again next run");
+        edits.Should().Be(2, "one write and one retry");
+        PlannedChange legend = result.Summary!.Changes.Single(c => c.Page == MonJan4);
+        legend.Blocked.Should().BeTrue();
+        legend.Reason.Should().Be(RefreshOrchestrator.ConflictReason);
+        result.Summary.Warnings.Should().Contain("Page Mon Jan 4 changed while Refresh was writing it; its changes were not written and will be tried again on the next run.");
+        result.Summary.ValuesWritten.Should().Be(103 + 3, "every other page is written");
+        h.Notebook.Read(MonJan4).Outlines.Should().NotContain(o => o.PlainText.StartsWith("O1", StringComparison.Ordinal));
+
+        h.App.BeforeWrite = null;
+        h.Run(Request()).Summary!.Changes.Should().ContainSingle().Which.Should().Match<PlannedChange>(c => c.Page == MonJan4 && !c.Blocked, "the next run writes it");
+    }
+
+    /// <summary>Plans with the real propagator, then runs an action: the user editing a page between planning and writing.</summary>
+    private sealed class ThenEdit : IPropagator
+    {
+        private readonly IPropagator inner;
+        private readonly Action edit;
+
+        public ThenEdit(IPropagator inner, Action edit)
+        {
+            this.inner = inner;
+            this.edit = edit;
+        }
+
+        public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s) => Then(inner.Plan(plan, v, s));
+
+        public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s, bool writeInkedValues) => Then(inner.Plan(plan, v, s, writeInkedValues));
+
+        private IReadOnlyList<PlannedChange> Then(IReadOnlyList<PlannedChange> changes)
+        {
+            edit();
+            return changes;
+        }
+    }
+
     /// <summary>Runs an action when the run reports it is writing its n-th page (not the "Writing changes" phase line).</summary>
     private sealed class OnPageWrite : IProgress<string>
     {

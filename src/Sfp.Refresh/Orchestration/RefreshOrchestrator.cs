@@ -50,6 +50,9 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// <summary>Title of the toast raised when OneNote made the third real run in a row fail (exit 3 or 5).</summary>
     public const string RefreshFailureToastTitle = "sfp2onenote: refresh failing";
 
+    /// <summary>Reason recorded on a change not written because the page changed under the write twice in a row.</summary>
+    public const string ConflictReason = "The page changed while Refresh was writing it (twice in a row); nothing was written to it and it will be tried again on the next run.";
+
     private readonly RefreshServices services;
 
     public RefreshOrchestrator(RefreshServices services)
@@ -310,9 +313,9 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     }
 
     /// <summary>
-    /// Writes the unblocked changes page by page; inked values are skipped unless confirmed; the first OneNote failure
-    /// stops the run with the page named. What each page write did is recorded in <paramref name="state"/> as soon as it
-    /// is done, so a run that stops part way still saves it.
+    /// Writes the unblocked changes page by page (<see cref="WritePage"/>); inked values are skipped unless confirmed; the
+    /// first OneNote failure stops the run with the page named. What each page write did is recorded in
+    /// <paramref name="state"/> as soon as it is done, so a run that stops part way still saves it.
     /// </summary>
     private WriteOutcome WriteAll(
         List<PlannedChange> changes,
@@ -335,7 +338,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         foreach (IGrouping<PageKey, PlannedChange> group in changes.GroupBy(c => c.Page))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            List<AnchorWrite> writes = new();
+            List<PlannedChange> pending = new();
             foreach (PlannedChange change in group)
             {
                 if (change.Blocked)
@@ -356,31 +359,27 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                     continue;
                 }
 
-                string? ownedId = state.Anchors(group.Key).TryGetValue(change.SlotId, out string? id) ? id : null;
-                PageSpec? spec = plan.FindPage(group.Key);
-                SlotGeometry? geometry = spec is null ? null : catalog.Slot(spec, change.SlotId);
-                writes.Add(new AnchorWrite(change, geometry, ownedId));
+                pending.Add(change);
             }
 
-            if (writes.Count == 0)
+            if (pending.Count == 0)
             {
                 continue;
             }
 
+            PageSpec? spec = plan.FindPage(group.Key);
             string? pageId = pages.PageId(group.Key);
-            PageXml? current = pages.Read(group.Key);
-            if (pageId is null || current is null)
+            if (spec is null || pageId is null)
             {
-                outcome.AddRange(writes.Select(w => w.Change with { Blocked = true, Reason = Propagator.UnreadablePageReason }));
+                outcome.AddRange(pending.Select(c => c with { Blocked = true, Reason = Propagator.UnreadablePageReason }));
                 continue;
             }
 
-            string title = plan.FindPage(group.Key)?.Title ?? group.Key.Value;
-            progress?.Report("Writing " + title);
-            AnchorWriteResult result;
+            progress?.Report("Writing " + spec.Title);
+            PageWrite page;
             try
             {
-                result = services.Writer.Write(pageId, current, writes);
+                page = WritePage(spec, pageId, pending, catalog, pages, state);
             }
             catch (OneNoteUnavailableException)
             {
@@ -388,38 +387,144 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             }
             catch (OneNoteException ex)
             {
-                services.Log.Error(ex, "Writing page {Title} failed", title);
-                error = $"Writing page '{title}' failed: {ex.Message}";
-                outcome.AddRange(writes.Select(w => w.Change with { Blocked = true, Reason = error }));
+                services.Log.Error(ex, "Writing page {Title} failed", spec.Title);
+                error = $"Writing page '{spec.Title}' failed: {ex.Message}";
+                outcome.AddRange(pending.Select(c => c with { Blocked = true, Reason = error }));
                 continue;
             }
 
-            pages.Invalidate(group.Key);
-            touched++;
-            state.Record(group.Key, result, writes);
-            foreach (string slotId in result.Unresolved)
+            outcome.AddRange(page.Changes);
+            warnings.AddRange(page.Warnings);
+            touched += page.Touched ? 1 : 0;
+            foreach ((PlannedChange planned, PlannedChange written) in page.Written.Where(w => w.Written.Kind != ChangeKind.Remove))
             {
-                warnings.Add($"Page {title}: the object written for {slotId} could not be found again; it will be re-planned next run.");
-            }
-
-            foreach (AnchorWrite write in writes)
-            {
-                outcome.Add(write.Change);
-                if (write.Change.Kind != ChangeKind.Remove)
+                if (calendarChanges.Contains(planned))
                 {
-                    if (calendarChanges.Contains(write.Change))
-                    {
-                        eventsWritten++;
-                    }
-                    else
-                    {
-                        valuesWritten++;
-                    }
+                    eventsWritten++;
+                }
+                else
+                {
+                    valuesWritten++;
                 }
             }
         }
 
         return new WriteOutcome(outcome, touched, valuesWritten, eventsWritten, warnings, error);
+    }
+
+    /// <summary>
+    /// Writes one page's changes. The page is read again just before the write and every change is decided again
+    /// against what the page holds now (<see cref="Propagator.Decide"/> with the run's ownership records): a slot the
+    /// user filled or edited since planning is blocked, a change already in place is dropped, and a removal whose outline
+    /// is already gone only drops its ID. The write passes the page's lastModifiedTime, so a page the user changes between
+    /// this read and the write is not written over; on hrLastModifiedDateDidNotMatch the page is read, re-checked and
+    /// written once more, and when it changed again its changes are reported as not written, for the next run.
+    /// </summary>
+    private PageWrite WritePage(PageSpec spec, string pageId, IReadOnlyList<PlannedChange> pending, SlotCatalog catalog, PageCache pages, WriteState state)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            pages.Invalidate(spec.Key);
+            PageXml? fresh = pages.Read(spec.Key);
+            if (fresh is null)
+            {
+                return new PageWrite(pending.Select(c => c with { Blocked = true, Reason = Propagator.UnreadablePageReason }).ToList(), new(), false, new());
+            }
+
+            (List<(PlannedChange Planned, AnchorWrite Write)> writes, List<PlannedChange> settled, List<string> gone) = Recheck(spec, pending, fresh, catalog, state);
+            if (writes.Count == 0)
+            {
+                state.Forget(spec.Key, gone);
+                return new PageWrite(settled, new(), false, new());
+            }
+
+            AnchorWriteResult result;
+            try
+            {
+                result = services.Writer.Write(pageId, fresh, writes.Select(w => w.Write).ToList());
+            }
+            catch (OneNoteException ex) when (ex is not OneNoteUnavailableException && ex.HResult == OneNoteHResults.LastModifiedDateDidNotMatch)
+            {
+                if (attempt == 1)
+                {
+                    services.Log.Warning("Page {Title} changed while it was being written; reading it again", spec.Title);
+                    continue;
+                }
+
+                services.Log.Warning(ex, "Page {Title} changed again while it was being written; its changes are left for the next run", spec.Title);
+                pages.Invalidate(spec.Key);
+                List<PlannedChange> conflicted = settled.Concat(writes.Select(w => w.Write.Change with { Blocked = true, Reason = ConflictReason })).ToList();
+                return new PageWrite(conflicted, new(), false, new() { $"Page {spec.Title} changed while Refresh was writing it; its changes were not written and will be tried again on the next run." });
+            }
+
+            pages.Invalidate(spec.Key);
+            state.Record(spec.Key, result, writes.Select(w => w.Write).ToList());
+            state.Forget(spec.Key, gone);
+            List<string> warnings = result.Unresolved
+                .Select(slotId => $"Page {spec.Title}: the object written for {slotId} could not be found again; it will be re-planned next run.")
+                .ToList();
+            return new PageWrite(
+                settled.Concat(writes.Select(w => w.Write.Change)).ToList(),
+                writes.Select(w => (w.Planned, w.Write.Change)).ToList(),
+                true,
+                warnings);
+        }
+    }
+
+    /// <summary>
+    /// Decides every pending change of a page again against the page as just read: the writes still to make (with their
+    /// geometry and owned object ID), the changes settled without a write (blocked now, or a removal whose outline is
+    /// already gone) and the slots whose outline is gone (their IDs are dropped).
+    /// </summary>
+    private (List<(PlannedChange Planned, AnchorWrite Write)> Writes, List<PlannedChange> Settled, List<string> Gone) Recheck(
+        PageSpec spec, IReadOnlyList<PlannedChange> pending, PageXml fresh, SlotCatalog catalog, WriteState state)
+    {
+        IReadOnlyDictionary<string, string> anchors = state.Anchors(spec.Key);
+        IReadOnlyDictionary<string, string> texts = state.Texts(spec.Key);
+        HashSet<string> ownedIds = anchors.Values.ToHashSet(StringComparer.Ordinal);
+        List<(PlannedChange Planned, AnchorWrite Write)> writes = new();
+        List<PlannedChange> settled = new();
+        List<string> gone = new();
+        foreach (PlannedChange change in pending)
+        {
+            SlotGeometry? geometry = catalog.Slot(spec, change.SlotId);
+            if (geometry is null)
+            {
+                settled.Add(change with { Blocked = true, Reason = "The page has no slot for this change." });
+                continue;
+            }
+
+            string? ownedId = anchors.TryGetValue(change.SlotId, out string? id) ? id : null;
+            string? written = texts.TryGetValue(change.SlotId, out string? last) ? last : null;
+            SlotState slot = SlotInspector.Inspect(fresh, geometry.Rect, ownedId, ownedIds, catalog.Manifest.PageWidthPt);
+            PlannedChange? now = Propagator.Decide(change.Page, change.SlotId, change.Kind == ChangeKind.Remove ? "" : change.NewText, slot, written);
+            if (now is null)
+            {
+                if (change.Kind == ChangeKind.Remove && slot.Owned is null)
+                {
+                    gone.Add(change.SlotId);
+                    settled.Add(change);
+                }
+                else
+                {
+                    services.Log.Information("Page {Title}: {Slot} already holds its text; nothing to write", spec.Title, change.SlotId);
+                }
+
+                continue;
+            }
+
+            now = now with { Inked = change.Inked };
+            if (now.Blocked)
+            {
+                services.Log.Information("Page {Title}: {Slot} changed since planning and is left alone: {Reason}", spec.Title, change.SlotId, now.Reason);
+                settled.Add(now);
+                continue;
+            }
+
+            writes.Add((change, new AnchorWrite(now, geometry, now.Kind == ChangeKind.Create ? null : ownedId)));
+        }
+
+        return (writes, settled, gone);
     }
 
     /// <summary>
@@ -664,6 +769,13 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         int EventsWritten,
         List<string> Warnings,
         string? Error);
+
+    /// <summary>What one page write did: every change with its final state, the writes made (as planned, as written), whether OneNote was written, and warnings.</summary>
+    private sealed record PageWrite(
+        List<PlannedChange> Changes,
+        List<(PlannedChange Planned, PlannedChange Written)> Written,
+        bool Touched,
+        List<string> Warnings);
 
     /// <summary>
     /// The sidecar's ownership records (slot to object ID, slot to the text the tool wrote) as the write phase changes

@@ -11,8 +11,11 @@ namespace Sfp.Refresh.Tests.Support;
 /// the way OneNote does, image bytes kept apart so a piBasic read hands back a CallbackID and a write carrying a
 /// CallbackID keeps the bytes. UpdatePageContent merges by objectID the way OneNote does: an object the XML carries with
 /// a known objectID replaces the stored one, an object without one is added, and an object the XML leaves out is kept
-/// (only DeletePageContent removes one). Notebooks can be closed and reopened by path, and every ID can be renumbered to
-/// simulate a move to OneDrive. Every call is recorded. Meant to be shared with the OneNote tests when the integrator merges.
+/// (only DeletePageContent removes one). Every write stamps the page's lastModifiedTime (one second later each time), a
+/// read hands it back on one:Page, and a write passing a dateExpectedLastModified other than DateTime.MinValue that does
+/// not match it fails with hrLastModifiedDateDidNotMatch, as OneNote does. Notebooks can be closed and reopened by path,
+/// and every ID can be renumbered to simulate a move to OneDrive. Every call is recorded. Meant to be shared with the
+/// OneNote tests when the integrator merges.
 /// </summary>
 public sealed class FakeOneNoteApp : IOneNoteApp
 {
@@ -24,6 +27,8 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     private readonly Dictionary<string, Page> pages = new(StringComparer.Ordinal);
     private readonly List<(string Call, string Detail)> calls = new();
     private int nextId;
+    private DateTimeOffset clock = new(2026, 12, 20, 10, 0, 0, TimeSpan.Zero);
+    private bool inBeforeWrite;
 
     public string Version => "16.0.fake";
 
@@ -36,8 +41,24 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     /// <summary>Decides whether an UpdatePageContent call fails: given the page ID, the exception to throw or null.</summary>
     public Func<string, Exception?>? UpdatePageContentFailure { get; set; }
 
+    /// <summary>
+    /// Runs at the start of every UpdatePageContent and DeletePageContent, given the page ID, before the last-modified
+    /// check: a test makes the user edit the page there, between Refresh's read and its write. Writes made inside it do
+    /// not run it again.
+    /// </summary>
+    public Action<string>? BeforeWrite { get; set; }
+
+    /// <summary>Decides whether a GetHierarchy call fails: given the start ID and scope, the exception to throw or null.</summary>
+    public Func<string?, HierarchyScope, Exception?>? GetHierarchyFailure { get; set; }
+
+    /// <summary>The zone OneNote reads a dateExpectedLastModified in (a COM DATE has none); UTC unless a test sets another.</summary>
+    public TimeZoneInfo TimeZone { get; set; } = TimeZoneInfo.Utc;
+
     /// <summary>Thrown by every call when set (simulates OneNote not installed or not reachable).</summary>
     public Exception? Unavailable { get; set; }
+
+    /// <summary>The lastModifiedTime of a page, or null when it was never written.</summary>
+    public DateTimeOffset? LastModified(string pageId) => pages[pageId].Modified;
 
     public bool Disposed { get; private set; }
 
@@ -98,6 +119,12 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     public string GetHierarchy(string? startId, HierarchyScope scope)
     {
         Record("GetHierarchy", (startId ?? "") + ":" + scope);
+        Exception? failure = GetHierarchyFailure?.Invoke(startId, scope);
+        if (failure is not null)
+        {
+            throw failure;
+        }
+
         XNamespace one = OneNoteXml.Namespace2013;
         if (string.IsNullOrEmpty(startId))
         {
@@ -214,6 +241,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         string id = (string?)root.Attribute("ID") ?? "";
         Record("UpdatePageContent", id);
         LastUpdateXml = xml;
+        RunBeforeWrite(id);
         Exception? failure = UpdatePageContentFailure?.Invoke(id);
         if (failure is not null)
         {
@@ -225,6 +253,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
             throw new OneNoteException("UpdatePageContent", OneNoteHResults.PageDoesNotExist, "No page " + id, null);
         }
 
+        CheckLastModified(page, dateExpectedLastModified, "UpdatePageContent");
         XNamespace one = root.Name.Namespace;
         foreach (XElement element in root.Descendants().Where(e => e.Name.Namespace == one && e.Name.LocalName is "Outline" or "OE" or "Image" or "InkWord" or "InkDrawing"))
         {
@@ -250,7 +279,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
             page.Name = PageXmlParser.PlainText(title);
         }
 
-        page.Xml = OneNoteXml.Serialize(page.Xml is null ? root : Merge(XElement.Parse(page.Xml), root, one));
+        XElement stored = page.Xml is null ? root : Merge(XElement.Parse(page.Xml), root, one);
+        Touch(page, stored);
+        page.Xml = OneNoteXml.Serialize(stored);
     }
 
     public string GetPageContent(string pageId, PageInfo pageInfo)
@@ -311,11 +342,13 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     {
         Guard();
         Record("DeletePageContent", pageId + " " + objectId);
+        RunBeforeWrite(pageId);
         if (!pages.TryGetValue(pageId, out Page? page) || page.Xml is null)
         {
             throw new OneNoteException("DeletePageContent", OneNoteHResults.PageDoesNotExist, "No page " + pageId, null);
         }
 
+        CheckLastModified(page, dateExpectedLastModified, "DeletePageContent");
         XElement root = XElement.Parse(page.Xml);
         XElement? target = root.Descendants().FirstOrDefault(e => (string?)e.Attribute("objectID") == objectId);
         if (target is null)
@@ -324,6 +357,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         }
 
         target.Remove();
+        Touch(page, root);
         page.Xml = OneNoteXml.Serialize(root);
     }
 
@@ -405,6 +439,51 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         {
             throw Unavailable;
         }
+    }
+
+    private void RunBeforeWrite(string pageId)
+    {
+        if (BeforeWrite is null || inBeforeWrite)
+        {
+            return;
+        }
+
+        inBeforeWrite = true;
+        try
+        {
+            BeforeWrite(pageId);
+        }
+        finally
+        {
+            inBeforeWrite = false;
+        }
+    }
+
+    /// <summary>Fails the write when the caller expected another last-modified time than the page has (DateTime.MinValue skips the check).</summary>
+    private void CheckLastModified(Page page, DateTime expected, string call)
+    {
+        if (expected == DateTime.MinValue)
+        {
+            return;
+        }
+
+        DateTime expectedUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(expected, DateTimeKind.Unspecified), TimeZone);
+        if (page.Modified is not DateTimeOffset modified || modified.UtcDateTime != expectedUtc)
+        {
+            throw new OneNoteException(
+                call,
+                OneNoteHResults.LastModifiedDateDidNotMatch,
+                string.Create(CultureInfo.InvariantCulture, $"Page {page.Id} was last modified at {page.Modified:O}, not {expectedUtc:O}."),
+                null);
+        }
+    }
+
+    /// <summary>Advances the page's last-modified time and stamps it on the stored root, as every OneNote write does.</summary>
+    private void Touch(Page page, XElement root)
+    {
+        clock = clock.AddSeconds(1);
+        page.Modified = clock;
+        root.SetAttributeValue("lastModifiedTime", clock.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture));
     }
 
     private Notebook Create(string path)
@@ -519,6 +598,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         public string? Xml { get; set; }
 
         public string? ImageData { get; set; }
+
+        /// <summary>When the page was last written, or null.</summary>
+        public DateTimeOffset? Modified { get; set; }
 
         /// <summary>The "{p-0001}" part of the page ID that every objectID on the page starts with.</summary>
         public string Prefix => Id[..Id.IndexOf('}', StringComparison.Ordinal)] + "}";

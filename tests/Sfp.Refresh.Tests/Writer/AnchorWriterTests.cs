@@ -142,6 +142,43 @@ public class AnchorWriterTests
     }
 
     [Fact]
+    public void Writes_pass_the_pages_last_modified_time_so_a_stale_read_is_refused()
+    {
+        FakeNotebook nb = FakeNotebook.Generate();
+        string pageId = nb.PageIds[MonJan4];
+        AnchorWriter writer = Writer(nb);
+        string walk = writer.Write(pageId, nb.Read(MonJan4), new[] { Create(nb, MonJan4, "standingGoal:1", "Walk") }).Created["standingGoal:1"];
+        PageXml read = nb.Read(MonJan4);
+        writer.ExpectedLastModified(read).Should().Be(nb.App.LastModified(pageId)!.Value.UtcDateTime, "the page's lastModifiedTime, in the run's zone (UTC here)");
+        nb.TypeUserText(MonJan4, new RectPt(400, 400, 200, 14), "typed meanwhile");
+
+        Action staleCreate = () => writer.Write(pageId, read, new[] { Create(nb, MonJan4, "metricName:1", "Steps") });
+        Action staleRemove = () => writer.Write(pageId, read, new[] { new AnchorWrite(new PlannedChange(MonJan4, "standingGoal:1", "Walk", "", ChangeKind.Remove, false, null), null, walk) });
+
+        staleCreate.Should().Throw<OneNoteException>().Which.HResult.Should().Be(OneNoteHResults.LastModifiedDateDidNotMatch);
+        staleRemove.Should().Throw<OneNoteException>().Which.HResult.Should().Be(OneNoteHResults.LastModifiedDateDidNotMatch);
+        PageXml after = nb.Read(MonJan4);
+        after.Outlines.Should().Contain(o => o.PlainText == "typed meanwhile", "the stale copy was not written over the user's edit");
+        after.Outlines.Should().Contain(o => o.ObjectId == walk).And.NotContain(o => o.PlainText == "Steps");
+        writer.Write(pageId, after, new[] { Create(nb, MonJan4, "metricName:1", "Steps") }).Created.Should().ContainKey("metricName:1", "a fresh read writes");
+    }
+
+    [Fact]
+    public void The_expected_last_modified_time_is_the_pages_stamp_in_the_runs_zone()
+    {
+        FakeNotebook nb = FakeNotebook.Generate();
+        string pageId = nb.PageIds[MonJan4];
+        TimeZoneInfo fiveBehind = TimeZoneInfo.CreateCustomTimeZone("UTC-05 test", TimeSpan.FromHours(-5), "UTC-05 test", "UTC-05 test");
+        AnchorWriter writer = new(nb.App, nb.Options with { TimeZone = fiveBehind }, new CapturingLog().Logger);
+        PageXml page = nb.Read(MonJan4);
+
+        writer.ExpectedLastModified(page).Should().Be(nb.App.LastModified(pageId)!.Value.UtcDateTime.AddHours(-5), "a COM DATE has no zone; OneNote reads it as local time");
+        nb.App.TimeZone = fiveBehind;
+        writer.Write(pageId, page, new[] { Create(nb, MonJan4, "standingGoal:1", "Walk") }).Created.Should().ContainKey("standingGoal:1");
+        writer.ExpectedLastModified(new PageXmlFixture("{p-0099}{1}{B0}", "day:2027-01-04").Build()).Should().Be(DateTime.MinValue, "a page without the stamp skips the check");
+    }
+
+    [Fact]
     public void A_removal_whose_outline_is_already_gone_is_reported_removed_without_a_call()
     {
         FakeNotebook nb = FakeNotebook.Generate();

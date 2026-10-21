@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Xml.Linq;
 using Serilog;
 using Sfp.Core.Manifests;
@@ -191,12 +192,23 @@ public sealed class AnchorWriter : IAnchorWriter
     }
 
     /// <summary>
-    /// The dateExpectedLastModified to pass with a write to the page as read; <see cref="DateTime.MinValue"/> skips OneNote's check.
+    /// The dateExpectedLastModified to pass with a write to the page as read: its one:Page lastModifiedTime, so OneNote
+    /// refuses the write (hrLastModifiedDateDidNotMatch) when the page changed since it was read instead of writing the
+    /// stale copy over the user's edit. A COM DATE carries no zone and OneNote reads it as local time, so the UTC stamp
+    /// is given in the run's zone (<see cref="PageXmlOptions.TimeZone"/>, the local zone in the CLI). A page without the
+    /// attribute gets <see cref="DateTime.MinValue"/>, which skips the check.
     /// </summary>
     public DateTime ExpectedLastModified(PageXml page)
     {
         ArgumentNullException.ThrowIfNull(page);
-        return DateTime.MinValue;
+        string? stamp = (string?)page.Document.Root?.Attribute("lastModifiedTime");
+        if (string.IsNullOrWhiteSpace(stamp)
+            || !DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out DateTimeOffset modified))
+        {
+            return DateTime.MinValue;
+        }
+
+        return TimeZoneInfo.ConvertTime(modified, options.TimeZone).DateTime;
     }
 
     /// <summary>True for the results OneNote gives when the object to delete is no longer on the page.</summary>
