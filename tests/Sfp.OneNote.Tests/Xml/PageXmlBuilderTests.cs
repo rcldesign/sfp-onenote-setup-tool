@@ -15,6 +15,13 @@ public class PageXmlBuilderTests
     private static readonly Manifest M = TestManifest.Load();
     private static readonly XNamespace One = OneNoteXml.Namespace2013;
 
+    /// <summary>The blank Objective Details parent page, as the plan builder makes it.</summary>
+    private static PageSpec ObjectiveDetails() =>
+        new(PageKey.ObjectiveDetails, PageType.Blank, "Objective Details", 1, null, new DateOnly(2027, 1, 1), new Dictionary<string, string>(StringComparer.Ordinal));
+
+    /// <summary>What the renderer returns for a page without an image: zero bytes, 0 x 0, no anchors.</summary>
+    private static RenderedPage NoImage() => new(PageKey.ObjectiveDetails, Array.Empty<byte>(), 0, 0, Array.Empty<AnchorPlacement>());
+
     [Fact]
     public void Mon_Jan_4_page_validates_against_the_2013_schema()
     {
@@ -66,6 +73,59 @@ public class PageXmlBuilderTests
         image.Attribute("backgroundImage")!.Value.Should().Be("true");
         image.Element(One + "Size")!.Attribute("width")!.Value.Should().Be(OneNoteXml.Pt(M.PageWidthPt));
         image.Element(One + "Data")!.Value.Should().Be(Convert.ToBase64String(MonJan4.Png));
+    }
+
+    [Fact]
+    public void A_page_without_an_image_is_written_as_the_frame_alone_with_no_image_and_validates()
+    {
+        string xml = PageXmlBuilder.Build("{objectives}", ObjectiveDetails(), NoImage(), Array.Empty<ResolvedAnchor>(), MonJan4.Options(M));
+
+        SchemaValidator.AssertValid(xml);
+        XElement page = XElement.Parse(xml);
+        page.Elements().Select(e => e.Name.LocalName).Should().Equal("Meta", "PageSettings", "Title");
+        page.Descendants(One + "Image").Should().BeEmpty("OneNote refuses an image without data");
+        page.Descendants(One + "Data").Should().BeEmpty();
+        page.Descendants(One + "Outline").Should().BeEmpty("there is no sheet to place");
+        page.Element(One + "Meta")!.Attribute("content")!.Value.Should().Be("objectives", "the page key still lets Refresh find the page");
+        page.Element(One + "Title")!.Element(One + "OE")!.Element(One + "T")!.Value.Should().Be("Objective Details");
+        page.Attribute("dateTime")!.Value.Should().Be("2027-01-01T06:00:00-05:00");
+    }
+
+    [Fact]
+    public void A_page_without_an_image_keeps_its_anchors_where_a_sheet_page_puts_them()
+    {
+        IReadOnlyList<ResolvedAnchor> anchors = new[] { MonJan4.DateAnchor(M) };
+        RenderedPage art = NoImage() with { Anchors = anchors.Select(a => a.Placement).ToList() };
+
+        XElement frameOnly = XElement.Parse(PageXmlBuilder.Build("{objectives}", ObjectiveDetails(), art, anchors, MonJan4.Options(M)));
+        XElement withSheet = XElement.Parse(MonJan4.Build(M));
+
+        frameOnly.Descendants(One + "Image").Should().BeEmpty();
+        XElement anchor = frameOnly.Elements(One + "Outline").Should().ContainSingle().Subject;
+        anchor.Element(One + "Position")!.ToString().Should().Be(withSheet.Elements(One + "Outline").ElementAt(1).Element(One + "Position")!.ToString());
+        SchemaValidator.AssertValid(frameOnly.ToString());
+    }
+
+    [Fact]
+    public void A_page_without_an_image_and_a_hidden_title_is_the_meta_and_page_settings_alone()
+    {
+        PageXmlOptions hidden = MonJan4.Options(M, MonJan4.Generate() with { HideTitle = true });
+
+        string xml = PageXmlBuilder.Build("{objectives}", ObjectiveDetails(), NoImage(), Array.Empty<ResolvedAnchor>(), hidden);
+
+        XElement.Parse(xml).Elements().Select(e => e.Name.LocalName).Should().Equal("Meta", "PageSettings");
+        SchemaValidator.AssertValid(xml);
+    }
+
+    [Fact]
+    public void A_sheet_outline_is_refused_for_art_without_image_bytes()
+    {
+        PageXmlBuilder.HasSheet(NoImage()).Should().BeFalse();
+        PageXmlBuilder.HasSheet(MonJan4.Art(Array.Empty<ResolvedAnchor>())).Should().BeTrue();
+
+        Action act = () => PageXmlBuilder.SheetOutline(NoImage(), MonJan4.Options(M));
+
+        act.Should().Throw<ArgumentException>().WithMessage("*objectives*no image*");
     }
 
     [Fact]
@@ -173,16 +233,52 @@ public class PageXmlBuilderTests
     }
 
     [Fact]
-    public void Custom_page_size_writes_the_manifest_page_dimensions()
+    public void Custom_page_size_writes_a_landscape_orientation_then_the_manifest_page_size_in_inches()
     {
         PageXmlOptions options = MonJan4.Options(M, MonJan4.Generate() with { PageSize = PageSizeMode.Custom });
         string xml = MonJan4.Build(M, options);
         XElement page = XElement.Parse(xml);
 
-        XElement dimensions = page.Element(One + "PageSettings")!.Element(One + "PageSize")!.Element(One + "Dimensions")!;
-        dimensions.Element(One + "Width")!.Attribute("value")!.Value.Should().Be(OneNoteXml.Pt(M.PageWidthPt));
-        dimensions.Element(One + "Height")!.Attribute("value")!.Value.Should().Be(OneNoteXml.Pt(M.PageHeightPt));
+        XElement size = page.Element(One + "PageSettings")!.Element(One + "PageSize")!;
+        size.Elements().Select(e => e.Name.LocalName).Should().Equal("Orientation", "Dimensions");
+        size.Element(One + "Orientation")!.Attribute("landscape")!.Value.Should().Be("true", "the 1112 x 770 pt sheet is wider than tall");
+        XElement dimensions = size.Element(One + "Dimensions")!;
+        dimensions.Attribute("width")!.Value.Should().Be("15.44", "1112 pt / 72");
+        dimensions.Attribute("height")!.Value.Should().Be("10.69", "770 pt / 72");
+        dimensions.HasElements.Should().BeFalse("Dimensions is an empty element with width and height attributes");
+        size.ToString(SaveOptions.DisableFormatting).Should().Contain("<one:Orientation landscape=\"true\" /><one:Dimensions width=\"15.44\" height=\"10.69\" />");
         SchemaValidator.AssertValid(xml);
+    }
+
+    [Fact]
+    public void Custom_page_size_follows_the_manifest_page_shape_and_ignores_the_page_scale()
+    {
+        Manifest portrait = M with { PageSizePt = new[] { 612.0, 792.0 } };
+        PageXmlOptions options = MonJan4.Options(portrait, MonJan4.Generate() with { PageSize = PageSizeMode.Custom, PageScale = 0.5 });
+
+        XElement size = XElement.Parse(MonJan4.Build(portrait, options)).Element(One + "PageSettings")!.Element(One + "PageSize")!;
+
+        size.Element(One + "Orientation")!.Attribute("landscape")!.Value.Should().Be("false");
+        size.Element(One + "Dimensions")!.Attribute("width")!.Value.Should().Be("8.50", "Letter is 8.5 in wide, written with two decimals");
+        size.Element(One + "Dimensions")!.Attribute("height")!.Value.Should().Be("11.00");
+    }
+
+    [Fact]
+    public void Inches_are_points_over_72_with_two_decimals_whatever_the_culture()
+    {
+        CultureInfo original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            OneNoteXml.Inches(1112).Should().Be("15.44");
+            OneNoteXml.Inches(770).Should().Be("10.69");
+            OneNoteXml.Inches(612).Should().Be("8.50");
+            OneNoteXml.Inches(800.64).Should().Be("11.12");
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
     }
 
     [Fact]
@@ -205,6 +301,22 @@ public class PageXmlBuilderTests
         PageXmlBuilder.PageDateTime(new DateOnly(2027, 3, 31), options).Should().Be("2027-03-31T07:00:00+02:00");
     }
 
+    [Theory]
+    [InlineData("R&D", "R&amp;D")]
+    [InlineData("<Ideas>", "&lt;Ideas&gt;")]
+    [InlineData("Q&A ]]> <notes>", "Q&amp;A ]]&gt; &lt;notes&gt;")]
+    [InlineData("Mon Jan 4", "Mon Jan 4")]
+    public void The_title_is_html_escaped_inside_its_cdata_and_reads_back_as_typed(string title, string html)
+    {
+        string xml = PageXmlBuilder.Build(MonJan4.PageId, MonJan4.Page(title), MonJan4.Art(Array.Empty<ResolvedAnchor>()), Array.Empty<ResolvedAnchor>(), MonJan4.Options(M));
+
+        SchemaValidator.AssertValid(xml);
+        string raw = XElement.Parse(xml).Element(One + "Title")!.Element(One + "OE")!.Element(One + "T")!.Value;
+        raw.Should().Be(html, "one:T holds HTML, so the title is escaped like anchor text");
+        PageXmlParser.PlainText(raw).Should().Be(title);
+        PageXmlParser.Parse(xml).Title.Should().Be(title);
+    }
+
     [Fact]
     public void Title_and_anchor_text_with_ampersand_and_cdata_terminator_survive_a_round_trip_and_validate()
     {
@@ -217,7 +329,7 @@ public class PageXmlBuilderTests
 
         SchemaValidator.AssertValid(xml);
         XElement page = XElement.Parse(xml);
-        page.Element(One + "Title")!.Element(One + "OE")!.Element(One + "T")!.Value.Should().Be(title);
+        PageXmlParser.PlainText(page.Element(One + "Title")!.Element(One + "OE")!.Element(One + "T")!.Value).Should().Be(title);
         string html = page.Elements(One + "Outline").ElementAt(1).Element(One + "OEChildren")!.Element(One + "OE")!.Element(One + "T")!.Value;
         html.Should().Contain(">a &amp; b ]]&gt; c</span>", "anchor text is HTML-escaped inside the CDATA");
         html.Should().Contain("&amp;section-id=", "the href's ampersands are HTML-escaped");

@@ -10,8 +10,9 @@ namespace Sfp.OneNote.Tests.Writer;
 /// wrapper exposes, hierarchy updates applied, page XML stored and handed back with objectIDs the way GetPageContent
 /// reports them, and onenote: hyperlinks in the real shape. GetHierarchy lists a notebook's top-level sections before
 /// its section groups, the order the 2013 schema gives them. A closed notebook is not listed and its pages cannot be
-/// read or written until OpenHierarchy (cftNone) opens its folder again. Every call is recorded so tests can assert the
-/// PRD call sequence without COM.
+/// read or written until OpenHierarchy (cftNone) opens its folder again. UpdatePageContent refuses a page carrying an
+/// image with empty data (hrInsertingImage), as OneNote does. Every call is recorded so tests can assert the PRD call
+/// sequence without COM.
 /// </summary>
 public sealed class FakeOneNoteApp : IOneNoteApp
 {
@@ -34,6 +35,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
     /// <summary>Decides whether a GetHierarchy call fails.</summary>
     public Func<Exception?>? GetHierarchyFailure { get; set; }
+
+    /// <summary>Decides whether an OpenHierarchy call fails: given the path and the create type, return the exception to throw or null.</summary>
+    public Func<string, CreateFileType, Exception?>? OpenHierarchyFailure { get; set; }
 
     public bool Disposed { get; private set; }
 
@@ -129,6 +133,12 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     public string OpenHierarchy(string path, string? relativeToId, CreateFileType createFileType)
     {
         Record("OpenHierarchy", path + ":" + createFileType);
+        Exception? failure = OpenHierarchyFailure?.Invoke(path, createFileType);
+        if (failure is not null)
+        {
+            throw failure;
+        }
+
         switch (createFileType)
         {
             case CreateFileType.Notebook:
@@ -282,14 +292,25 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         }
 
         XElement root = XElement.Parse(xml);
+        XNamespace one = root.Name.Namespace;
         string id = (string?)root.Attribute("ID") ?? "";
         if (!_pages.TryGetValue(id, out Page? page) || !Reachable(page))
         {
             throw new OneNoteException("UpdatePageContent", OneNoteHResults.PageDoesNotExist, "No page " + id, null);
         }
 
+        // OneNote cannot insert an image without bytes and refuses the whole page; an image sent as a CallbackID (no Data) is fine.
+        if (root.Descendants(one + "Image").Any(i => i.Element(one + "Data") is XElement data && string.IsNullOrWhiteSpace(data.Value)))
+        {
+            throw new OneNoteXmlRejectedException(
+                "UpdatePageContent",
+                OneNoteHResults.InsertingImage,
+                "OneNote rejected the XML passed to UpdatePageContent: hrInsertingImage (0x80042007): an image has no data",
+                xml,
+                null);
+        }
+
         page.Xml = xml;
-        XNamespace one = root.Name.Namespace;
         string? title = root.Element(one + "Title")?.Descendants(one + "T").FirstOrDefault()?.Value;
         if (!string.IsNullOrEmpty(title))
         {

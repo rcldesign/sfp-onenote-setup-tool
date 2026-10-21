@@ -17,7 +17,7 @@ internal sealed class ProgIdActivator : IOneNoteActivator
         if (type is null)
         {
             throw new OneNoteUnavailableException(
-                "activate",
+                OneNoteHResults.ActivateCall,
                 OneNoteHResults.ClassNotRegistered,
                 OneNoteUnavailableException.UserMessage + " The ProgID " + ProgId + " is not registered.",
                 null);
@@ -27,15 +27,15 @@ internal sealed class ProgIdActivator : IOneNoteActivator
         try
         {
             target = Activator.CreateInstance(type) ?? throw new OneNoteUnavailableException(
-                "activate", OneNoteHResults.ServerExecFailed, OneNoteUnavailableException.UserMessage + " CreateInstance returned nothing.", null);
+                OneNoteHResults.ActivateCall, OneNoteHResults.ServerExecFailed, OneNoteUnavailableException.UserMessage + " CreateInstance returned nothing.", null);
         }
         catch (COMException ex)
         {
-            throw OneNoteHResults.Map("activate", ex, null);
+            throw OneNoteHResults.Map(OneNoteHResults.ActivateCall, ex, null);
         }
         catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is COMException inner)
         {
-            throw OneNoteHResults.Map("activate", inner, null);
+            throw OneNoteHResults.Map(OneNoteHResults.ActivateCall, inner, null);
         }
 
         return new ActivatedApp(target, ReadVersion());

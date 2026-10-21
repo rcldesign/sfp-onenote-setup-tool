@@ -201,10 +201,10 @@ internal sealed class OneNoteSession : IOneNoteApp
         catch (COMException ex)
         {
             _log.Error("OneNote activation failed: {HResult}", OneNoteHResults.Describe(ex.HResult));
-            throw OneNoteHResults.Map("activate", ex, null);
+            throw OneNoteHResults.Map(OneNoteHResults.ActivateCall, ex, null);
         }
 
-        _log.Information("OneNote {Call} completed in {ElapsedMs} ms (version {Version})", "activate", clock.ElapsedMilliseconds, _app.Version);
+        _log.Information("OneNote {Call} completed in {ElapsedMs} ms (version {Version})", OneNoteHResults.ActivateCall, clock.ElapsedMilliseconds, _app.Version);
         return _app;
     }
 

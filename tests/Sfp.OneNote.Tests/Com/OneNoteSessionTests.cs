@@ -135,6 +135,42 @@ public class OneNoteSessionTests
     }
 
     [Fact]
+    public void A_disconnect_after_activation_is_reported_as_onenote_stopping_during_the_run()
+    {
+        (OneNoteSession session, FakeOneNoteTarget fake, _, _) = Create();
+        using (session)
+        {
+            session.Version.Should().Be("16.0.fake", "OneNote was running when the run reached it");
+            fake.FailNext(OneNoteHResults.RpcDisconnected);
+
+            Action act = () => session.UpdatePageContent("<one:Page/>", DateTime.MinValue);
+
+            OneNoteUnavailableException ex = act.Should().Throw<OneNoteUnavailableException>().Which;
+            ex.HResult.Should().Be(OneNoteHResults.RpcDisconnected);
+            ex.Call.Should().Be("UpdatePageContent");
+            ex.Message.Should().StartWith(OneNoteUnavailableException.DisconnectedMessage);
+            ex.Message.Should().NotContain(OneNoteUnavailableException.UserMessage);
+        }
+    }
+
+    [Fact]
+    public void An_activation_that_cannot_reach_the_com_server_carries_the_install_message()
+    {
+        (OneNoteSession session, _, FakeActivator activator, _) = Create();
+        using (session)
+        {
+            activator.Failure = new COMException("The RPC server is unavailable.", OneNoteHResults.RpcServerUnavailable);
+
+            Action act = () => session.GetHierarchy(null, HierarchyScope.Notebooks);
+
+            OneNoteUnavailableException ex = act.Should().Throw<OneNoteUnavailableException>().Which;
+            ex.Call.Should().Be(OneNoteHResults.ActivateCall);
+            ex.Message.Should().StartWith(OneNoteUnavailableException.UserMessage).And.Contain(OneNoteUnavailableException.InstallUrl);
+            ex.Message.Should().NotContain(OneNoteUnavailableException.DisconnectedMessage);
+        }
+    }
+
+    [Fact]
     public void Activation_failure_maps_to_the_unavailable_exception_and_is_retried_on_the_next_call()
     {
         (OneNoteSession session, _, FakeActivator activator, _) = Create();

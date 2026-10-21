@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Xml.Linq;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
@@ -67,6 +68,9 @@ public class GenerateOrchestratorTests
 
         public FakePreflight Preflight { get; set; } = new();
 
+        /// <summary>A real preflight to use instead of <see cref="Preflight"/>, or null.</summary>
+        public IGeneratePreflight? PreflightOverride { get; set; }
+
         public CapturingSink Log { get; } = new();
 
         public ProgressLog Progress { get; } = new();
@@ -90,7 +94,7 @@ public class GenerateOrchestratorTests
             new(options ?? Options(), M, TestPaths.TemplatesDir, renderDir is not null, renderDir);
 
         public GenerateOrchestrator Build() => new(
-            Preflight,
+            PreflightOverride ?? Preflight,
             new DateEngine(),
             Plans,
             Renderer,
@@ -330,6 +334,32 @@ public class GenerateOrchestratorTests
     }
 
     [Fact]
+    public void The_blank_objective_details_parent_is_written_as_a_frame_and_onenote_receives_no_image_data_for_it()
+    {
+        Harness h = new() { Plans = new PlanBuilder(new DateEngine()) };
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run();
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Warnings.Should().BeEmpty();
+        h.Renderer.Rendered.Should().Contain(PageKey.ObjectiveDetails, "the parent page goes through the render pipeline like every sheet");
+        Sidecar sidecar = new SidecarStore().Load(result.SidecarPath!)!;
+        string parentId = sidecar.Pages[PageKey.ObjectiveDetails.Value].PageId;
+        XElement parent = XElement.Parse(app.PageContent(parentId)!);
+        parent.Descendants(One + "Image").Should().BeEmpty("the renderer gave the page no image");
+        parent.Descendants(One + "Data").Should().BeEmpty();
+        parent.Elements(One + "Outline").Should().BeEmpty();
+        parent.Element(One + "Meta")!.Attribute("content")!.Value.Should().Be("objectives");
+        app.PagesOf(sidecar.Sections["Objectives"]).Select(p => (p.Name, p.Level)).Skip(2).Take(2)
+            .Should().Equal(("Objective Details", 1), ("Objective 1", 2));
+        app.WrittenPages.Should().HaveCount(144);
+        app.WrittenPages.Values.Count(page => page.Contains("<one:Data>", StringComparison.Ordinal)).Should().Be(142, "every page but Contents and the blank parent carries its sheet");
+    }
+
+    [Fact]
     public void Group_weeks_creates_the_weeks_group_once_before_its_first_section_and_records_it_in_the_sidecar()
     {
         Harness h = new() { Plans = new PlanBuilder(new DateEngine()) };
@@ -499,20 +529,22 @@ public class GenerateOrchestratorTests
         result.Success.Should().BeTrue(result.Error);
         result.ExitCode.Should().Be(0);
         result.OutputPath.Should().Be(dir);
-        result.PagesRendered.Should().Be(6);
+        result.PagesRendered.Should().Be(7, "every page of the plan is listed, the native Contents page included");
         result.PagesWritten.Should().Be(0);
         result.OutputBytes.Should().BeGreaterThan(0);
         Directory.GetFiles(dir, "*.png").Select(Path.GetFileName).Should().BeEquivalentTo(
             "cover.png", "setup.png", "week-02-overview.png", "day-2027-01-04.png", "day-2027-01-05.png", "week-02-reflection.png");
         File.ReadAllBytes(Path.Combine(dir, "cover.png")).Should().Equal(MonJan4.Png);
-        PageIndex index = RenderOnlyOutput.ReadIndex(Path.Combine(dir, RenderOnlyOutput.IndexFileName));
-        index.Notebook.Should().Be("SFP Q1 2027");
-        index.Quarter.Should().Be("2027-01");
+        RenderIndex index = RenderIndex.Parse(File.ReadAllText(Path.Combine(dir, RenderOnlyRunner.IndexFileName)));
+        index.Name.Should().Be("SFP Q1 2027");
+        index.Quarter.Should().Be("Q1 2027");
         index.Dpi.Should().Be(144);
-        index.Count.Should().Be(6);
-        index.Pages.Select(p => p.Key).Should().Equal("cover", "setup", "week:02:overview", "day:2027-01-04", "day:2027-01-05", "week:02:reflection");
-        PageIndexEntry monday = index.Pages.Single(p => p.Key == "day:2027-01-04");
-        monday.File.Should().Be("day-2027-01-04.png");
+        index.Pages.Select(p => p.Key).Should().Equal("cover", "contents", "setup", "week:02:overview", "day:2027-01-04", "day:2027-01-05", "week:02:reflection");
+        RenderIndexPage contents = index.Pages.Single(p => p.Key == "contents");
+        contents.Png.Should().BeNull("the native Contents page has no image and gets no file");
+        contents.Width.Should().Be(0);
+        RenderIndexPage monday = index.Pages.Single(p => p.Key == "day:2027-01-04");
+        monday.Png.Should().Be("day-2027-01-04.png");
         monday.Title.Should().Be("Mon Jan 4");
         monday.Section.Should().Be(TestPlans.WeekSectionName);
         monday.Level.Should().Be(2);
@@ -522,7 +554,75 @@ public class GenerateOrchestratorTests
         monday.Anchors.Select(a => a.AnchorId).Should().Equal("dailyDate", "next", "objectiveLegend");
         monday.Anchors.Last().Kind.Should().Be(AnchorKind.Propagated);
         h.Progress.Phases.Should().Equal(GeneratePhase.CheckingOneNote, GeneratePhase.Validating, GeneratePhase.Rendering, GeneratePhase.Finishing, GeneratePhase.Done);
+        h.Progress.Reports.Where(r => r.Phase == GeneratePhase.Rendering && r.Current > 0).Select(r => r.Current).OrderBy(c => c).Should().Equal(1, 2, 3, 4, 5, 6, 7);
         h.Renderer.Threads.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public void Generate_render_only_writes_exactly_what_the_render_only_verb_writes_and_no_file_for_image_less_pages()
+    {
+        Harness h = new() { Plans = new PlanBuilder(new DateEngine()) };
+        h.WriterFactory = () => throw new InvalidOperationException("render-only must not create a writer");
+        GenerateOptions options = h.Options() with { Dpi = 144 };
+        string viaGenerate = Path.Combine(h.Root, "generate");
+        string viaVerb = Path.Combine(h.Root, "verb");
+
+        GenerateResult result = h.Run(h.Request(options, viaGenerate));
+        NotebookPlan plan = new PlanBuilder(new DateEngine()).Build(M, TestPlans.Q1, options);
+        RenderOnlyResult verb = new RenderOnlyRunner(new FakePageRenderer(), maxDegreeOfParallelism: 2).Run(plan, new RenderOptions(options.PdfPath, options.Dpi, options), viaVerb);
+
+        result.Success.Should().BeTrue(result.Error);
+        result.PagesRendered.Should().Be(verb.PagesRendered).And.Be(144);
+        static List<string> Files(string dir) => Directory.GetFiles(dir).Select(f => Path.GetFileName(f)).Order(StringComparer.Ordinal).ToList();
+        Files(viaGenerate).Should().Equal(Files(viaVerb));
+        File.ReadAllText(Path.Combine(viaGenerate, RenderOnlyRunner.IndexFileName)).Should().Be(File.ReadAllText(Path.Combine(viaVerb, RenderOnlyRunner.IndexFileName)), "both verbs share one pages.json schema");
+        Directory.GetFiles(viaGenerate, "*.png").Should().HaveCount(142).And.OnlyContain(f => new FileInfo(f).Length > 0, "no empty PNG is written");
+        File.Exists(Path.Combine(viaGenerate, "objectives.png")).Should().BeFalse("the blank parent page has no image");
+        File.Exists(Path.Combine(viaGenerate, "contents.png")).Should().BeFalse();
+        RenderIndex index = RenderIndex.Parse(File.ReadAllText(Path.Combine(viaGenerate, RenderOnlyRunner.IndexFileName)));
+        index.Pages.Should().HaveCount(144);
+        index.Pages.Single(p => p.Key == PageKey.ObjectiveDetails.Value).Png.Should().BeNull();
+    }
+
+    [Fact]
+    public void A_render_only_page_that_fails_is_named_with_exit_4_and_no_index_is_written()
+    {
+        Harness h = new() { Parallelism = 1 };
+        h.Renderer.Failure = page => page.Key == TestPlans.Monday ? new InvalidOperationException("PDFium could not decode the page") : null;
+        string dir = Path.Combine(h.Root, "png");
+
+        GenerateResult result = h.Run(h.Request(h.Options(), dir));
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(4);
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.FailedPage.Should().Be("Mon Jan 4");
+        result.Error.Should().Contain("Rendering pages").And.Contain("Day page 'Mon Jan 4' (PDF page 26)").And.Contain("PDFium could not decode the page");
+        result.OutputPath.Should().Be(dir);
+        File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Cancelling_render_only_stops_after_the_pages_in_flight_and_writes_no_index()
+    {
+        Harness h = new() { Parallelism = 1 };
+        using CancellationTokenSource cts = new();
+        h.Renderer.BeforeRender = page =>
+        {
+            if (page.Key == TestPlans.Overview)
+            {
+                cts.Cancel();
+            }
+        };
+        string dir = Path.Combine(h.Root, "png");
+
+        GenerateResult result = h.Run(h.Request(h.Options(), dir), cts.Token);
+
+        result.Cancelled.Should().BeTrue();
+        result.ExitCode.Should().Be(0);
+        result.Phase.Should().Be(GeneratePhase.Cancelled);
+        File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse();
+        h.Renderer.Rendered.Should().NotContain(TestPlans.Reflection, "pages after the cancel are not rendered");
     }
 
     [Fact]
@@ -603,6 +703,120 @@ public class GenerateOrchestratorTests
         goneResult.Error.Should().Contain("OneNote went away");
     }
 
+    private static readonly OneNoteException OpenHierarchyRefused =
+        new("OpenHierarchy", OneNoteHResults.NotebookDoesNotExist, "OneNote call OpenHierarchy failed: hrNotebookDoesNotExist (0x80042016)", null);
+
+    private static FakePreflight NoOpenNotebooks() =>
+        new(new PreflightResult(Array.Empty<(string, int)>(), Array.Empty<string>()) { NoOpenNotebooks = true });
+
+    [Fact]
+    public void With_no_open_notebooks_a_failing_first_open_hierarchy_is_reported_as_not_signed_in_with_exit_3()
+    {
+        Harness h = new() { Preflight = NoOpenNotebooks() };
+        h.Writer.CreateNotebookFailure = OpenHierarchyRefused;
+
+        GenerateResult result = h.Run();
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(3);
+        result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
+        result.Error.Should().Contain(GenerateText.SignInMessage).And.Contain("0x80042016");
+        result.OutputPath.Should().BeNull("no notebook was created");
+        h.Writer.Written.Should().BeEmpty();
+        h.Renderer.Rendered.Should().BeEmpty();
+        h.Log.Messages.Should().Contain(m => m.Contains("not signed in", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void With_notebooks_open_a_failing_first_open_hierarchy_stays_a_write_error_with_exit_5()
+    {
+        Harness h = new();
+        h.Writer.CreateNotebookFailure = OpenHierarchyRefused;
+
+        GenerateResult result = h.Run();
+
+        result.ExitCode.Should().Be(5);
+        result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
+        result.Error.Should().Contain("0x80042016").And.NotContain(GenerateText.SignInMessage);
+    }
+
+    [Fact]
+    public void With_no_open_notebooks_an_unavailable_onenote_keeps_its_own_message_and_a_later_failure_stays_a_write_error()
+    {
+        Harness gone = new() { Preflight = NoOpenNotebooks() };
+        gone.Writer.CreateNotebookFailure = OneNoteHResults.Map("OpenHierarchy", new COMException("The RPC server is unavailable.", OneNoteHResults.RpcServerUnavailable), null);
+        GenerateResult goneResult = gone.Run();
+        goneResult.ExitCode.Should().Be(3);
+        goneResult.Error.Should().Contain(OneNoteUnavailableException.DisconnectedMessage).And.NotContain(GenerateText.SignInMessage);
+
+        Harness later = new() { Preflight = NoOpenNotebooks(), Parallelism = 1, Capacity = 1 };
+        later.Writer.WritePageFailure = key => key == TestPlans.Monday ? new OneNoteException("UpdatePageContent", OneNoteHResults.PageReadOnly, "OneNote call UpdatePageContent failed: hrPageReadOnly (0x8004200C)", null) : null;
+        GenerateResult laterResult = later.Run();
+        laterResult.ExitCode.Should().Be(5, "only the run's first OpenHierarchy takes part in the sign-in test");
+        laterResult.Error.Should().NotContain(GenerateText.SignInMessage);
+    }
+
+    [Theory]
+    [InlineData(false, true, 3)]
+    [InlineData(true, true, 5)]
+    [InlineData(false, false, 0)]
+    public void The_two_part_sign_in_rule_over_the_real_preflight_and_the_in_memory_onenote(bool notebooksOpen, bool openHierarchyFails, int exitCode)
+    {
+        Harness h = new();
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        if (!notebooksOpen)
+        {
+            app.PreexistingNotebooks.Clear();
+        }
+
+        if (openHierarchyFails)
+        {
+            app.OpenHierarchyFailure = (_, type) => type == CreateFileType.Notebook ? OpenHierarchyRefused : null;
+        }
+
+        h.PreflightOverride = new GeneratePreflight(new FakeManifestValidator(), new FakeOneNoteLocator(true, app), new PreflightFileSystem(), new SidecarStore(), new DateEngine());
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run();
+
+        result.ExitCode.Should().Be(exitCode, result.Error);
+        app.CallsOf("GetHierarchy").Should().StartWith(":Notebooks", "the preflight asks OneNote for its open notebooks first");
+        if (exitCode == 0)
+        {
+            result.Success.Should().BeTrue("no open notebooks alone never blocks a run");
+            app.WrittenPages.Should().HaveCount(7);
+        }
+        else
+        {
+            result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
+            result.Error.Should().Contain("0x80042016");
+            (result.Error!.Contains(GenerateText.SignInMessage, StringComparison.Ordinal)).Should().Be(exitCode == 3);
+            app.WrittenPages.Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public void Onenote_going_away_while_pages_are_written_exits_3_saying_it_stopped_not_that_it_is_missing()
+    {
+        Harness h = new() { Parallelism = 1, Capacity = 1 };
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        app.UpdatePageContentFailure = xml => xml.Contains("content=\"day:2027-01-04\"", StringComparison.Ordinal)
+            ? OneNoteHResults.Map("UpdatePageContent", new COMException("The object invoked has disconnected from its clients.", OneNoteHResults.RpcDisconnected), xml)
+            : null;
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run();
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(3);
+        result.Phase.Should().Be(GeneratePhase.WritingPages);
+        result.FailedPage.Should().Be("Mon Jan 4");
+        result.Error.Should().Contain(OneNoteUnavailableException.DisconnectedMessage).And.Contain("RPC_E_DISCONNECTED (0x80010108)");
+        result.Error.Should().NotContain("is required", "OneNote is installed; it went away during the run");
+    }
+
     [Fact]
     public void An_unexpected_write_failure_maps_to_exit_5_with_the_page_named()
     {
@@ -616,6 +830,114 @@ public class GenerateOrchestratorTests
         result.FailedPage.Should().Be("Tue Jan 5");
         result.Error.Should().Contain("not enough space");
         h.Writer.Written.Should().HaveCount(4);
+    }
+
+    [Fact]
+    public void A_full_disk_while_writing_exits_5_with_the_space_the_run_needs()
+    {
+        Harness h = new() { Parallelism = 1, Capacity = 1 };
+        h.Writer.WritePageFailure = key => key == TestPlans.Tuesday ? new IOException("There is not enough space on the disk.", DiskSpace.ErrorDiskFull) : null;
+
+        GenerateResult result = h.Run();
+
+        result.ExitCode.Should().Be(5);
+        result.Phase.Should().Be(GeneratePhase.WritingPages);
+        result.FailedPage.Should().Be("Tue Jan 5");
+        result.Error.Should().Be("Writing pages, page Tue Jan 5: Not enough disk space in " + h.OutputFolder + ": about 2 MB is needed for 7 pages at 220 DPI.");
+    }
+
+    [Fact]
+    public void A_full_disk_reported_by_onenote_while_writing_exits_5_with_the_space_needed()
+    {
+        Harness h = new() { Parallelism = 1, Capacity = 1 };
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        app.UpdatePageContentFailure = xml => xml.Contains("content=\"setup\"", StringComparison.Ordinal)
+            ? OneNoteHResults.Map("UpdatePageContent", new COMException("There is not enough space on the disk.", DiskSpace.ErrorDiskFull), xml)
+            : null;
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+
+        GenerateResult result = h.Run();
+
+        result.ExitCode.Should().Be(5);
+        result.FailedPage.Should().Be("Setup");
+        result.Error.Should().EndWith(DiskSpace.Message(h.OutputFolder, 7, 220));
+    }
+
+    [Fact]
+    public void A_full_disk_while_rendering_exits_4_with_the_space_needed_and_writes_nothing()
+    {
+        Harness h = new();
+        h.Renderer.Failure = page => page.Key == PageKey.Cover ? new IOException("No space left on device", DiskSpace.Enospc) : null;
+
+        GenerateResult result = h.Run(h.Request(h.Options() with { Dpi = 300 }));
+
+        result.ExitCode.Should().Be(4);
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.FailedPage.Should().Be("Cover");
+        result.Error.Should().Be("Rendering pages, page Cover: " + DiskSpace.Message(h.OutputFolder, 7, 300));
+        h.Writer.Written.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_full_disk_during_render_only_exits_4_naming_the_render_folder()
+    {
+        Harness h = new();
+        string dir = Path.Combine(h.Root, "png");
+        h.Renderer.Failure = page => page.Key == TestPlans.Monday ? new IOException("There is not enough space on the disk.", DiskSpace.ErrorHandleDiskFull) : null;
+
+        GenerateResult result = h.Run(h.Request(h.Options() with { Dpi = 144 }, dir));
+
+        result.ExitCode.Should().Be(4);
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.Error.Should().EndWith("Not enough disk space in " + dir + ": about 1 MB is needed for 7 pages at 144 DPI.");
+    }
+
+    [SkippableFact]
+    public void A_real_enospc_while_render_only_writes_a_png_exits_4_with_the_space_needed()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux() && File.Exists("/dev/full"), "needs Linux and /dev/full, where every write fails with ENOSPC");
+        Harness h = new() { Parallelism = 1 };
+        string dir = Path.Combine(h.Root, "png");
+        Directory.CreateDirectory(dir);
+        File.CreateSymbolicLink(Path.Combine(dir, RenderOnlyRunner.FileNameFor(PageKey.Cover)), "/dev/full");
+
+        GenerateResult result = h.Run(h.Request(h.Options(), dir));
+
+        result.ExitCode.Should().Be(4, result.Error);
+        result.Phase.Should().Be(GeneratePhase.Rendering);
+        result.Error.Should().EndWith(DiskSpace.Message(dir, 7, 220), "the OS reports ENOSPC as IOException.HResult 28");
+        File.Exists(Path.Combine(dir, RenderOnlyRunner.IndexFileName)).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 2)]
+    [InlineData(4, 4)]
+    [InlineData(8, 4)]
+    [InlineData(64, 4)]
+    [InlineData(0, 1)]
+    public void The_default_render_worker_count_is_the_processor_count_capped_at_four(int processors, int workers)
+    {
+        GenerateOrchestratorOptions.DefaultParallelismFor(processors).Should().Be(workers);
+    }
+
+    [Fact]
+    public void Options_default_to_the_capped_worker_count_and_render_only_honors_the_setting()
+    {
+        GenerateOrchestratorOptions options = new() { FontFamily = "TeX Gyre Bonum" };
+        options.MaxDegreeOfParallelism.Should().Be(GenerateOrchestratorOptions.DefaultParallelismFor(Environment.ProcessorCount)).And.BeInRange(1, GenerateOrchestratorOptions.MaxDefaultParallelism);
+        GenerateOrchestratorOptions.DefaultParallelism.Should().Be(Math.Min(Environment.ProcessorCount, 4));
+
+        Harness single = new() { Parallelism = 1 };
+        single.Renderer.Delay = TimeSpan.FromMilliseconds(10);
+        single.Run(single.Request(single.Options(), Path.Combine(single.Root, "png"))).Success.Should().BeTrue();
+        single.Renderer.MaxConcurrent.Should().Be(1, "render-only runs the configured number of workers");
+
+        Harness three = new() { Parallelism = 3 };
+        three.Renderer.Delay = TimeSpan.FromMilliseconds(10);
+        three.Run(three.Request(three.Options(), Path.Combine(three.Root, "png"))).Success.Should().BeTrue();
+        three.Renderer.MaxConcurrent.Should().BeLessThanOrEqualTo(3);
     }
 
     [Fact]

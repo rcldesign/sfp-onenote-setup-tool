@@ -84,12 +84,19 @@ public sealed record GenerateResult
     public string? NextQuarterLink { get; init; }
 }
 
-/// <summary>Pre-run checks from the PRD error table: OneNote present and signed in, PDF matches, folder writable, name free.</summary>
+/// <summary>Pre-run checks from the PRD error table: OneNote present and reachable, PDF matches, folder writable, name free.</summary>
 /// <param name="Errors">Blocking problems, worded for the user, each paired with the exit code it maps to.</param>
 /// <param name="Warnings">Non-blocking notes (output folder under OneDrive, fallback font).</param>
 public sealed record PreflightResult(IReadOnlyList<(string Message, int ExitCode)> Errors, IReadOnlyList<string> Warnings)
 {
     public bool Ok => Errors.Count == 0;
+
+    /// <summary>
+    /// OneNote listed no open notebooks (GetHierarchy hsNotebooks), the first half of the PRD's not-signed-in test. It
+    /// does not block on its own: a signed-in OneNote with every notebook closed lists none too. The orchestrator
+    /// reports the sign-in message (exit 3) when the run's first OpenHierarchy then fails.
+    /// </summary>
+    public bool NoOpenNotebooks { get; init; }
 }
 
 /// <summary>Runs the checks before anything is rendered or written. Render-only skips the OneNote checks.</summary>

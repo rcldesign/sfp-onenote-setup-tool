@@ -7,8 +7,10 @@ namespace Sfp.OneNote.Tests.Writer;
 
 /// <summary>
 /// Stands in for the M2 page renderer: returns a 1 x 1 PNG for every page with one link placement per LinkSpec on the
-/// page (positions spread so they are distinguishable) and, on daily pages, a propagated legend slot. Records what it
-/// rendered, on which threads, and how many renders overlapped; can fail or stall on chosen pages.
+/// page (positions spread so they are distinguishable) and, on daily pages, a propagated legend slot. Like the real
+/// renderer, the pages without an image (Contents and the blank Objective Details parent, PageRenderer.HasNoImage) get
+/// a zero-length PNG, 0 x 0 pixels and no anchors. Records what it rendered, on which threads, and how many renders
+/// overlapped; can fail or stall on chosen pages.
 /// </summary>
 public sealed class FakePageRenderer : IPageRenderer
 {
@@ -61,6 +63,16 @@ public sealed class FakePageRenderer : IPageRenderer
             if (failure is not null)
             {
                 throw failure;
+            }
+
+            if (PageRenderer.HasNoImage(page.Type))
+            {
+                lock (_gate)
+                {
+                    _rendered.Add(page.Key);
+                }
+
+                return new RenderedPage(page.Key, Array.Empty<byte>(), 0, 0, Array.Empty<AnchorPlacement>());
             }
 
             List<AnchorPlacement> anchors = new();

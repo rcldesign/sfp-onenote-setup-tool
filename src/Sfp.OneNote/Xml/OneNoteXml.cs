@@ -38,6 +38,13 @@ public static class OneNoteXml
         return rounded.ToString("0.###", CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// A length in points as the inches one:Dimensions takes: points / 72, two decimals, invariant culture
+    /// (1112 pt gives "15.44").
+    /// </summary>
+    public static string Inches(double pt) =>
+        Math.Round(pt / 72.0, 2, MidpointRounding.AwayFromZero).ToString("0.00", CultureInfo.InvariantCulture);
+
     /// <summary>A font size for a style attribute: "10.0pt".</summary>
     public static string FontSize(double pt) => pt.ToString("0.0", CultureInfo.InvariantCulture) + "pt";
 

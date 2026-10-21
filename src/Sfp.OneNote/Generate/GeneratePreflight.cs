@@ -61,10 +61,12 @@ public sealed class PreflightFileSystem : IPreflightFileSystem
 }
 
 /// <summary>
-/// The PRD's pre-run checks in the order the Generate flow shows them: OneNote installed (ProgID resolves) and signed in
-/// (at least one notebook open), the PDF matching the manifest, the start month in range, the notebook name rule, the
-/// output folder writable, the OneDrive warning, the name collision rule, and the fallback-font warning. Render-only
-/// skips the OneNote and notebook checks and only needs its output folder.
+/// The PRD's pre-run checks in the order the Generate flow shows them: OneNote installed (ProgID resolves) and reachable
+/// (GetHierarchy answers), the PDF matching the manifest, the start month in range, the notebook name rule, the output
+/// folder writable, the OneDrive warning, the name collision rule, and the fallback-font warning. An empty notebook
+/// list is recorded (<see cref="PreflightResult.NoOpenNotebooks"/>), not refused: the PRD's not-signed-in row needs it
+/// and a failing first OpenHierarchy, which the orchestrator checks. Render-only skips the OneNote and notebook checks
+/// and only needs its output folder.
 /// </summary>
 public sealed class GeneratePreflight : IGeneratePreflight
 {
@@ -107,10 +109,7 @@ public sealed class GeneratePreflight : IGeneratePreflight
         List<string> warnings = new();
         GenerateOptions o = request.Options;
 
-        if (!request.RenderOnly)
-        {
-            CheckOneNote(errors);
-        }
+        bool noOpenNotebooks = !request.RenderOnly && CheckOneNote(errors);
 
         ValidationResult pdf = _validator.Validate(request.Manifest, o.PdfPath);
         errors.AddRange(pdf.Errors.Select(e => (e, ValidationError)));
@@ -132,10 +131,10 @@ public sealed class GeneratePreflight : IGeneratePreflight
         }
 
         warnings.AddRange(_fontWarnings);
-        return new PreflightResult(errors, warnings);
+        return new PreflightResult(errors, warnings) { NoOpenNotebooks = noOpenNotebooks };
     }
 
-    /// <summary>True when the hierarchy XML lists at least one notebook (the sign-in rule).</summary>
+    /// <summary>True when the hierarchy XML lists at least one notebook (the first half of the sign-in rule).</summary>
     public static bool HasOpenNotebook(string hierarchyXml)
     {
         if (string.IsNullOrWhiteSpace(hierarchyXml))
@@ -154,21 +153,22 @@ public sealed class GeneratePreflight : IGeneratePreflight
         }
     }
 
-    private void CheckOneNote(List<(string Message, int ExitCode)> errors)
+    /// <summary>
+    /// OneNote installed and answering GetHierarchy; a failure is an error with exit 3. Returns true when OneNote answered
+    /// with no open notebook, which is recorded for the orchestrator rather than refused (see <see cref="PreflightResult.NoOpenNotebooks"/>).
+    /// </summary>
+    private bool CheckOneNote(List<(string Message, int ExitCode)> errors)
     {
         if (!_oneNote.IsInstalled)
         {
             errors.Add((OneNoteUnavailableException.UserMessage, OneNoteUnavailable));
-            return;
+            return false;
         }
 
         try
         {
             string xml = _oneNote.Open().GetHierarchy(null, HierarchyScope.Notebooks);
-            if (!HasOpenNotebook(xml))
-            {
-                errors.Add((GenerateText.SignInMessage, OneNoteUnavailable));
-            }
+            return !HasOpenNotebook(xml);
         }
         catch (OneNoteUnavailableException ex)
         {
@@ -178,6 +178,8 @@ public sealed class GeneratePreflight : IGeneratePreflight
         {
             errors.Add(("OneNote could not be reached: " + ex.Message, OneNoteUnavailable));
         }
+
+        return false;
     }
 
     private void CheckRenderFolder(string? dir, List<(string Message, int ExitCode)> errors)

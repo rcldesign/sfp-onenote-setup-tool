@@ -91,12 +91,21 @@ public static class OneNoteHResults
         [MergeFailed] = "hrMergeFailed",
     };
 
+    /// <summary>The call name of creating the OneNote.Application object, as the log and the exceptions carry it.</summary>
+    public const string ActivateCall = "activate";
+
     /// <summary>True for the two results that mean "OneNote is busy, call again": the wrapper retries once after a delay.</summary>
     public static bool IsBusy(int hresult) => hresult is RpcCallRejected or RpcServerCallRetryLater;
 
     /// <summary>True when the failure means OneNote desktop is not installed, not registered or not running.</summary>
     public static bool IsUnavailable(int hresult) =>
         hresult is ClassNotRegistered or ServerExecFailed or RpcServerUnavailable or RpcDisconnected or ObjectNotConnected or MonikerUnavailable;
+
+    /// <summary>
+    /// True for the unavailable results that mean the COM server went away after the object existed (the RPC server is
+    /// gone, or the object disconnected from its clients), rather than that it could not be created.
+    /// </summary>
+    public static bool IsDisconnected(int hresult) => hresult is RpcServerUnavailable or RpcDisconnected or ObjectNotConnected;
 
     /// <summary>True when OneNote rejected the XML or could not insert the content it described.</summary>
     public static bool IsXmlRejected(int hresult) =>
@@ -111,18 +120,24 @@ public static class OneNoteHResults
 
     /// <summary>
     /// Maps a COM failure of <paramref name="call"/> to the typed exception the orchestrator handles. The busy results
-    /// are not mapped here (the caller retries them and raises <see cref="OneNoteBusyException"/> itself).
+    /// are not mapped here (the caller retries them and raises <see cref="OneNoteBusyException"/> itself). An unavailable
+    /// result opens with the install message when it comes from activation (<see cref="ActivateCall"/>) or from a missing
+    /// registration, and with <see cref="OneNoteUnavailableException.DisconnectedMessage"/> when OneNote went away during
+    /// a later call (<see cref="IsDisconnected"/>), since OneNote is installed then.
     /// </summary>
     public static OneNoteException Map(string call, COMException error, string? xml)
     {
+        ArgumentNullException.ThrowIfNull(error);
         int hr = error.HResult;
         string detail = string.IsNullOrWhiteSpace(error.Message) ? "" : ": " + error.Message.Trim();
         if (IsUnavailable(hr))
         {
+            bool disconnected = !string.Equals(call, ActivateCall, StringComparison.Ordinal) && IsDisconnected(hr);
+            string lead = disconnected ? OneNoteUnavailableException.DisconnectedMessage : OneNoteUnavailableException.UserMessage;
             return new OneNoteUnavailableException(
                 call,
                 hr,
-                string.Format(CultureInfo.InvariantCulture, "{0} {1} failed with {2}{3}", OneNoteUnavailableException.UserMessage, call, Describe(hr), detail),
+                string.Format(CultureInfo.InvariantCulture, "{0} {1} failed with {2}{3}", lead, call, Describe(hr), detail),
                 error);
         }
 

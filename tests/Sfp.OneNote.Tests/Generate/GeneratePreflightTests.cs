@@ -49,6 +49,7 @@ public class GeneratePreflightTests
 
         result.Ok.Should().BeTrue(string.Join("; ", result.Errors.Select(e => e.Message)));
         result.Warnings.Should().BeEmpty();
+        result.NoOpenNotebooks.Should().BeFalse();
         h.Locator.OpenCalls.Should().Be(1);
         h.App.CallsOf("GetHierarchy").Should().Equal(":Notebooks");
         h.Validator.Paths.Should().Equal("/planner/SFP_No_Dates.pdf");
@@ -67,14 +68,17 @@ public class GeneratePreflightTests
     }
 
     [Fact]
-    public void No_open_notebook_means_not_signed_in()
+    public void No_open_notebook_is_recorded_but_does_not_block_on_its_own()
     {
         Harness h = new();
         h.App.PreexistingNotebooks.Clear();
 
         PreflightResult result = h.Build().Check(Harness.Request());
 
-        result.Errors.Should().Contain((GenerateText.SignInMessage, 3));
+        result.Ok.Should().BeTrue("a signed-in OneNote with every notebook closed lists none either; the first OpenHierarchy decides");
+        result.Errors.Should().BeEmpty();
+        result.NoOpenNotebooks.Should().BeTrue();
+        result.Warnings.Should().BeEmpty();
     }
 
     [Fact]
@@ -207,6 +211,7 @@ public class GeneratePreflightTests
         PreflightResult unwritable = h.Build().Check(Harness.Request(renderOnly: true, renderDir: "/png"));
 
         ok.Ok.Should().BeTrue(string.Join("; ", ok.Errors.Select(e => e.Message)));
+        ok.NoOpenNotebooks.Should().BeFalse("render-only never asks OneNote");
         missing.Errors.Should().ContainSingle(e => e.ExitCode == 2 && e.Message.Contains("output folder", StringComparison.Ordinal));
         unwritable.Errors.Should().Equal((GenerateText.FolderNotWritable("/png", "read only"), 2));
         h.Locator.OpenCalls.Should().Be(0);
@@ -215,14 +220,19 @@ public class GeneratePreflightTests
     [Fact]
     public void Errors_keep_the_prd_order_onenote_first_then_validation()
     {
-        Harness h = new() { Validator = new FakeManifestValidator(ValidationResult.Fail("Expected 132 pages, found 130")) };
-        h.App.PreexistingNotebooks.Clear();
+        Harness h = new()
+        {
+            Locator = new FakeOneNoteLocator(false, () => throw new InvalidOperationException("must not be called")),
+            Validator = new FakeManifestValidator(ValidationResult.Fail("Expected 132 pages, found 130")),
+        };
         h.Fs.Directories.Add(Path.Combine(Out, "SFP Q1 2027"));
 
         PreflightResult result = h.Build().Check(Harness.Request());
 
         result.Errors.Select(e => e.ExitCode).Should().Equal(3, 2, 2);
-        result.Errors[0].Message.Should().Be(GenerateText.SignInMessage);
+        result.Errors[0].Message.Should().Be(OneNoteUnavailableException.UserMessage);
+        result.Errors[1].Message.Should().Be("Expected 132 pages, found 130");
+        result.Errors[2].Message.Should().Be(GenerateText.Collision("SFP Q1 2027"));
     }
 
     [Theory]
