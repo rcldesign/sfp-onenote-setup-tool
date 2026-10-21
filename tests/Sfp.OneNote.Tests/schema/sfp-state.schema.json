@@ -51,6 +51,11 @@
       "propertyNames": { "pattern": "^(objective|standingGoal|metricName|habit):[0-9]+$" },
       "additionalProperties": { "type": "string", "minLength": 1 }
     },
+    "unreadPages": {
+      "description": "IDs of the pages a sidecar rebuild could not read; the next run reads them, and any page the sidecar does not record, before planning. Absent or empty when every page was read.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
     "timeBlocks": { "$ref": "#/definitions/timeBlockWindow" }
   },
   "definitions": {

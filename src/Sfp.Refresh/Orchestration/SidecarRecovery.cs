@@ -57,8 +57,9 @@ public sealed class SidecarRecovery
     }
 
     /// <summary>
-    /// Returns the sidecar as given when every ID in it resolves, else rebuilds it. <paramref name="toolVersion"/> is
-    /// recorded when there was no previous sidecar to copy it from.
+    /// Returns the sidecar as given when every ID in it resolves, else rebuilds it. A consistent sidecar that lists pages
+    /// its rebuild could not read is completed instead (<see cref="Complete"/>). <paramref name="toolVersion"/> is recorded
+    /// when there was no previous sidecar to copy it from.
     /// </summary>
     public RecoveryResult Recover(NotebookHandle notebook, Sidecar? sidecar, string toolVersion)
     {
@@ -67,15 +68,78 @@ public sealed class SidecarRecovery
         HierarchyNotebook tree = HierarchyXmlReader.Notebook(app.GetHierarchy(notebook.Id, HierarchyScope.Pages));
         if (sidecar is not null && IsConsistent(sidecar, tree))
         {
+            if (sidecar.UnreadPages.Count > 0)
+            {
+                (Sidecar completed, IReadOnlyDictionary<string, PageXml> read) = Complete(notebook, tree, sidecar);
+                return new RecoveryResult(completed, false, read, completed.UnreadPages.Count > 0 ? new[] { UnreadWarning(completed.UnreadPages.Count) } : Array.Empty<string>());
+            }
+
             return new RecoveryResult(sidecar, false, new Dictionary<string, PageXml>(StringComparer.Ordinal), Array.Empty<string>());
         }
 
         log.Warning(sidecar is null ? "No sidecar for {Name}; rebuilding it from the notebook" : "Sidecar for {Name} holds IDs that no longer resolve; rebuilding it from the notebook", notebook.Name);
         (Sidecar rebuilt, IReadOnlyDictionary<string, PageXml> pages) = Rebuild(notebook, tree, sidecar, toolVersion);
-        return new RecoveryResult(rebuilt, true, pages, new[] { RebuiltWarning });
+        return new RecoveryResult(rebuilt, true, pages, rebuilt.UnreadPages.Count > 0 ? new[] { RebuiltWarning, UnreadWarning(rebuilt.UnreadPages.Count) } : new[] { RebuiltWarning });
     }
 
-    /// <summary>True when the notebook ID, every section group ID, every section ID and every page ID the sidecar records are present in the hierarchy.</summary>
+    /// <summary>"3 page(s) of the notebook could not be read; Refresh reads them again on the next run."</summary>
+    public static string UnreadWarning(int count) =>
+        string.Format(CultureInfo.InvariantCulture, "{0} page(s) of the notebook could not be read; Refresh reads them again on the next run.", count);
+
+    /// <summary>
+    /// The completion step for a sidecar whose rebuild could not read some pages: every page of the hierarchy the sidecar
+    /// does not record (those pages among them) is read; each that carries a page key the sidecar lacks is added with its
+    /// anchors re-found as in a rebuild, and the pages that still cannot be read stay listed for the next run.
+    /// </summary>
+    public (Sidecar Sidecar, IReadOnlyDictionary<string, PageXml> Pages) Complete(NotebookHandle notebook, HierarchyNotebook tree, Sidecar sidecar)
+    {
+        ArgumentNullException.ThrowIfNull(notebook);
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(sidecar);
+        HashSet<string> recorded = sidecar.Pages.Values.Select(p => p.PageId).ToHashSet(StringComparer.Ordinal);
+        Dictionary<string, PageXml> pages = new(StringComparer.Ordinal);
+        Dictionary<string, (HierarchySection Section, HierarchyPage Page)> located = new(StringComparer.Ordinal);
+        List<string> unread = new();
+        foreach ((HierarchySection section, HierarchyPage page) in tree.Pages.Where(p => !recorded.Contains(p.Page.Id)))
+        {
+            PageXml? xml = TryRead(page);
+            if (xml is null)
+            {
+                unread.Add(page.Id);
+                continue;
+            }
+
+            string? key = xml.SfpKey;
+            if (string.IsNullOrEmpty(key) || sidecar.Pages.ContainsKey(key) || !located.TryAdd(key, (section, page)))
+            {
+                continue;
+            }
+
+            pages[key] = xml;
+        }
+
+        Quarter quarter = dates.Build(sidecar.Quarter);
+        NotebookPlan plan = plans.Build(manifest, quarter, SidecarPlanOptions.ToGenerateOptions(sidecar.Quarter, sidecar.PlanOptions));
+        SlotCatalog catalog = new(manifest, dates, quarter, WindowFor(sidecar, pages));
+        Dictionary<string, SidecarPage> records = new(sidecar.Pages, StringComparer.Ordinal);
+        foreach ((string key, (HierarchySection section, HierarchyPage page)) in located)
+        {
+            PageSpec? spec = plan.FindPage(new PageKey(key));
+            IReadOnlyDictionary<string, string> anchors = spec is null
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                : MatchAnchors(spec, pages[key], catalog, plan, manifest.OneNote);
+            records[key] = new SidecarPage { PageId = page.Id, SectionId = section.Id, Anchors = anchors };
+        }
+
+        log.Information("Sidecar for {Name} completed: {Added} pages added, {Unread} still unread", notebook.Name, located.Count, unread.Count);
+        return (sidecar with { Pages = records, UnreadPages = unread }, pages);
+    }
+
+    /// <summary>
+    /// True when the notebook ID, every section group ID, every section ID and every page ID the sidecar records are
+    /// present in the hierarchy. The pages a rebuild could not read (<see cref="Sidecar.UnreadPages"/>) are not checked:
+    /// they call for the completion step, not a rebuild.
+    /// </summary>
     public static bool IsConsistent(Sidecar sidecar, HierarchyNotebook tree)
     {
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -94,7 +158,8 @@ public sealed class SidecarRecovery
     }
 
     /// <summary>
-    /// Walks every page of the hierarchy, reads its sfp.key, and rebuilds the page, section and anchor maps; the history
+    /// Walks every page of the hierarchy, reads its sfp.key, and rebuilds the page, section and anchor maps, listing the
+    /// pages that could not be read (<see cref="Sidecar.UnreadPages"/>) for the next run's completion step; the history
     /// of a stale sidecar (stamps, frozen days, previous notebook, plan options, confirmed inked values, Time Blocks
     /// window) is kept, and its plan
     /// options shape the plan the pages are matched against.
@@ -107,11 +172,18 @@ public sealed class SidecarRecovery
 
         Dictionary<string, PageXml> pages = new(StringComparer.Ordinal);
         Dictionary<string, (HierarchySection Section, HierarchyPage Page)> located = new(StringComparer.Ordinal);
+        List<string> unread = new();
         foreach ((HierarchySection section, HierarchyPage page) in tree.Pages)
         {
             PageXml? xml = TryRead(page);
-            string? key = xml?.SfpKey;
-            if (xml is null || string.IsNullOrEmpty(key))
+            if (xml is null)
+            {
+                unread.Add(page.Id);
+                continue;
+            }
+
+            string? key = xml.SfpKey;
+            if (string.IsNullOrEmpty(key))
             {
                 continue;
             }
@@ -171,6 +243,7 @@ public sealed class SidecarRecovery
             PreviousNotebook = previous?.PreviousNotebook,
             PlanOptions = previous?.PlanOptions,
             ConfirmedInked = previous?.ConfirmedInked ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            UnreadPages = unread,
             TimeBlocks = previous?.TimeBlocks,
         };
         return (rebuilt, pages);

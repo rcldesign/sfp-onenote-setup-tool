@@ -60,6 +60,12 @@ public sealed record Sidecar
     public IReadOnlyDictionary<string, string> ConfirmedInked { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// <summary>
+    /// IDs of the pages a sidecar rebuild could not read (OneNote still downloading a moved notebook, say): the next run
+    /// reads them, and any page of the notebook the sidecar does not record, before planning. Empty when every page was read.
+    /// </summary>
+    public IReadOnlyList<string> UnreadPages { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// The Time Blocks window the daily pages were generated with (their rows are baked art), so Refresh places calendar
     /// events in the rows the pages show; null in files written before it was recorded.
     /// </summary>
