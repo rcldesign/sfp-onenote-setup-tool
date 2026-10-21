@@ -98,6 +98,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(RefreshNowCommand))]
     [NotifyCanExecuteChangedFor(nameof(ReloadNotebooksCommand))]
     [NotifyCanExecuteChangedFor(nameof(CancelCommand))]
+    [NotifyPropertyChangedFor(nameof(CanSelectNotebook))]
     private bool _isBusy;
 
     [ObservableProperty]
@@ -152,6 +153,9 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     public ObservableCollection<string> SetupLines { get; } = new();
 
     public bool HasSelection => SelectedNotebook is not null;
+
+    /// <summary>The notebook list is enabled while no run is on, so the selection cannot move under a run.</summary>
+    public bool CanSelectNotebook => !IsBusy;
 
     /// <summary>The window is closing and waits for runs to stop (<see cref="BeginClosing"/>); no run or reload starts.</summary>
     public bool IsClosing { get; private set; }
@@ -252,33 +256,21 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>The request for the selected notebook, dated by the clock at the moment it is built (never the app's start date).</summary>
-    public RefreshRequest? ToRequest(bool dryRun)
-    {
-        if (SelectedNotebook is not { } notebook)
-        {
-            return null;
-        }
+    public RefreshRequest? ToRequest(bool dryRun) => SelectedNotebook is { } notebook ? RequestFor(notebook, dryRun) : null;
 
-        return new RefreshRequest(
-            notebook.Name,
-            NotebooksFolderOf(notebook.Notebook),
-            IncludeCalendar,
-            Math.Max(0, HorizonDays),
-            dryRun,
-            WriteInkedValues,
-            _env.CurrentDate());
-    }
-
-    /// <summary>Runs a dry run or a real refresh and fills the listing and the summary. A call while a run is on does nothing.</summary>
+    /// <summary>
+    /// Runs a dry run or a real refresh of the selected notebook and fills the listing and the summary. The notebook is
+    /// captured when the run starts: the request and the summary's headline are about it, whatever is selected later. A
+    /// call while a run is on, or while the window is closing, does nothing.
+    /// </summary>
     public Task RunAsync(bool dryRun)
     {
-        RefreshRequest? request = ToRequest(dryRun);
-        if (request is null || IsBusy || IsClosing)
+        if (SelectedNotebook is not { } notebook || IsBusy || IsClosing)
         {
             return Task.CompletedTask;
         }
 
-        _running = RunCoreAsync(request, dryRun);
+        _running = RunCoreAsync(RequestFor(notebook, dryRun), dryRun, notebook);
         return _running;
     }
 
@@ -351,7 +343,16 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         _cts = null;
     }
 
-    private async Task RunCoreAsync(RefreshRequest request, bool dryRun)
+    private RefreshRequest RequestFor(KnownNotebookItem notebook, bool dryRun) => new(
+        notebook.Name,
+        NotebooksFolderOf(notebook.Notebook),
+        IncludeCalendar,
+        Math.Max(0, HorizonDays),
+        dryRun,
+        WriteInkedValues,
+        _env.CurrentDate());
+
+    private async Task RunCoreAsync(RefreshRequest request, bool dryRun, KnownNotebookItem notebook)
     {
         IsBusy = true;
         _cancelRequested = false;
@@ -389,7 +390,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         // Only the orchestrator's own cancelled result counts as a cancel: a run that failed or finished after Cancel was
         // pressed (the page in flight hit an error, or Cancel came after the last page) is reported as what it was.
         bool cancelled = _cancelRequested && !result.Success && string.Equals(result.Error, CancelledError, StringComparison.Ordinal);
-        Apply(result, dryRun, result.LogPath ?? log.Path, cancelled);
+        Apply(result, dryRun, result.LogPath ?? log.Path, cancelled, notebook);
         if (!dryRun && result.Success)
         {
             await ReloadAsync();
@@ -518,7 +519,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void Apply(RefreshResult result, bool dryRun, string logPath, bool cancelled)
+    private void Apply(RefreshResult result, bool dryRun, string logPath, bool cancelled, KnownNotebookItem notebook)
     {
         RefreshSummary? summary = result.Summary;
         if (summary is not null)
@@ -549,7 +550,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
                 summary.Changes.Count(c => c.Blocked));
             string headline = dryRun
                 ? "Preview only: nothing was written."
-                : string.Format(CultureInfo.InvariantCulture, "Refreshed {0}.", SelectedNotebook?.Name ?? "the notebook");
+                : string.Format(CultureInfo.InvariantCulture, "Refreshed {0}.", notebook.Name);
             Summary = new RefreshRunSummary(
                 headline,
                 summary.PagesTouched,
