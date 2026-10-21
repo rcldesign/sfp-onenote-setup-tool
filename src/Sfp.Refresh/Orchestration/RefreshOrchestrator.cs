@@ -155,7 +155,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         OpenedNotebook? opened = opener.Open(request.NotebookName, request.NotebooksFolder, services.SearchFolders, found);
         if (opened is null)
         {
-            return Fail(NotFoundExitCode, opener.Problem ?? $"Notebook '{request.NotebookName}' was not found: no sidecar names it, OneNote does not list it and no folder holds it. Generate it first, or pass --folder with the folder that holds it.", clock);
+            state.OpenerStopped = opener.Problem is not null;
+            return Fail(NotFoundExitCode, opener.Problem ??$"Notebook '{request.NotebookName}' was not found: no sidecar names it, OneNote does not list it and no folder holds it. Generate it first, or pass --folder with the folder that holds it.", clock);
         }
 
         state.SidecarPath = opened.SidecarPath;
@@ -854,21 +855,35 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
     /// <summary>
     /// The PRD's "three consecutive failures raise a Windows toast", updated once per real run from how it ended: a run
-    /// that succeeded clears the streak; a run whose every Setup calendar source failed (exit 6) or that OneNote failed
-    /// (exit 3 or 5) adds one, and from the third in a row on each such run raises the toast. Dry runs, cancelled runs, a
-    /// notebook that was not found (exit 2), a run refused because another run of the notebook holds its lock, and runs
-    /// whose sidecar path never became known leave the streak alone. The
-    /// counter file lives beside the sidecar; failing to update it is logged, never fatal.
+    /// that succeeded clears the streak; a run whose every Setup calendar source failed (exit 6), that OneNote failed
+    /// (exit 3 or 5), that the opener stopped with a <see cref="NotebookOpener.Problem"/> (exit 2: another notebook of the
+    /// same name, the save guard, or the URL the sidecar records would not open), or that was refused by a stale lock that
+    /// could not be taken over (exit 5, <see cref="RefreshLock.IsStuck"/>) adds one, and from the third in a row on each
+    /// such run raises the toast with the run's error. Dry runs, cancelled runs, a notebook that was simply not found
+    /// (exit 2 with no Problem), a run refused because another run of the notebook really holds its lock, and runs whose
+    /// sidecar path never became known leave the streak alone. The counter file lives beside the sidecar; failing to
+    /// update it is logged, never fatal.
     /// </summary>
     private void TrackStreak(RefreshRequest request, RunState state, RefreshResult result)
     {
-        if (request.DryRun || state.Cancelled || state.Refused || state.SidecarPath is null)
+        if (request.DryRun || state.Cancelled || state.SidecarPath is null)
         {
             return;
         }
 
         try
         {
+            if (state.Refused)
+            {
+                if (!RefreshLock.IsStuck(state.SidecarPath, services.Clock()))
+                {
+                    // Another run really holds the lock: this run is no failure of the notebook.
+                    return;
+                }
+
+                services.Log.Warning("The Refresh lock {Path} is stale but could not be taken over, so every run of {Name} is refused until it is deleted", RefreshLock.PathBeside(state.SidecarPath), request.NotebookName);
+            }
+
             FailureCounter counter = FailureCounter.LoadBeside(state.SidecarPath);
             ISourceFailureNotifier notifier = services.Notifier ?? new LogOnlyNotifier(services);
             DateTimeOffset now = services.Clock();
@@ -887,6 +902,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                     CalendarImportRunner.Track(state.SetupFetch, counter, notifier, now, services.Log);
                     break;
                 case OneNoteUnavailableExitCode or WriteFailureExitCode:
+                case NotFoundExitCode when state.OpenerStopped:
                     counter.RecordTotalFailure(now, result.Error);
                     counter.Save();
                     services.Log.Warning("Refresh of {Name} failed ({Streak} runs in a row): {Error}", request.NotebookName, counter.ConsecutiveTotalFailures, result.Error);
@@ -934,6 +950,9 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         /// <summary>True when another run of the notebook held the lock, so this one did not start.</summary>
         public bool Refused { get; set; }
+
+        /// <summary>True when the opener stopped the run with a <see cref="NotebookOpener.Problem"/> (exit 2), which counts toward the streak.</summary>
+        public bool OpenerStopped { get; set; }
     }
 
     private sealed record WriteOutcome(
