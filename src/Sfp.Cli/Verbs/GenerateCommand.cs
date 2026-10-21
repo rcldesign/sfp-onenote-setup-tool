@@ -164,9 +164,9 @@ public static class GenerateCommand
         bool renderOnly = !string.IsNullOrWhiteSpace(args.RenderOnly);
         GenerateRequest request = new(options, manifest, templatesDir, renderOnly, renderOnly ? Path.GetFullPath(args.RenderOnly!) : null);
 
-        // The verb prints its own progress, summary and failure block, so the log's console sink keeps to warnings; the
-        // errors, which the failure block reports, go to the log file only. A log folder that cannot be used moves the
-        // log to the temp folder with a one-line notice instead of stopping the run.
+        // The verb prints its own progress, summary, warnings and failure block, so the log's console sink shows nothing
+        // (RunLog.ConsoleShows): those lines are the only console output and the log file keeps every event. A log folder
+        // that cannot be used moves the log to the temp folder with a one-line notice instead of stopping the run.
         RunLog? started = RunLog.StartWithFallback("generate", args.Quiet, stderr, logDirectory, printsOwnProgress: true);
         if (started is null)
         {
@@ -443,7 +443,9 @@ public static class GenerateCommand
                 stderr.WriteLine("Log: " + result.LogPath);
             }
 
-            if (!request.RenderOnly && !string.IsNullOrEmpty(result.OutputPath))
+            // Left for inspection only when no warning says the notebook could not be deleted: a notebook OneNote would not
+            // close, or whose folder could not be deleted, has that warning above, which says what to do with it.
+            if (!request.RenderOnly && !string.IsNullOrEmpty(result.OutputPath) && !result.Warnings.Any(GenerateMessages.IsPartialNotebookNotDeleted))
             {
                 stderr.WriteLine("The partial notebook at " + result.OutputPath + " was left in place for inspection.");
             }
@@ -579,8 +581,7 @@ public static class GenerateCommand
             try
             {
                 // The fallback-font warning reaches the user once, in the run's warnings (the preflight carries
-                // fonts.Warnings) printed with the summary; logged here at Information so the console, which shows the
-                // log's warnings, does not print it a second time.
+                // fonts.Warnings) printed with the summary; the log file keeps it here.
                 foreach (string warning in fonts.Warnings)
                 {
                     log.Information("Font fallback (reported with the summary): {Warning}", warning);

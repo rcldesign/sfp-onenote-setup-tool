@@ -179,13 +179,67 @@ public class RefreshCommandTests
         lockedCode.Should().Be(RefreshOrchestrator.WriteFailureExitCode);
         Occurrences(lockedShown, "not started").Should().Be(1, lockedShown);
         lockedLog.Should().Contain("[INF] Refresh of SFP Q1 2027 not started: ");
+        (refusedShown + conflictedShown + lockedShown).Should().NotMatchRegex(LogLevelToken, "no line of the run log reaches the console");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_run_the_opener_stops_is_shown_once_with_or_without_quiet(bool quiet)
+    {
+        // Fix round 4 cliapp-1 (case a): the sidecar's notebook is closed and another notebook of that name is open, so the
+        // opener stops the run (exit 2). It logs its problem at Warning and the verb prints it as the failure, so without
+        // --quiet the run log's console sink showed it a second time. The verb's lines are the only console output now.
+        FakeNotebook trial = FakeNotebook.Generate(folder: TestPaths.NewTempDir("shown-once-trial"));
+        RefreshHarness h = new(app: trial.App);
+        h.App.Close(h.Notebook.NotebookId);
+
+        (int code, string shown, string log) = RunOverHarness(h, "opener-" + quiet, quiet);
+
+        code.Should().Be(RefreshOrchestrator.NotFoundExitCode, shown);
+        Occurrences(shown, "Refresh failed: ").Should().Be(1, shown);
+        Occurrences(shown, trial.NotebookPath).Should().Be(1, "the problem names the other notebook once (quiet {0}): {1}", quiet, shown);
+        shown.Should().NotMatchRegex(LogLevelToken, "no line of the run log reaches the console (quiet {0})", quiet);
+        log.Should().MatchRegex(@"\[WRN\] [^\n]*" + System.Text.RegularExpressions.Regex.Escape(trial.NotebookPath), "the log file keeps the opener's problem");
+    }
+
+    [SkippableTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_stale_lock_that_cannot_be_removed_is_shown_once_with_or_without_quiet(bool quiet)
+    {
+        // Fix round 4 cliapp-1 (case c): a stale lock that cannot be deleted refuses the run (exit 5). The lock logged its
+        // takeover at Warning, the orchestrator logged the stuck lock at Warning, and the verb prints the refusal; without
+        // --quiet the console showed all three. The verb's line is the only console output now.
+        RefreshHarness h = new();
+        string lockPath = RefreshLock.PathBeside(h.SidecarPath);
+        File.WriteAllText(lockPath, string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{{ \"token\": \"other\", \"processId\": 4242, \"processStart\": null, \"machine\": \"OTHER-PC\", \"acquired\": \"{RefreshHarness.Now.AddHours(-3):O}\" }}"));
+        using Undeletable? stuck = Undeletable.Make(lockPath);
+        Skip.If(stuck is null, "This system cannot make the lock file undeletable (chattr +i needs root off Windows).");
+
+        (int code, string shown, string log) = RunOverHarness(h, "stuck-" + quiet, quiet);
+
+        code.Should().Be(RefreshOrchestrator.WriteFailureExitCode, shown);
+        Occurrences(shown, "Refresh failed: ").Should().Be(1, shown);
+        Occurrences(shown, "is stale").Should().Be(1, "the refusal says it once (quiet {0}): {1}", quiet, shown);
+        Occurrences(shown, lockPath).Should().Be(1, "only the refusal names the lock file (quiet {0}): {1}", quiet, shown);
+        shown.Should().NotMatchRegex(LogLevelToken, "no line of the run log reaches the console (quiet {0})", quiet);
+        log.Should().Contain("is stale but could not be taken over", "the log file keeps the orchestrator's warning");
     }
 
     /// <summary>
-    /// Runs the verb without --quiet over a real orchestrator on <paramref name="h"/>, with both console streams captured,
-    /// where the run log's console sink writes. Returns the exit code, everything shown and the run's log file.
+    /// The level of a run log line, as its console line ("[09:30:00 WRN] ...") and its file line ("... [WRN] ...") show
+    /// it; no line the verb prints itself has one.
     /// </summary>
-    private static (int Code, string Shown, string Log) RunOverHarness(RefreshHarness h, string name)
+    private const string LogLevelToken = @"\b(VRB|DBG|INF|WRN|ERR|FTL)\]";
+
+    /// <summary>
+    /// Runs the verb over a real orchestrator on <paramref name="h"/>, with both console streams captured, where the run
+    /// log's console sink writes. Returns the exit code, everything shown and the run's log file.
+    /// </summary>
+    private static (int Code, string Shown, string Log) RunOverHarness(RefreshHarness h, string name, bool quiet = false)
     {
         string logs = Path.Combine(LogDir, "shown-once-" + name);
         using StringWriter stdout = new(System.Globalization.CultureInfo.InvariantCulture);
@@ -199,7 +253,7 @@ public class RefreshCommandTests
         try
         {
             code = RefreshCommand.Run(
-                new RefreshArgs { Notebook = h.Name, Folder = h.Folder, Today = "2027-01-04", Templates = TestPaths.TemplatesDir },
+                new RefreshArgs { Notebook = h.Name, Folder = h.Folder, Today = "2027-01-04", Templates = TestPaths.TemplatesDir, Quiet = quiet },
                 stdout,
                 stderr,
                 (_, _, _, log, logPath) => new RefreshOrchestrator(h.Services with { Log = log, LogPath = logPath }),
@@ -216,6 +270,64 @@ public class RefreshCommandTests
 
     private static int Occurrences(string text, string value) =>
         System.Text.RegularExpressions.Regex.Matches(text, System.Text.RegularExpressions.Regex.Escape(value)).Count;
+
+    /// <summary>
+    /// Keeps a file from being deleted until disposed, as StoppedRunStreakTests does: on Windows a handle open without
+    /// delete sharing; elsewhere the immutable attribute (chattr +i), which needs root.
+    /// </summary>
+    private sealed class Undeletable : IDisposable
+    {
+        private readonly string path;
+        private readonly FileStream? handle;
+
+        private Undeletable(string path, FileStream? handle)
+        {
+            this.path = path;
+            this.handle = handle;
+        }
+
+        /// <summary>The file made undeletable, or null when this system cannot do it.</summary>
+        public static Undeletable? Make(string path)
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                return new Undeletable(path, new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+            }
+
+            return Chattr("+i", path) ? new Undeletable(path, null) : null;
+        }
+
+        public void Dispose()
+        {
+            if (handle is not null)
+            {
+                handle.Dispose();
+            }
+            else
+            {
+                Chattr("-i", path);
+            }
+        }
+
+        private static bool Chattr(string flag, string path)
+        {
+            System.Diagnostics.ProcessStartInfo start = new("chattr") { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
+            start.ArgumentList.Add(flag);
+            start.ArgumentList.Add(path);
+            try
+            {
+                using System.Diagnostics.Process process = System.Diagnostics.Process.Start(start)!;
+                process.StandardOutput.ReadToEnd();
+                process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                return process.ExitCode == 0;
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return false;
+            }
+        }
+    }
 
     private sealed class StubOrchestrator : IRefreshOrchestrator
     {

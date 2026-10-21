@@ -760,11 +760,46 @@ public sealed class FakeNotebookRegistry : INotebookRegistry
         }
     }
 
-    public IReadOnlyList<KnownNotebook> List(IEnumerable<string> folders)
+    /// <summary>
+    /// Gives the next listings a gate each, in the order they start: such a listing copies <see cref="Notebooks"/> as it
+    /// starts, as a listing that has read the local sidecars does, then waits at its own gate (released by the test) and
+    /// returns that copy. Released in reverse order, they return in reverse order, as when one stalls on a slow share.
+    /// </summary>
+    public void GateNextListings(params ManualResetEventSlim[] gates)
     {
         lock (Queries)
         {
+            foreach (ManualResetEventSlim gate in gates)
+            {
+                _nextGates.Enqueue(gate);
+            }
+        }
+    }
+
+    private readonly Queue<ManualResetEventSlim> _nextGates = new();
+
+    public IReadOnlyList<KnownNotebook> List(IEnumerable<string> folders)
+    {
+        ManualResetEventSlim? own = null;
+        List<KnownNotebook> copy = new();
+        lock (Queries)
+        {
             Queries.Add(folders.ToList());
+            if (_nextGates.Count > 0)
+            {
+                own = _nextGates.Dequeue();
+                copy = Notebooks.ToList();
+            }
+        }
+
+        if (own is not null)
+        {
+            if (!own.Wait(TestDispatcher.Timeout))
+            {
+                throw new TimeoutException("The test never released the folder listing.");
+            }
+
+            return Throw is null ? copy : throw Throw;
         }
 
         if (Gate is { } gate && !gate.Wait(TestDispatcher.Timeout))

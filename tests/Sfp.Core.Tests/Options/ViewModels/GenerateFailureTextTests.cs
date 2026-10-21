@@ -55,6 +55,35 @@ public class GenerateFailureTextTests
         GenerateRunViewModel.FailureTextFor(result with { Error = "  " }).Should().Be("Generate failed: no details were reported.");
     }
 
+    [UiTheory]
+    [InlineData("OneNote did not close it, so its folder was left in place. Close the notebook in OneNote and delete the folder before running the same command again. OneNote said: OneNote is showing a dialog.")]
+    [InlineData("Access to the path 'Week 01.one' is denied.")]
+    public async Task A_failure_whose_partial_notebook_could_not_be_deleted_shows_the_warning_and_no_inspection_sentence(string reason)
+    {
+        // Fix round 4 cliapp-2: a render failure whose notebook OneNote would not close (or whose folder could not be
+        // deleted) keeps its path with a warning saying what to do; the failure line still ended "is left in place for
+        // inspection", against that warning.
+        string warning = Core.Options.GenerateMessages.PartialNotebookNotDeleted(PartialNotebook, reason);
+        _h.Generator.Result = new GenerateResult
+        {
+            Success = false,
+            ExitCode = 4,
+            Phase = GeneratePhase.Rendering,
+            FailedPage = "Cover",
+            Error = "Rendering pages, page Cover: Rendering Cover page 'Cover' (PDF page 1) failed: PDFium could not decode the page. The partial notebook was left in place because OneNote did not close it; the warnings say what to do before running the same command again.",
+            OutputPath = PartialNotebook,
+            Warnings = new[] { warning },
+        };
+        using GenerateRunViewModel run = _h.NewRun();
+
+        await run.StartAsync(Request());
+
+        run.ShowFailure.Should().BeTrue();
+        run.FailureText.Should().StartWith("Generate failed: Rendering pages, page Cover: ").And.NotContain("for inspection");
+        run.WarningsText.Should().Be(warning, "the failure view shows the warning under the line");
+        run.NotebookPath.Should().Be(PartialNotebook, "the path is kept");
+    }
+
     [UiFact]
     public async Task An_exception_the_view_model_caught_uses_the_same_neutral_prefix()
     {

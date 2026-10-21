@@ -187,6 +187,124 @@ public class RefreshReloadTests
     }
 
     [UiFact]
+    public async Task A_listing_that_returns_after_a_newer_reload_started_is_dropped()
+    {
+        // Fix round 4 cliapp-3: Refresh now is enabled while the reload after a run lists the folders. A second run's
+        // reload could finish first, and the first reload's older listing, returning last, put the first run's Last
+        // refreshed back on the row. A listing that returns after a newer reload started is now dropped.
+        _h.Registry.Notebooks.Add(Q1(null));
+        _h.Refresher.Result = Refreshed();
+        int runs = 0;
+        using RefreshViewModel vm = new(
+            _h.Registry,
+            _h.Tasks,
+            _h.Logs,
+            (_, _) => new SidecarSavingOrchestrator(_h.Refresher, () => _h.Registry.Notebooks[0] = Q1(RefreshedAt.AddMinutes(++runs))),
+            _h.Dialogs,
+            _h.Ui,
+            _h.Env);
+        vm.SetKnownFolders(Array.Empty<string>());
+        await _h.Settle(vm.PendingReload);
+        using ManualResetEventSlim older = new(false);
+        using ManualResetEventSlim newer = new(false);
+        _h.Registry.GateNextListings(older, newer);
+        Task first;
+        Task second;
+        try
+        {
+            await vm.RefreshNowCommand.ExecuteAsync(null);
+            first = vm.PendingReload;
+            await _h.WaitUntilAsync(() => _h.Registry.Listings == 2, "the first run's reload lists the folders, with its 05:01");
+            vm.RefreshNowCommand.CanExecute(null).Should().BeTrue("Refresh now is enabled while the reload lists the folders");
+
+            await vm.RefreshNowCommand.ExecuteAsync(null);
+            second = vm.PendingReload;
+            await _h.WaitUntilAsync(() => _h.Registry.Listings == 3, "the second run's reload lists the folders, with its 05:02");
+
+            newer.Set();
+            await _h.Settle(second);
+            vm.SelectedNotebook!.LastRefreshText.Should().Be("2026-10-21 05:02");
+        }
+        finally
+        {
+            newer.Set();
+            older.Set();
+        }
+
+        await _h.Settle(first);
+
+        vm.Notebooks.Should().ContainSingle().Which.LastRefreshText.Should().Be("2026-10-21 05:02", "the older listing returned last and was dropped");
+        vm.SelectedNotebook!.LastRefreshText.Should().Be("2026-10-21 05:02");
+        vm.Summary!.Headline.Should().Be("Refreshed SFP Q1 2027.", "the second run's results stay on screen");
+    }
+
+    [UiFact]
+    public async Task A_sidecar_without_a_quarter_is_listed_last_and_the_other_rows_stay()
+    {
+        // Fix round 4 cliapp-4: a sidecar holding "quarter": null passes the registry, and sorting by its quarter threw
+        // after the list was cleared: the reload after a run faulted unobserved and left an empty list, and a Reload click
+        // rethrew on the UI thread. Such a row now sorts last, with its quarter read as "unknown".
+        const string BrokenPath = @"D:\Notebooks\SFP broken";
+        _h.Registry.Notebooks.Add(Q1(null));
+        _h.Registry.Notebooks.Add(new KnownNotebook("SFP broken", BrokenPath, null!, null, null, BrokenPath + ".sfp-state.json"));
+        _h.Registry.Notebooks.Add(Q4);
+        _h.Refresher.Result = Refreshed();
+        using RefreshViewModel vm = _h.NewRefresh();
+        vm.SetKnownFolders(Array.Empty<string>());
+        await _h.Settle(vm.PendingReload);
+
+        vm.Notebooks.Select(n => n.Name).Should().Equal("SFP Q1 2027", "SFP Q4 2026", "SFP broken");
+        vm.Notebooks[2].QuarterLabel.Should().Be("unknown");
+        vm.NotebooksStatus.Should().BeNull();
+
+        await vm.RefreshNowCommand.ExecuteAsync(null);
+        await _h.Settle(vm.PendingReload);
+        await vm.ReloadNotebooksCommand.ExecuteAsync(null);
+
+        vm.Notebooks.Select(n => n.Name).Should().Equal("SFP Q1 2027", "SFP Q4 2026", "SFP broken");
+        vm.SelectedNotebook!.Name.Should().Be("SFP Q1 2027");
+        vm.Summary.Should().NotBeNull("the run's results stay through the reloads");
+        vm.NotebooksStatus.Should().BeNull();
+    }
+
+    [UiFact]
+    public async Task A_reload_that_fails_keeps_the_rows_shown_and_says_why()
+    {
+        // Fix round 4 cliapp-4: a listing that failed emptied the list, and an exception while the rows were rebuilt left it
+        // empty with no word of it. The rows are now built before the list is touched: a listing or a row that fails keeps
+        // the rows shown, with the reason as the list's status line, and so does a failure that escapes a reload nothing
+        // awaits.
+        _h.Registry.Notebooks.Add(Q1(null));
+        _h.Registry.Notebooks.Add(Q4);
+        using RefreshViewModel vm = _h.NewRefresh();
+        vm.SetKnownFolders(Array.Empty<string>());
+        await _h.Settle(vm.PendingReload);
+
+        _h.Registry.Throw = new IOException("The network path was not found.");
+        await vm.ReloadNotebooksCommand.ExecuteAsync(null);
+
+        vm.Notebooks.Select(n => n.Name).Should().Equal(new[] { "SFP Q1 2027", "SFP Q4 2026" }, "a listing that throws keeps the rows shown");
+        vm.SelectedNotebook!.Name.Should().Be("SFP Q1 2027");
+        vm.NotebooksStatus.Should().Be("Could not list notebooks: The network path was not found.");
+
+        _h.Registry.Throw = null;
+        _h.Registry.Notebooks.Add(null!);
+        vm.SetKnownFolders(new[] { @"D:\Notebooks" });
+        await _h.Settle(vm.PendingReload);
+
+        vm.Notebooks.Select(n => n.Name).Should().Equal(new[] { "SFP Q1 2027", "SFP Q4 2026" }, "a row that cannot be built keeps the rows shown");
+        vm.NotebooksStatus.Should().StartWith("Could not list notebooks: ");
+
+        _h.Registry.Notebooks.RemoveAt(2);
+        vm.Notebooks.CollectionChanged += (_, _) => throw new InvalidOperationException("The list view failed.");
+        vm.SetKnownFolders(Array.Empty<string>());
+        await _h.Settle(vm.PendingReload);
+
+        vm.PendingReload.IsCompletedSuccessfully.Should().BeTrue("a reload nothing awaits never faults unobserved");
+        vm.NotebooksStatus.Should().Be("Could not list notebooks: The list view failed.");
+    }
+
+    [UiFact]
     public void The_same_notebook_is_the_same_sidecar_file_or_the_same_name_without_one()
     {
         KnownNotebookItem q1 = new(Q1(null));
