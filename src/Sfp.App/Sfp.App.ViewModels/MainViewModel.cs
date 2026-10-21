@@ -145,21 +145,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return false;
         }
 
-        AppSettings current = Current();
-        string json = SettingsStore.Serialize(current);
-        if (!force && json == _lastSavedJson)
-        {
-            return true;
-        }
-
         try
         {
+            // Building and serializing the settings is inside the try too: a save runs from field setters and the Browse
+            // commands, where an exception would end the app.
+            AppSettings current = Current();
+            string json = SettingsStore.Serialize(current);
+            if (!force && json == _lastSavedJson)
+            {
+                return true;
+            }
+
             _settings.Save(current);
             _lastSavedJson = json;
             SaveCount++;
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
             Notice = "Settings could not be saved to " + _settings.Path + ": " + ex.Message;
             return false;

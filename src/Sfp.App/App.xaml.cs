@@ -37,7 +37,16 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _services?.Main.SaveSettings();
+        try
+        {
+            // SaveSettings reports a refused save itself; whatever else goes wrong must not skip the disposal below.
+            _services?.Main.SaveSettings();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError("Saving the settings on exit failed: " + ex);
+        }
+
         _services?.Dispose();
         base.OnExit(e);
     }

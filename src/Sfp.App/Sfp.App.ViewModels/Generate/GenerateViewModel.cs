@@ -56,6 +56,9 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     private string _defaultName = "";
     private QuarterSpec _lastValidStart;
 
+    /// <summary>The last page scale the box held as a finite number; the options and the saved settings use it while the box holds none.</summary>
+    private double _lastFiniteScale = 1.0;
+
     [ObservableProperty]
     private string _pdfPath = "";
 
@@ -273,6 +276,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
             TimeBlockStart = settings.TimeBlocks.StartHour;
             TimeBlockEnd = settings.TimeBlocks.EndHour;
             PdfPath = settings.PdfPath ?? "";
+            RememberFiniteScale();
         }
         finally
         {
@@ -284,7 +288,10 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         RequestPreviews();
     }
 
-    /// <summary>The options the fields describe, using the last valid start when the year box does not parse.</summary>
+    /// <summary>
+    /// The options the fields describe, using the last valid start when the year box does not parse and the last finite
+    /// page scale when the scale box holds no finite number (NaN or Infinity would make the settings unsaveable).
+    /// </summary>
     public GenerateOptions ToOptions() => new()
     {
         Start = Start ?? _lastValidStart,
@@ -299,7 +306,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         Links = Links,
         HideTitle = HideTitle,
         PageSize = CustomPageSize ? PageSizeMode.Custom : PageSizeMode.Automatic,
-        PageScale = ParsePageScale() ?? 1.0,
+        PageScale = ParsePageScale() ?? _lastFiniteScale,
         SixthRow = SixthRow,
         OutOfMonthDays = OutOfMonthDays,
         ReflectionDateIsWeekStart = ReflectionDateIsWeekStart,
@@ -374,6 +381,9 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
                 break;
             case nameof(NotebookName):
                 _nameFollowsDefault = NotebookName == _defaultName;
+                break;
+            case nameof(PageScaleText):
+                RememberFiniteScale();
                 break;
             default:
                 break;
@@ -473,8 +483,17 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     private int? ParseYear() =>
         int.TryParse(YearText.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int year) ? year : null;
 
+    /// <summary>The page scale the box holds, or null when it holds no finite number ("abc", "NaN", "Infinity", "1e999").</summary>
     private double? ParsePageScale() =>
-        double.TryParse(PageScaleText.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double scale) ? scale : null;
+        double.TryParse(PageScaleText.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double scale) && double.IsFinite(scale) ? scale : null;
+
+    private void RememberFiniteScale()
+    {
+        if (ParsePageScale() is double scale)
+        {
+            _lastFiniteScale = scale;
+        }
+    }
 
     private void StartPdfCheck()
     {
