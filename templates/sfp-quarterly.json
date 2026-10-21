@@ -183,6 +183,7 @@
       "rowCount": 8,
       "columnX0": 255,
       "columnPitch": 54,
+      "$comment": "finalColumnX is only the furthest right the Quarter column may start. The Quarter column follows the last week column (columnX0 + columnPitch * weeks, 13 or 14 weeks), and week columns that end past finalColumnX fail the render.",
       "finalColumnX": 1013,
       "finalColumnW": 60,
       "ruleWidthPt": 0.42
