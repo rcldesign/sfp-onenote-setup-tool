@@ -182,7 +182,8 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// The last reload started (by <see cref="SetKnownFolders"/> or after a successful Refresh now), for tests. A window
-    /// close never waits for it: listing a folder on an unreachable drive can take as long as the network timeout.
+    /// close never waits for it: listing a folder on an unreachable drive can take as long as the network timeout. It
+    /// never faults: a failure is the list's status line.
     /// </summary>
     public Task PendingReload { get; private set; }
 
@@ -192,7 +193,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(folders);
         _knownFolders = folders.ToList();
         OnPropertyChanged(nameof(Folders));
-        PendingReload = ReloadAsync();
+        PendingReload = ReloadDetachedAsync();
     }
 
     /// <summary>
@@ -209,20 +210,24 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     {
         int reload = ++_reloadsStarted;
         IReadOnlyList<string> folders = Folders;
-        IReadOnlyList<KnownNotebook> found;
-        string? status;
+        List<KnownNotebookItem> rows;
         try
         {
-            found = await Task.Run(() => _registry.List(folders));
-            status = found.Count == 0
-                ? "No notebooks built by this tool were found under " + string.Join("; ", folders)
-                : null;
+            IReadOnlyList<KnownNotebook> found = await Task.Run(() => _registry.List(folders));
+
+            // Built and sorted before the list is touched, so rows that cannot be built leave the rows shown in place.
+            rows = RowsFor(found);
         }
         catch (Exception ex)
         {
-            // A registry that is not wired or a folder that cannot be read is a line, not a crash.
-            found = Array.Empty<KnownNotebook>();
-            status = "Could not list notebooks: " + ex.Message;
+            // A registry that is not wired, a folder that cannot be read or a row that cannot be built is a line, not a
+            // crash or an emptied list: the rows shown stay.
+            if (reload == _reloadsStarted)
+            {
+                NotebooksStatus = "Could not list notebooks: " + ex.Message;
+            }
+
+            return;
         }
 
         if (reload != _reloadsStarted)
@@ -232,7 +237,9 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
             return;
         }
 
-        NotebooksStatus = status;
+        NotebooksStatus = rows.Count == 0
+            ? "No notebooks built by this tool were found under " + string.Join("; ", folders)
+            : null;
 
         // Taken now, not before the listing: the list is enabled while the folders are listed, and a notebook clicked
         // meanwhile has already cleared the results and synced the daily checkbox to its own task. Without a click this is
@@ -242,9 +249,9 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
         try
         {
             Notebooks.Clear();
-            foreach (KnownNotebook notebook in found.OrderByDescending(n => n.Quarter.Year).ThenByDescending(n => n.Quarter.Month).ThenBy(n => n.Name, StringComparer.Ordinal))
+            foreach (KnownNotebookItem row in rows)
             {
-                Notebooks.Add(new KnownNotebookItem(notebook));
+                Notebooks.Add(row);
             }
 
             SelectedNotebook = (previous is null ? null : Notebooks.FirstOrDefault(n => IsSameNotebook(n, previous))) ?? Notebooks.FirstOrDefault();
@@ -260,6 +267,35 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
             // were not about this one.
             ClearResults();
             SyncScheduleFromService(SelectedNotebook);
+        }
+    }
+
+    /// <summary>
+    /// The list's rows for a listing: the newest quarter first, then by name. A row without a quarter (a sidecar holding
+    /// "quarter": null, which the registry passes on) goes last instead of failing the sort.
+    /// </summary>
+    private static List<KnownNotebookItem> RowsFor(IReadOnlyList<KnownNotebook> found) => found
+        .OrderBy(n => n.Quarter is null)
+        .ThenByDescending(n => n.Quarter?.Year)
+        .ThenByDescending(n => n.Quarter?.Month)
+        .ThenBy(n => n.Name, StringComparer.Ordinal)
+        .Select(n => new KnownNotebookItem(n))
+        .ToList();
+
+    /// <summary>
+    /// Starts a reload that nothing awaits (<see cref="PendingReload"/>). The view model has no log of its own, so a
+    /// failure the reload does not handle itself (a subscriber of the list or the selection throwing) becomes the list's
+    /// status line instead of an unobserved fault.
+    /// </summary>
+    private async Task ReloadDetachedAsync()
+    {
+        try
+        {
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            NotebooksStatus = "Could not list notebooks: " + ex.Message;
         }
     }
 
@@ -436,7 +472,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
             // The list shows the new Last refreshed. The reload is its own task, not part of the run a window close waits
             // for: listing a folder on an unreachable network drive can hang until the network timeout. A closing window
             // lists nothing.
-            PendingReload = ReloadAsync();
+            PendingReload = ReloadDetachedAsync();
         }
     }
 

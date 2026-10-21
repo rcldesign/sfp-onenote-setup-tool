@@ -11,8 +11,8 @@ public sealed record KnownNotebookItem(KnownNotebook Notebook)
 
     public string Path => Notebook.Path;
 
-    /// <summary>"Q1 2027" or "Feb to Apr 2027".</summary>
-    public string QuarterLabel => PlannerText.QuarterLabel(Notebook.Quarter);
+    /// <summary>"Q1 2027" or "Feb to Apr 2027"; "unknown" for a sidecar holding "quarter": null.</summary>
+    public string QuarterLabel => Notebook.Quarter is null ? "unknown" : PlannerText.QuarterLabel(Notebook.Quarter);
 
     public string GeneratedText => Stamp(Notebook.Generated) ?? "unknown";
 
