@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Xml.Linq;
 using Serilog;
 using Sfp.Core.Manifests;
@@ -16,7 +17,7 @@ public sealed record AnchorWrite(PlannedChange Change, SlotGeometry? Geometry, s
 
 /// <summary>What one page write did.</summary>
 /// <param name="Created">Slot id to the object ID of each outline created, learned by re-reading the page.</param>
-/// <param name="Removed">Slot ids whose outline was removed.</param>
+/// <param name="Removed">Slot ids whose outline was deleted, or was already gone from the page (either way the sidecar drops its ID).</param>
 /// <param name="Updated">Slot ids whose outline text was replaced.</param>
 /// <param name="Unresolved">Slot ids whose created outline could not be found again by position (the sidecar keeps no ID for them; the next run re-creates or reports them).</param>
 public sealed record AnchorWriteResult(
@@ -31,14 +32,16 @@ public sealed record AnchorWriteResult(
         new Dictionary<string, string>(StringComparer.Ordinal), Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
 }
 
-/// <summary>Writes or updates tool-owned outlines on a page by object ID, through the page's existing XML plus the changed outlines only.</summary>
+/// <summary>Writes, updates or deletes tool-owned outlines on a page by object ID, through the page's existing XML plus the changed outlines only.</summary>
 public interface IAnchorWriter
 {
     /// <summary>
-    /// Applies the writes to one page in one UpdatePageContent call: the page's current XML (as read with piBasic, so the
-    /// background image travels as a callback ID and its bytes are not resent) with each Update's one:T content replaced,
-    /// each Remove's outline deleted and each Create's outline appended. Nothing else on the page is touched. After a
-    /// Create the page is re-read to learn the new outline's object ID. Throws <see cref="OneNoteException"/> when OneNote rejects the write.
+    /// Applies the writes to one page. Each Remove is one DeletePageContent call on the outline's object ID (OneNote's
+    /// UpdatePageContent never deletes an object the XML leaves out); an outline already gone is reported removed without
+    /// a call. The Creates and Updates then go in one UpdatePageContent call: the page's current XML (as read with
+    /// piBasic, so the background image travels as a callback ID and its bytes are not resent) with each Update's one:T
+    /// content replaced and each Create's outline appended. Nothing else on the page is touched. After a Create the page
+    /// is re-read to learn the new outline's object ID. Throws <see cref="OneNoteException"/> when OneNote rejects a call.
     /// </summary>
     AnchorWriteResult Write(string pageId, PageXml current, IReadOnlyList<AnchorWrite> writes);
 }
@@ -78,74 +81,97 @@ public sealed class AnchorWriter : IAnchorWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(pageId);
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(writes);
-        if (writes.Count == 0)
+        List<AnchorWrite> active = writes.Where(w => !w.Change.Blocked).ToList();
+        foreach (AnchorWrite write in active.Where(w => !Enum.IsDefined(w.Change.Kind)))
+        {
+            throw new ArgumentOutOfRangeException(nameof(writes), write.Change.Kind, "Unknown change kind.");
+        }
+
+        if (active.Count == 0)
         {
             return AnchorWriteResult.Empty;
         }
 
-        XDocument document = new(current.Document);
-        XElement root = document.Root ?? throw new InvalidOperationException("The page XML has no root element.");
-        XNamespace one = root.Name.Namespace;
-        PageXmlOptions placed = PlacedOptions(current);
-
-        List<string> updated = new();
+        // Removes first, one DeletePageContent each, so the UpdatePageContent below is built from the page as it is
+        // after them and can never bring a deleted outline back. Each call after the first works on a fresh read.
+        PageXml latest = current;
+        bool written = false;
         List<string> removed = new();
-        List<(string SlotId, RectPt Expected)> created = new();
-        HashSet<string> knownIds = current.Outlines.Select(o => o.ObjectId).Where(id => id.Length > 0).ToHashSet(StringComparer.Ordinal);
-        foreach (AnchorWrite write in writes)
+        foreach (AnchorWrite write in active.Where(w => w.Change.Kind == ChangeKind.Remove))
         {
-            PlannedChange change = write.Change;
-            if (change.Blocked)
+            string objectId = RequireObjectId(write);
+            if (written)
             {
+                latest = Read(pageId);
+            }
+
+            if (!latest.Outlines.Any(o => string.Equals(o.ObjectId, objectId, StringComparison.Ordinal)))
+            {
+                log.Information("Page {PageId}: the outline {ObjectId} of {Slot} is already gone", pageId, objectId, write.Change.SlotId);
+                removed.Add(write.Change.SlotId);
                 continue;
             }
 
-            switch (change.Kind)
+            try
             {
-                case ChangeKind.Update:
-                {
-                    XElement outline = FindOutline(root, one, write.ObjectId, change);
-                    SetText(outline, one, Html(change.SlotId, change.NewText, write.Geometry, placed));
-                    updated.Add(change.SlotId);
-                    break;
-                }
-
-                case ChangeKind.Remove:
-                {
-                    FindOutline(root, one, write.ObjectId, change).Remove();
-                    removed.Add(change.SlotId);
-                    break;
-                }
-
-                case ChangeKind.Create:
-                {
-                    SlotGeometry geometry = write.Geometry ?? throw new ArgumentException($"Create for {change.SlotId} on {change.Page} needs slot geometry.", nameof(writes));
-                    XElement outline = PageXmlBuilder.AnchorOutline(Anchor(change.SlotId, change.NewText, geometry), placed);
-                    SetText(outline, one, Html(change.SlotId, change.NewText, geometry, placed));
-                    root.Add(outline);
-                    RectPt expected = PageXmlParser.Bounds(outline, one) ?? throw new InvalidOperationException("The anchor outline builder produced no position.");
-                    created.Add((change.SlotId, expected));
-                    break;
-                }
-
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(writes), change.Kind, "Unknown change kind.");
+                app.DeletePageContent(pageId, objectId, ExpectedLastModified(latest));
             }
+            catch (OneNoteException ex) when (ex is not OneNoteUnavailableException && IsGone(ex.HResult))
+            {
+                log.Information("Page {PageId}: the outline {ObjectId} of {Slot} was gone when it was deleted ({HResult})", pageId, objectId, write.Change.SlotId, ex.HResultHex);
+            }
+
+            removed.Add(write.Change.SlotId);
+            written = true;
         }
 
-        if (updated.Count + removed.Count + created.Count == 0)
+        List<AnchorWrite> edits = active.Where(w => w.Change.Kind != ChangeKind.Remove).ToList();
+        if (edits.Count == 0)
         {
-            return AnchorWriteResult.Empty;
+            log.Information("Page {PageId}: {Removed} removed", pageId, removed.Count);
+            return new AnchorWriteResult(new Dictionary<string, string>(StringComparer.Ordinal), removed, Array.Empty<string>(), Array.Empty<string>());
         }
 
-        app.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
+        if (written)
+        {
+            latest = Read(pageId);
+        }
+
+        XDocument document = new(latest.Document);
+        XElement root = document.Root ?? throw new InvalidOperationException("The page XML has no root element.");
+        XNamespace one = root.Name.Namespace;
+        PageXmlOptions placed = PlacedOptions(latest);
+
+        List<string> updated = new();
+        List<(string SlotId, RectPt Expected)> created = new();
+        HashSet<string> knownIds = latest.Outlines.Select(o => o.ObjectId).Where(id => id.Length > 0).ToHashSet(StringComparer.Ordinal);
+        foreach (AnchorWrite write in edits)
+        {
+            PlannedChange change = write.Change;
+            if (change.Kind == ChangeKind.Update)
+            {
+                XElement outline = FindOutline(root, one, write.ObjectId, change);
+                SetText(outline, one, Html(change.SlotId, change.NewText, write.Geometry, placed));
+                updated.Add(change.SlotId);
+                continue;
+            }
+
+            SlotGeometry geometry = write.Geometry ?? throw new ArgumentException($"Create for {change.SlotId} on {change.Page} needs slot geometry.", nameof(writes));
+            XElement added = PageXmlBuilder.AnchorOutline(Anchor(change.SlotId, change.NewText, geometry), placed);
+            SetText(added, one, Html(change.SlotId, change.NewText, geometry, placed));
+            root.Add(added);
+            RectPt expected = PageXmlParser.Bounds(added, one) ?? throw new InvalidOperationException("The anchor outline builder produced no position.");
+            created.Add((change.SlotId, expected));
+        }
+
+        app.UpdatePageContent(OneNoteXml.Serialize(root), ExpectedLastModified(latest));
         log.Information("Page {PageId}: {Created} created, {Updated} updated, {Removed} removed", pageId, created.Count, updated.Count, removed.Count);
 
         Dictionary<string, string> createdIds = new(StringComparer.Ordinal);
         List<string> unresolved = new();
         if (created.Count > 0)
         {
-            PageXml reread = PageXmlParser.Parse(app.GetPageContent(pageId, PageInfo.Basic));
+            PageXml reread = Read(pageId);
             List<OutlineInfo> candidates = reread.Outlines.Where(o => !o.IsBackgroundImage && o.ObjectId.Length > 0 && !knownIds.Contains(o.ObjectId)).ToList();
             foreach ((string slotId, RectPt expected) in created)
             {
@@ -164,6 +190,39 @@ public sealed class AnchorWriter : IAnchorWriter
 
         return new AnchorWriteResult(createdIds, removed, updated, unresolved);
     }
+
+    /// <summary>
+    /// The dateExpectedLastModified to pass with a write to the page as read: its one:Page lastModifiedTime, so OneNote
+    /// refuses the write (hrLastModifiedDateDidNotMatch) when the page changed since it was read instead of writing the
+    /// stale copy over the user's edit. A COM DATE carries no zone and OneNote reads it as local time, so the UTC stamp
+    /// is given in the run's zone (<see cref="PageXmlOptions.TimeZone"/>, the local zone in the CLI). A page without the
+    /// attribute gets <see cref="DateTime.MinValue"/>, which skips the check.
+    /// </summary>
+    public DateTime ExpectedLastModified(PageXml page)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        string? stamp = (string?)page.Document.Root?.Attribute("lastModifiedTime");
+        if (string.IsNullOrWhiteSpace(stamp)
+            || !DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out DateTimeOffset modified))
+        {
+            return DateTime.MinValue;
+        }
+
+        return TimeZoneInfo.ConvertTime(modified, options.TimeZone).DateTime;
+    }
+
+    /// <summary>True for the results OneNote gives when the object to delete is no longer on the page.</summary>
+    private static bool IsGone(int hresult) => hresult is OneNoteHResults.PageObjectDoesNotExist or OneNoteHResults.ObjectDoesNotExist;
+
+    private static string RequireObjectId(AnchorWrite write)
+    {
+        PlannedChange change = write.Change;
+        return string.IsNullOrEmpty(write.ObjectId)
+            ? throw new ArgumentException($"{change.Kind} for {change.SlotId} on {change.Page} needs the slot's object ID.", nameof(write))
+            : write.ObjectId;
+    }
+
+    private PageXml Read(string pageId) => PageXmlParser.Parse(app.GetPageContent(pageId, PageInfo.Basic));
 
     /// <summary>
     /// The options with the title offset and page scale taken from the sheet outline as it sits on the page, so anchors

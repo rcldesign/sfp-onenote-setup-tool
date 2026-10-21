@@ -10,9 +10,11 @@ public sealed record OpenedNotebook(NotebookHandle Notebook, Sidecar? Sidecar, s
 /// <summary>
 /// Finds and opens the notebook a Refresh run names. The sidecar is looked for first (in the given folder, else in the
 /// search folders); then OneNote's open notebooks are matched by name; when the notebook is not open, OpenHierarchy is
-/// called on the folder path from the sidecar or the given folder. The scheduled task may run while OneNote is still
-/// starting, so after OpenHierarchy the opener waits up to <see cref="DefaultOpenTimeout"/> for the notebook to appear
-/// in the hierarchy (the PRD's "the run waits up to 60 s for the notebook to open").
+/// called on the folder path from the sidecar or the given folder. When the folders held no sidecar and the notebook
+/// OneNote resolved has a local folder path, the sidecar beside that folder is loaded, so a notebook generated outside
+/// the search folders keeps its sidecar instead of having it rebuilt and overwritten every run. The scheduled task may
+/// run while OneNote is still starting, so after OpenHierarchy the opener waits up to <see cref="DefaultOpenTimeout"/>
+/// for the notebook to appear in the hierarchy (the PRD's "the run waits up to 60 s for the notebook to open").
 /// </summary>
 public sealed class NotebookOpener
 {
@@ -52,11 +54,22 @@ public sealed class NotebookOpener
     /// <param name="name">The notebook name ("SFP Q1 2027").</param>
     /// <param name="folder">The notebooks folder given on the command line, or null.</param>
     /// <param name="searchFolders">Folders to look for a sidecar in when <paramref name="folder"/> is null.</param>
-    public OpenedNotebook? Open(string name, string? folder, IReadOnlyList<string> searchFolders)
+    public OpenedNotebook? Open(string name, string? folder, IReadOnlyList<string> searchFolders) =>
+        Open(name, folder, searchFolders, FindSidecar(name, folder, searchFolders));
+
+    /// <summary>
+    /// <see cref="Open(string, string?, IReadOnlyList{string})"/> with the folders already searched for the sidecar
+    /// (<see cref="FindSidecar"/>), so a caller that needs the sidecar's path before any COM call reads it once.
+    /// </summary>
+    /// <param name="name">The notebook name ("SFP Q1 2027").</param>
+    /// <param name="folder">The notebooks folder given on the command line, or null.</param>
+    /// <param name="searchFolders">Folders to look for a sidecar in when <paramref name="folder"/> is null.</param>
+    /// <param name="found">What <see cref="FindSidecar"/> returned for the same name and folders.</param>
+    public OpenedNotebook? Open(string name, string? folder, IReadOnlyList<string> searchFolders, (Sidecar? Sidecar, string? Path) found)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(searchFolders);
-        (Sidecar? sidecar, string? sidecarPath) = FindSidecar(name, folder, searchFolders);
+        (Sidecar? sidecar, string? sidecarPath) = found;
         if (sidecar is not null)
         {
             log.Information("Sidecar for {Name} found at {Path}", name, sidecarPath);
@@ -86,9 +99,24 @@ public sealed class NotebookOpener
         }
 
         NotebookHandle handle = new(open.Id, string.IsNullOrWhiteSpace(open.Path) ? sidecar?.NotebookPath ?? "" : open.Path, open.Name);
+        if (sidecar is null && IsLocalPath(handle.Path))
+        {
+            string beside = sidecars.PathFor(handle.Path);
+            Sidecar? besideSidecar = TryLoad(beside);
+            if (besideSidecar is not null)
+            {
+                log.Information("Sidecar for {Name} found beside the notebook at {Path}", name, beside);
+                sidecar = besideSidecar;
+                sidecarPath = beside;
+            }
+        }
+
         string file = sidecarPath ?? sidecars.PathFor(SidecarFolderFor(handle, name, folder, searchFolders));
         return new OpenedNotebook(handle, sidecar, file);
     }
+
+    /// <summary>True for a folder path on disk, false for a URL (a notebook moved to OneDrive reports one) or nothing.</summary>
+    private static bool IsLocalPath(string path) => !string.IsNullOrWhiteSpace(path) && !path.Contains("://", StringComparison.Ordinal);
 
     /// <summary>The sidecar for a notebook name in the given folder, else the first match in the search folders.</summary>
     public (Sidecar? Sidecar, string? Path) FindSidecar(string name, string? folder, IReadOnlyList<string> searchFolders)
@@ -116,7 +144,7 @@ public sealed class NotebookOpener
             return Path.Combine(folder, name);
         }
 
-        if (!string.IsNullOrWhiteSpace(handle.Path) && !handle.Path.Contains("://", StringComparison.Ordinal))
+        if (IsLocalPath(handle.Path))
         {
             return handle.Path;
         }

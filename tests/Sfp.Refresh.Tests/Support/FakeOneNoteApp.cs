@@ -9,16 +9,26 @@ namespace Sfp.Refresh.Tests.Support;
 /// An in-memory OneNote for the Refresh tests: notebooks, sections and pages with the hierarchy XML GetHierarchy
 /// returns, page XML stored as written with stable objectIDs stamped on every outline, paragraph, image and ink element
 /// the way OneNote does, image bytes kept apart so a piBasic read hands back a CallbackID and a write carrying a
-/// CallbackID keeps the bytes. Notebooks can be closed and reopened by path, and every ID can be renumbered to simulate
-/// a move to OneDrive. Every call is recorded. Meant to be shared with the OneNote tests when the integrator merges.
+/// CallbackID keeps the bytes. UpdatePageContent merges by objectID the way OneNote does: an object the XML carries with
+/// a known objectID replaces the stored one, an object without one is added, and an object the XML leaves out is kept
+/// (only DeletePageContent removes one). Every write stamps the page's lastModifiedTime (one second later each time), a
+/// read hands it back on one:Page, and a write passing a dateExpectedLastModified other than DateTime.MinValue that does
+/// not match it fails with hrLastModifiedDateDidNotMatch, as OneNote does. Notebooks can be closed and reopened by path,
+/// and every ID can be renumbered to simulate a move to OneDrive. Every call is recorded. Meant to be shared with the
+/// OneNote tests when the integrator merges.
 /// </summary>
 public sealed class FakeOneNoteApp : IOneNoteApp
 {
+    /// <summary>Top-level page children that are content objects, merged by objectID; every other child (Meta, PageSettings, Title ...) is replaced by name.</summary>
+    private static readonly HashSet<string> ContentObjects = new(StringComparer.Ordinal) { "Outline", "Image", "InkDrawing", "InsertedFile", "MediaFile" };
+
     private readonly Dictionary<string, Notebook> notebooks = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Section> sections = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Page> pages = new(StringComparer.Ordinal);
     private readonly List<(string Call, string Detail)> calls = new();
     private int nextId;
+    private DateTimeOffset clock = new(2026, 12, 20, 10, 0, 0, TimeSpan.Zero);
+    private bool inBeforeWrite;
 
     public string Version => "16.0.fake";
 
@@ -31,8 +41,24 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     /// <summary>Decides whether an UpdatePageContent call fails: given the page ID, the exception to throw or null.</summary>
     public Func<string, Exception?>? UpdatePageContentFailure { get; set; }
 
+    /// <summary>
+    /// Runs at the start of every UpdatePageContent and DeletePageContent, given the page ID, before the last-modified
+    /// check: a test makes the user edit the page there, between Refresh's read and its write. Writes made inside it do
+    /// not run it again.
+    /// </summary>
+    public Action<string>? BeforeWrite { get; set; }
+
+    /// <summary>Decides whether a GetHierarchy call fails: given the start ID and scope, the exception to throw or null.</summary>
+    public Func<string?, HierarchyScope, Exception?>? GetHierarchyFailure { get; set; }
+
+    /// <summary>The zone OneNote reads a dateExpectedLastModified in (a COM DATE has none); UTC unless a test sets another.</summary>
+    public TimeZoneInfo TimeZone { get; set; } = TimeZoneInfo.Utc;
+
     /// <summary>Thrown by every call when set (simulates OneNote not installed or not reachable).</summary>
     public Exception? Unavailable { get; set; }
+
+    /// <summary>The lastModifiedTime of a page, or null when it was never written.</summary>
+    public DateTimeOffset? LastModified(string pageId) => pages[pageId].Modified;
 
     public bool Disposed { get; private set; }
 
@@ -52,6 +78,30 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
     /// <summary>Marks a notebook closed: GetHierarchy no longer lists it until OpenHierarchy on its path.</summary>
     public void Close(string notebookId) => notebooks[notebookId].Open = false;
+
+    /// <summary>
+    /// Deletes a page the way OneNote does: it moves to the notebook's recycle bin, which GetHierarchy lists as the
+    /// OneNote_RecycleBin section group (isRecycleBin) holding a Deleted Pages section (isInRecycleBin). The fake lists
+    /// the bin ahead of the notebook's sections, so a reader that relied on document order would meet it first.
+    /// </summary>
+    public void MoveToRecycleBin(string pageId)
+    {
+        Page page = pages[pageId];
+        Section section = sections[page.SectionId];
+        section.PageIds.Remove(pageId);
+        notebooks[section.NotebookId].RecycleBin.Add(pageId);
+    }
+
+    /// <summary>Puts a copy of a page (same content and sfp.key, new page ID) in the notebook's recycle bin, as deleting a duplicated page leaves one; returns its ID.</summary>
+    public string CopyToRecycleBin(string pageId)
+    {
+        Page source = pages[pageId];
+        Page copy = new(NewId("p"), source.SectionId) { Name = source.Name, Level = source.Level, ImageData = source.ImageData, Modified = source.Modified };
+        copy.Xml = source.Xml?.Replace(source.Prefix, copy.Prefix, StringComparison.Ordinal).Replace("ID=\"" + pageId + "\"", "ID=\"" + copy.Id + "\"", StringComparison.Ordinal);
+        pages[copy.Id] = copy;
+        notebooks[sections[source.SectionId].NotebookId].RecycleBin.Add(copy.Id);
+        return copy.Id;
+    }
 
     /// <summary>
     /// Gives the notebook, its sections, its pages and every objectID inside them new IDs, the way IDs change after a
@@ -93,6 +143,12 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     public string GetHierarchy(string? startId, HierarchyScope scope)
     {
         Record("GetHierarchy", (startId ?? "") + ":" + scope);
+        Exception? failure = GetHierarchyFailure?.Invoke(startId, scope);
+        if (failure is not null)
+        {
+            throw failure;
+        }
+
         XNamespace one = OneNoteXml.Namespace2013;
         if (string.IsNullOrEmpty(startId))
         {
@@ -209,6 +265,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         string id = (string?)root.Attribute("ID") ?? "";
         Record("UpdatePageContent", id);
         LastUpdateXml = xml;
+        RunBeforeWrite(id);
         Exception? failure = UpdatePageContentFailure?.Invoke(id);
         if (failure is not null)
         {
@@ -220,6 +277,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
             throw new OneNoteException("UpdatePageContent", OneNoteHResults.PageDoesNotExist, "No page " + id, null);
         }
 
+        CheckLastModified(page, dateExpectedLastModified, "UpdatePageContent");
         XNamespace one = root.Name.Namespace;
         foreach (XElement element in root.Descendants().Where(e => e.Name.Namespace == one && e.Name.LocalName is "Outline" or "OE" or "Image" or "InkWord" or "InkDrawing"))
         {
@@ -245,7 +303,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
             page.Name = PageXmlParser.PlainText(title);
         }
 
-        page.Xml = OneNoteXml.Serialize(root);
+        XElement stored = page.Xml is null ? root : Merge(XElement.Parse(page.Xml), root, one);
+        Touch(page, stored);
+        page.Xml = OneNoteXml.Serialize(stored);
     }
 
     public string GetPageContent(string pageId, PageInfo pageInfo)
@@ -306,11 +366,13 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     {
         Guard();
         Record("DeletePageContent", pageId + " " + objectId);
+        RunBeforeWrite(pageId);
         if (!pages.TryGetValue(pageId, out Page? page) || page.Xml is null)
         {
             throw new OneNoteException("DeletePageContent", OneNoteHResults.PageDoesNotExist, "No page " + pageId, null);
         }
 
+        CheckLastModified(page, dateExpectedLastModified, "DeletePageContent");
         XElement root = XElement.Parse(page.Xml);
         XElement? target = root.Descendants().FirstOrDefault(e => (string?)e.Attribute("objectID") == objectId);
         if (target is null)
@@ -319,6 +381,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         }
 
         target.Remove();
+        Touch(page, root);
         page.Xml = OneNoteXml.Serialize(root);
     }
 
@@ -342,12 +405,109 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         return OneNoteXml.Serialize(element);
     }
 
+    /// <summary>
+    /// The stored page with an UpdatePageContent applied as OneNote applies it: page attributes are taken from the XML,
+    /// a content object (outline, image, ink) with an objectID already on the page replaces it in place, any other content
+    /// object is added at the end, the other children (Meta by name, PageSettings, Title ...) replace the stored element of
+    /// the same name, and everything the XML leaves out stays on the page.
+    /// </summary>
+    private static XElement Merge(XElement stored, XElement incoming, XNamespace one)
+    {
+        foreach (XAttribute attribute in incoming.Attributes().Where(a => !a.IsNamespaceDeclaration))
+        {
+            stored.SetAttributeValue(attribute.Name, attribute.Value);
+        }
+
+        foreach (XElement child in incoming.Elements().ToList())
+        {
+            XElement copy = new(child);
+            if (child.Name.Namespace == one && ContentObjects.Contains(child.Name.LocalName))
+            {
+                string id = (string?)child.Attribute("objectID") ?? "";
+                XElement? existing = stored.Elements().FirstOrDefault(e => (string?)e.Attribute("objectID") == id);
+                if (existing is not null)
+                {
+                    existing.ReplaceWith(copy);
+                }
+                else
+                {
+                    stored.Add(copy);
+                }
+
+                continue;
+            }
+
+            XElement? same = child.Name == one + "Meta"
+                ? stored.Elements(one + "Meta").FirstOrDefault(m => (string?)m.Attribute("name") == (string?)child.Attribute("name"))
+                : stored.Element(child.Name);
+            if (same is not null)
+            {
+                same.ReplaceWith(copy);
+            }
+            else if (stored.Elements().FirstOrDefault(e => e.Name.Namespace == one && ContentObjects.Contains(e.Name.LocalName)) is XElement firstContent)
+            {
+                firstContent.AddBeforeSelf(copy);
+            }
+            else
+            {
+                stored.Add(copy);
+            }
+        }
+
+        return stored;
+    }
+
     private void Guard()
     {
         if (Unavailable is not null)
         {
             throw Unavailable;
         }
+    }
+
+    private void RunBeforeWrite(string pageId)
+    {
+        if (BeforeWrite is null || inBeforeWrite)
+        {
+            return;
+        }
+
+        inBeforeWrite = true;
+        try
+        {
+            BeforeWrite(pageId);
+        }
+        finally
+        {
+            inBeforeWrite = false;
+        }
+    }
+
+    /// <summary>Fails the write when the caller expected another last-modified time than the page has (DateTime.MinValue skips the check).</summary>
+    private void CheckLastModified(Page page, DateTime expected, string call)
+    {
+        if (expected == DateTime.MinValue)
+        {
+            return;
+        }
+
+        DateTime expectedUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(expected, DateTimeKind.Unspecified), TimeZone);
+        if (page.Modified is not DateTimeOffset modified || modified.UtcDateTime != expectedUtc)
+        {
+            throw new OneNoteException(
+                call,
+                OneNoteHResults.LastModifiedDateDidNotMatch,
+                string.Create(CultureInfo.InvariantCulture, $"Page {page.Id} was last modified at {page.Modified:O}, not {expectedUtc:O}."),
+                null);
+        }
+    }
+
+    /// <summary>Advances the page's last-modified time and stamps it on the stored root, as every OneNote write does.</summary>
+    private void Touch(Page page, XElement root)
+    {
+        clock = clock.AddSeconds(1);
+        page.Modified = clock;
+        root.SetAttributeValue("lastModifiedTime", clock.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture));
     }
 
     private Notebook Create(string path)
@@ -362,6 +522,27 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         XElement element = new(one + "Notebook", new XAttribute("name", nb.Name), new XAttribute("ID", nb.Id), new XAttribute("path", nb.Path));
         if (scope is HierarchyScope.Sections or HierarchyScope.Pages)
         {
+            if (nb.RecycleBin.Count > 0)
+            {
+                XElement deleted = new(
+                    one + "Section",
+                    new XAttribute("name", "Deleted Pages"),
+                    new XAttribute("ID", nb.Id + "{deleted}"),
+                    new XAttribute("isInRecycleBin", "true"),
+                    new XAttribute("isDeletedPages", "true"));
+                if (scope == HierarchyScope.Pages)
+                {
+                    deleted.Add(nb.RecycleBin.Select(id => PageElement(one, pages[id])));
+                }
+
+                element.Add(new XElement(
+                    one + "SectionGroup",
+                    new XAttribute("name", "OneNote_RecycleBin"),
+                    new XAttribute("ID", nb.Id + "{bin}"),
+                    new XAttribute("isRecycleBin", "true"),
+                    deleted));
+            }
+
             foreach (string sectionId in nb.SectionIds)
             {
                 element.Add(SectionElement(one, sections[sectionId], scope));
@@ -418,6 +599,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         public bool Open { get; set; } = true;
 
         public List<string> SectionIds { get; } = new();
+
+        /// <summary>IDs of the deleted pages in the notebook's recycle bin.</summary>
+        public List<string> RecycleBin { get; } = new();
     }
 
     private sealed class Section
@@ -462,6 +646,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         public string? Xml { get; set; }
 
         public string? ImageData { get; set; }
+
+        /// <summary>When the page was last written, or null.</summary>
+        public DateTimeOffset? Modified { get; set; }
 
         /// <summary>The "{p-0001}" part of the page ID that every objectID on the page starts with.</summary>
         public string Prefix => Id[..Id.IndexOf('}', StringComparison.Ordinal)] + "}";

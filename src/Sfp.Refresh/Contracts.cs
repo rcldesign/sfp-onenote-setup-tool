@@ -97,6 +97,14 @@ public sealed record PlannedChange(PageKey Page, string SlotId, string? OldText,
 public interface IPropagator
 {
     IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s);
+
+    /// <summary>
+    /// The plan for a run that writes values which came from ink only when <paramref name="writeInkedValues"/> is true.
+    /// Without that confirmation a multi-value legend is built from the confirmed (typed) values only, so one inked
+    /// value does not hold back a whole legend; the inked value is still listed in its own slots. An implementation that
+    /// does not distinguish plans as <see cref="Plan(NotebookPlan, SetupValues, Sidecar)"/> (added by the wave 3 fix round).
+    /// </summary>
+    IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s, bool writeInkedValues) => Plan(plan, v, s);
 }
 
 /// <summary>A calendar source that can list its events over a date window.</summary>

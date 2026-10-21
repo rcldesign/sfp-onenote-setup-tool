@@ -17,4 +17,9 @@
   <ItemGroup>
     <None Include="fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The OneNote tests' small JSON Schema checker, linked (not copied) so a sidecar Refresh saves is validated against
+         the same tests/Sfp.OneNote.Tests/schema/sfp-state.schema.json. -->
+    <Compile Include="../Sfp.OneNote.Tests/Support/JsonSchemaLite.cs" Link="Support/JsonSchemaLite.cs" />
+  </ItemGroup>
 </Project>

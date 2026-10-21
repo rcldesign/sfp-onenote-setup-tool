@@ -170,6 +170,43 @@ public class PropagatorTests
     }
 
     [Fact]
+    public void Without_confirmation_the_legends_are_built_from_the_typed_values_and_are_not_inked()
+    {
+        FakeNotebook nb = FakeNotebook.Generate();
+        string?[] objectives = { "Ship the connector", "Hire two PMs", "Launch v2", null, null, null, null, null };
+        string?[] habits = new string?[16];
+        habits[0] = "Run";
+        habits[1] = "Read";
+        SetupValues v = Values(objectives, habits: habits, inked: new[] { "objective:2", "habit:2" });
+        Propagator propagator = new(nb.Catalog, nb.Read, Mono);
+
+        IReadOnlyList<PlannedChange> unconfirmed = propagator.Plan(nb.Plan, v, nb.Sidecar, writeInkedValues: false);
+
+        unconfirmed.Where(c => c.SlotId == "objectiveLegend").Should().HaveCount(104).And.AllSatisfy(c =>
+        {
+            c.NewText.Should().Be("O1 Ship the connector  O3 Launch v2", "the inked objective is left out and the others keep their numbers");
+            c.Inked.Should().BeFalse();
+        });
+        unconfirmed.Where(c => c.SlotId == "habitLegend").Should().HaveCount(3).And.AllSatisfy(c =>
+        {
+            c.NewText.Should().Be("1 Run");
+            c.Inked.Should().BeFalse();
+        });
+        unconfirmed.Single(c => c.SlotId == "annualRow:2").Should().Match<PlannedChange>(c => c.Inked && c.NewText == "Hire two PMs", "the inked value is still listed in its own slot");
+
+        IReadOnlyList<PlannedChange> confirmed = propagator.Plan(nb.Plan, v, nb.Sidecar, writeInkedValues: true);
+
+        confirmed.Where(c => c.SlotId == "objectiveLegend").Should().AllSatisfy(c =>
+        {
+            c.NewText.Should().Be("O1 Ship the connector  O2 Hire two PMs  O3 Launch v2");
+            c.Inked.Should().BeTrue("the legend includes an inked value");
+        });
+        propagator.Plan(nb.Plan, v, nb.Sidecar).Should().BeEquivalentTo(confirmed, "the three-argument plan writes every value");
+        propagator.Plan(nb.Plan, Values(objectives), nb.Sidecar, writeInkedValues: false).Where(c => c.SlotId == "objectiveLegend")
+            .Should().AllSatisfy(c => c.NewText.Should().Contain("O2 Hire two PMs"), "typed values are always in the legend");
+    }
+
+    [Fact]
     public void Decide_covers_every_branch()
     {
         PageKey page = MonJan4;
@@ -187,11 +224,24 @@ public class PropagatorTests
 
         Propagator.Decide(page, "s", "old", held).Should().BeNull("idempotent");
         Propagator.Decide(page, "s", " old ", held).Should().BeNull("trimmed");
+        Propagator.Decide(page, "s", "old", heldBlocked).Should().Be(
+            new PlannedChange(page, "s", "old", "old", ChangeKind.Update, true, "A user object overlaps the slot: ink. The tool's text there is already current and was left as it is."),
+            "a user object over current tool text is reported, though nothing is written");
         Propagator.Decide(page, "s", "new", held).Should().Be(new PlannedChange(page, "s", "old", "new", ChangeKind.Update, false, null));
         Propagator.Decide(page, "s", "", held).Should().Be(new PlannedChange(page, "s", "old", "", ChangeKind.Remove, false, null));
         Propagator.Decide(page, "s", "", heldBlocked)!.Blocked.Should().BeFalse("removing the tool's own object touches nothing of the user's");
         Propagator.Decide(page, "s", "new", heldBlocked)!.Blocked.Should().BeTrue();
         Propagator.Decide(page, "s", "new", movedAway).Should().Be(new PlannedChange(page, "s", "old", "new", ChangeKind.Update, true, Propagator.MovedReason));
         Propagator.Decide(page, "s", "old", movedAway).Should().BeNull();
+
+        Propagator.Decide(page, "s", "new", held, toolText: "old").Should().Be(new PlannedChange(page, "s", "old", "new", ChangeKind.Update, false, null), "the outline still says what the tool wrote");
+        Propagator.Decide(page, "s", "new", held, toolText: "older").Should().Be(new PlannedChange(page, "s", "old", "new", ChangeKind.Update, true, Propagator.EditedReason), "the user typed into the tool's outline");
+        Propagator.Decide(page, "s", "", held, toolText: "older").Should().Be(new PlannedChange(page, "s", "old", "", ChangeKind.Remove, true, Propagator.EditedReason), "text the user typed is never deleted either");
+        Propagator.Decide(page, "s", "old", held, toolText: "older").Should().BeNull("the slot already says what Setup asks for");
+        Propagator.Decide(page, "s", "new", held, toolText: null)!.Blocked.Should().BeFalse("a sidecar written before the texts were recorded skips the check");
+        Propagator.IsEdited("O1 a  O2 b", "O1 a O2 b").Should().BeFalse("runs of whitespace compare equal");
+        Propagator.IsEdited("1 Run\n2 Read", "1 Run  2 Read").Should().BeFalse();
+        Propagator.IsEdited("Walk, then stretch", "Walk").Should().BeTrue();
+        Propagator.IsEdited("anything", null).Should().BeFalse();
     }
 }

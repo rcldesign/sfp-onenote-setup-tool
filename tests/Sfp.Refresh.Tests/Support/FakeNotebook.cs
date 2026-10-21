@@ -151,6 +151,48 @@ public sealed class FakeNotebook
     public void InkUserText(PageKey key, RectPt sheetRect, params string[] words) =>
         AddUserOutline(key, sheetRect, one => words.Select(w => new System.Xml.Linq.XElement(one + "InkWord", new System.Xml.Linq.XAttribute("recognizedText", w))).ToArray());
 
+    /// <summary>
+    /// Adds an outline exactly at a sheet rectangle (its origin and width, a fixed width when <paramref name="fixedWidth"/>)
+    /// holding one one:T with the given HTML, and returns its object ID: a note typed at a slot's very origin, or an
+    /// outline written the way the tool writes one.
+    /// </summary>
+    public string AddOutlineAt(PageKey key, RectPt sheetRect, string html, bool fixedWidth)
+    {
+        PageXml page = Read(key);
+        System.Xml.Linq.XElement root = page.Document.Root!;
+        System.Xml.Linq.XNamespace one = root.Name.Namespace;
+        HashSet<string> before = page.Outlines.Select(o => o.ObjectId).ToHashSet(StringComparer.Ordinal);
+        root.Add(new System.Xml.Linq.XElement(
+            one + "Outline",
+            OneNoteXml.Position(one, sheetRect.X + (page.SheetOutline?.X ?? 0), sheetRect.Y + (page.SheetOutline?.Y ?? 0), 2),
+            OneNoteXml.Size(one, sheetRect.W, sheetRect.H, fixedWidth),
+            new System.Xml.Linq.XElement(one + "OEChildren", new System.Xml.Linq.XElement(one + "OE", new System.Xml.Linq.XElement(one + "T", new System.Xml.Linq.XCData(html))))));
+        App.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
+        return Read(key).Outlines.Single(o => !before.Contains(o.ObjectId)).ObjectId;
+    }
+
+    /// <summary>Replaces the one:T content of an outline already on a page, the way typing into it does.</summary>
+    public void EditOutlineText(PageKey key, string objectId, string html)
+    {
+        PageXml page = Read(key);
+        System.Xml.Linq.XElement root = page.Document.Root!;
+        System.Xml.Linq.XNamespace one = root.Name.Namespace;
+        System.Xml.Linq.XElement outline = root.Elements(one + "Outline").Single(o => (string?)o.Attribute("objectID") == objectId);
+        outline.Descendants(one + "T").First().ReplaceNodes(new System.Xml.Linq.XCData(html));
+        App.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
+    }
+
+    /// <summary>Moves an outline already on a page to a sheet position, the way dragging it does.</summary>
+    public void MoveOutline(PageKey key, string objectId, double sheetX, double sheetY)
+    {
+        PageXml page = Read(key);
+        System.Xml.Linq.XElement root = page.Document.Root!;
+        System.Xml.Linq.XNamespace one = root.Name.Namespace;
+        System.Xml.Linq.XElement outline = root.Elements(one + "Outline").Single(o => (string?)o.Attribute("objectID") == objectId);
+        outline.Element(one + "Position")!.ReplaceWith(OneNoteXml.Position(one, sheetX + (page.SheetOutline?.X ?? 0), sheetY + (page.SheetOutline?.Y ?? 0), 2));
+        App.UpdatePageContent(OneNoteXml.Serialize(root), DateTime.MinValue);
+    }
+
     private void AddUserOutline(PageKey key, RectPt sheetRect, Func<System.Xml.Linq.XNamespace, object> paragraphContent)
     {
         PageXml page = Read(key);

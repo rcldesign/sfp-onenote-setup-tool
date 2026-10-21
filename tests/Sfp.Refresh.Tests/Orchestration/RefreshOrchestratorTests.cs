@@ -5,6 +5,7 @@ using Sfp.Core.Options;
 using Sfp.Core.Plan;
 using Sfp.OneNote;
 using Sfp.OneNote.Com;
+using Sfp.OneNote.Tests.Support;
 using Sfp.Refresh.Calendar;
 using Sfp.Refresh.Orchestration;
 using Sfp.Refresh.Propagation;
@@ -28,6 +29,9 @@ public class RefreshOrchestratorTests
     private static readonly PageKey MonJan4 = PageKey.Day(new DateOnly(2027, 1, 4));
     private static readonly DateOnly Jan4 = new(2027, 1, 4);
     private static readonly DateTimeOffset Now = new(2027, 1, 4, 5, 0, 0, TimeSpan.Zero);
+
+    /// <summary>The sidecar schema the OneNote tests validate the generated file with.</summary>
+    private static string SidecarSchemaPath => Path.Combine(TestPaths.RepoRoot, "tests", "Sfp.OneNote.Tests", "schema", "sfp-state.schema.json");
 
     private static double Mono(string text, double sizePt) => text.Length * sizePt * 0.55;
 
@@ -84,12 +88,15 @@ public class RefreshOrchestratorTests
 
         public FakeSourceFailureNotifier Notifier { get; } = new();
 
-        public RefreshServices Services { get; }
+        public RefreshServices Services { get; set; }
 
         public FakeOneNoteApp App => Notebook.App;
 
         public RefreshResult Run(RefreshRequest request, List<string>? progress = null) =>
             new RefreshOrchestrator(Services).Run(request, progress is null ? null : new ListProgress(progress), CancellationToken.None);
+
+        public RefreshResult Run(RefreshRequest request, IProgress<string> progress, CancellationToken cancellationToken) =>
+            new RefreshOrchestrator(Services).Run(request, progress, cancellationToken);
 
         public Sidecar SavedSidecar() => Store.Load(SidecarPath)!;
 
@@ -198,6 +205,89 @@ public class RefreshOrchestratorTests
     }
 
     [Fact]
+    public void Text_the_user_typed_into_a_pre_fill_is_left_alone_and_reported_while_untouched_pre_fills_update()
+    {
+        Harness h = new();
+        h.Type(S.StandingGoals[0], "Walk 30 min");
+        h.Run(Request()).Summary!.ValuesWritten.Should().Be(90);
+        Sidecar first = h.SavedSidecar();
+        first.Pages[MonJan4.Value].AnchorTexts.Should().Contain("standingGoal:1", "Walk 30 min", "the sidecar records what the tool wrote");
+        JsonSchemaLite.AssertValid(File.ReadAllText(SidecarSchemaPath), File.ReadAllText(h.SidecarPath));
+        string goalId = first.Pages[MonJan4.Value].Anchors["standingGoal:1"];
+        SlotGeometry goal = h.Notebook.Catalog.Slot(h.Notebook.Plan.Page(MonJan4), "standingGoal:1")!;
+        h.Notebook.EditOutlineText(MonJan4, goalId, AnchorWriter.Html("standingGoal:1", "Walk 30 min, then stretch", goal, h.Notebook.Options));
+        string setupGoal = h.Notebook.Read(PageKey.Setup).Outlines.Single(o => o.PlainText == "Walk 30 min").ObjectId;
+        h.Notebook.EditOutlineText(PageKey.Setup, setupGoal, "Walk 45 min");
+
+        RefreshResult second = h.Run(Request());
+
+        second.Success.Should().BeTrue(second.Error);
+        PlannedChange edited = second.Summary!.Changes.Single(c => c.Page == MonJan4);
+        edited.Blocked.Should().BeTrue();
+        edited.Reason.Should().Be(Propagator.EditedReason);
+        h.Notebook.Read(MonJan4).Outlines.Single(o => o.ObjectId == goalId).PlainText.Should().Be("Walk 30 min, then stretch", "what the user typed is never overwritten");
+        second.Summary.ValuesWritten.Should().Be(89, "every pre-fill the user did not touch updates normally");
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+        Sidecar saved = h.SavedSidecar();
+        h.Notebook.Read(tueJan5).Outlines.Single(o => o.ObjectId == saved.Pages[tueJan5.Value].Anchors["standingGoal:1"]).PlainText.Should().Be("Walk 45 min");
+        saved.Pages[tueJan5.Value].AnchorTexts["standingGoal:1"].Should().Be("Walk 45 min");
+        saved.Pages[MonJan4.Value].AnchorTexts["standingGoal:1"].Should().Be("Walk 30 min", "the edited outline keeps the text the tool wrote, so it stays the user's");
+        RefreshText.SummaryLines(second, "SFP Q1 2027").Should().Contain(l => l.StartsWith("Skipped: Mon Jan 4  standingGoal:1", StringComparison.Ordinal) && l.Contains("edited by the user", StringComparison.Ordinal));
+
+        h.Run(Request()).Summary!.Changes.Should().ContainSingle().Which.Reason.Should().Be(Propagator.EditedReason, "it stays the user's on later runs");
+    }
+
+    [Fact]
+    public void A_calendar_line_the_user_typed_into_is_left_alone_when_its_event_changes()
+    {
+        StubCalendarFactory calendars = new();
+        Harness h = new(calendars: calendars);
+        h.Type(S.CalendarSources[0], "Work | https://example.com/cal.ics");
+        DateTime nine = new(2027, 1, 5, 9, 0, 0);
+        calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff meeting", nine, nine.AddHours(1), false, false, false, "Work", null) };
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+        h.Run(Request(calendar: true)).Summary!.EventsWritten.Should().Be(2);
+        Sidecar saved = h.SavedSidecar();
+        saved.Pages[tueJan5.Value].AnchorTexts.Should().Contain("timeBlockEvent:9", "9:00 Staff meeting");
+        string rowId = saved.Pages[tueJan5.Value].Anchors["timeBlockEvent:9"];
+        h.Notebook.EditOutlineText(tueJan5, rowId, "9:00 Staff meeting, bring the slides");
+        calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff sync", nine, nine.AddHours(1), false, false, false, "Work", null) };
+
+        RefreshResult second = h.Run(Request(calendar: true));
+
+        PlannedChange row = second.Summary!.Changes.Single(c => c.Page == tueJan5);
+        row.Blocked.Should().BeTrue();
+        row.Reason.Should().Be(Propagator.EditedReason);
+        h.Notebook.Read(tueJan5).Outlines.Single(o => o.ObjectId == rowId).PlainText.Should().Be("9:00 Staff meeting, bring the slides");
+        second.Summary.EventsWritten.Should().Be(1, "Tuesday's column on the overview, which the user did not touch, is updated");
+    }
+
+    [Fact]
+    public void A_note_written_over_a_current_legend_is_reported_as_skipped_and_left_alone()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        h.Run(Request()).Summary!.Skipped.Should().Be(0);
+        h.Notebook.TypeUserText(MonJan4, M.Slots.ObjectiveLegend.Rect, "my note");
+        string pageId = h.Notebook.PageIds[MonJan4];
+        int updates = h.App.UpdateCount(pageId);
+
+        RefreshResult again = h.Run(Request());
+
+        again.Success.Should().BeTrue();
+        PlannedChange skipped = again.Summary!.Changes.Should().ContainSingle("the legend is current everywhere else").Which;
+        skipped.Page.Should().Be(MonJan4);
+        skipped.SlotId.Should().Be("objectiveLegend");
+        skipped.Blocked.Should().BeTrue();
+        skipped.Reason.Should().Be("A user object overlaps the slot: text 'my note'. The tool's text there is already current and was left as it is.");
+        again.Summary.Skipped.Should().Be(1);
+        again.Summary.PagesTouched.Should().Be(0);
+        h.App.UpdateCount(pageId).Should().Be(updates, "nothing is written for a reported slot");
+        h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "my note");
+        RefreshText.SummaryLines(again, "SFP Q1 2027").Should().Contain(l => l.StartsWith("Skipped: Mon Jan 4  objectiveLegend", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Inked_values_are_listed_but_written_only_when_confirmed()
     {
         Harness h = new();
@@ -206,17 +296,31 @@ public class RefreshOrchestratorTests
 
         RefreshResult dry = h.Run(Request(dryRun: true));
         dry.Summary!.Values.InkedSlots.Should().Equal("objective:3");
-        dry.Summary.Changes.Where(c => c.Inked).Should().HaveCount(104 + 1 + 1 + 1, "every legend plus objective 3's row, heading and scorecard row");
-        dry.Summary.Skipped.Should().Be(107, "inked changes count as skipped until confirmed");
+        dry.Summary.Changes.Where(c => c.Inked).Select(c => c.SlotId).Should().BeEquivalentTo(new[] { "annualRow:3", "objectiveHeading", "scorecardRow:3" }, "the inked objective is listed in its own slots");
+        dry.Summary.Changes.Where(c => c.SlotId == "objectiveLegend").Should().HaveCount(104).And.AllSatisfy(c =>
+        {
+            c.NewText.Should().Be("O1 Ship the connector", "without confirmation the legend is built from the typed values");
+            c.Inked.Should().BeFalse();
+        });
+        dry.Summary.Skipped.Should().Be(3, "inked changes count as skipped until confirmed");
 
         RefreshResult unconfirmed = h.Run(Request());
-        unconfirmed.Summary!.ValuesWritten.Should().Be(3, "objective 1's row, heading and scorecard row");
-        unconfirmed.Summary.Skipped.Should().Be(107);
-        unconfirmed.Summary.Changes.Where(c => c.Blocked).Should().AllSatisfy(c => c.Reason.Should().Be(RefreshOrchestrator.InkedSkipReason));
-        h.Notebook.Read(MonJan4).Outlines.Should().NotContain(o => o.PlainText.StartsWith("O1", StringComparison.Ordinal));
+        unconfirmed.Summary!.ValuesWritten.Should().Be(104 + 3, "every legend with objective 1, and objective 1's row, heading and scorecard row");
+        unconfirmed.Summary.Skipped.Should().Be(3);
+        unconfirmed.Summary.Changes.Where(c => c.Blocked).Should().AllSatisfy(c =>
+        {
+            c.Reason.Should().Be(RefreshOrchestrator.InkedSkipReason);
+            c.NewText.Should().Be("Launch v2");
+        });
+        h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "O1 Ship the connector", "one inked objective no longer holds back the legend on 104 pages");
 
         RefreshResult confirmed = h.Run(Request(writeInked: true));
-        confirmed.Summary!.ValuesWritten.Should().Be(107);
+        confirmed.Summary!.ValuesWritten.Should().Be(104 + 3, "every legend gains O3 and objective 3's row, heading and scorecard row are written");
+        confirmed.Summary.Changes.Where(c => c.SlotId == "objectiveLegend").Should().AllSatisfy(c =>
+        {
+            c.Kind.Should().Be(ChangeKind.Update);
+            c.Inked.Should().BeTrue("the legend now includes an inked value");
+        });
         confirmed.Summary.Skipped.Should().Be(0);
         h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "O1 Ship the connector  O3 Launch v2");
     }
@@ -236,6 +340,42 @@ public class RefreshOrchestratorTests
         rebuilt.Pages.Should().HaveCount(144);
         rebuilt.ToolVersion.Should().Be("9.9.9");
         rebuilt.Quarter.Should().Be(new QuarterSpec(2027, 1));
+    }
+
+    [Fact]
+    public void A_sidecar_outside_the_search_folders_is_found_beside_the_notebook_and_not_rebuilt()
+    {
+        Harness h = new();
+        h.Services = h.Services with { SearchFolders = new[] { TestPaths.NewTempDir("refresh-elsewhere") } };
+        h.Type(S.Objectives[0], "Ship the connector");
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Summary!.SidecarRebuilt.Should().BeFalse("the sidecar beside the notebook's folder is the one generated with it");
+        result.Summary.Warnings.Should().NotContain(SidecarRecovery.RebuiltWarning);
+        Sidecar saved = h.SavedSidecar();
+        saved.Generated.Should().Be(FakeNotebook.GeneratedAt, "the generated sidecar was updated, not replaced by a rebuilt one");
+        saved.Pages[MonJan4.Value].Anchors.Should().ContainKey("objectiveLegend");
+    }
+
+    [Fact]
+    public void A_user_note_at_a_slots_origin_survives_a_sidecar_rebuild_and_blocks_that_slot()
+    {
+        Harness h = new(saveSidecar: false);
+        h.Type(S.Objectives[0], "Ship the connector");
+        string note = h.Notebook.AddOutlineAt(MonJan4, M.Slots.ObjectiveLegend.Rect, "my note", fixedWidth: true);
+
+        RefreshResult result = h.Run(Request(folder: h.Folder));
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Summary!.SidecarRebuilt.Should().BeTrue();
+        PlannedChange legend = result.Summary.Changes.Single(c => c.Page == MonJan4 && c.SlotId == "objectiveLegend");
+        legend.Blocked.Should().BeTrue("the note sits where the legend goes and is not the tool's");
+        legend.Reason.Should().Contain("my note");
+        h.Notebook.Read(MonJan4).Outlines.Single(o => o.ObjectId == note).PlainText.Should().Be("my note");
+        h.SavedSidecar().Pages[MonJan4.Value].Anchors.Values.Should().NotContain(note);
+        result.Summary.Changes.Count(c => c.SlotId == "objectiveLegend" && !c.Blocked).Should().Be(103);
     }
 
     [Fact]
@@ -293,11 +433,14 @@ public class RefreshOrchestratorTests
         File.Exists(FailureCounter.PathBeside(h.SidecarPath)).Should().BeTrue();
 
         calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff meeting", start, start.AddHours(1), false, false, true, "Work", null) };
+        int deletes = h.App.CallCount("DeletePageContent");
         RefreshResult second = h.Run(Request(calendar: true, today: Jan4.AddDays(1)));
 
         second.Summary!.Changes.Should().HaveCount(2).And.AllSatisfy(c => c.Kind.Should().Be(ChangeKind.Remove));
         second.Summary.EventsWritten.Should().Be(0);
         second.Summary.PagesTouched.Should().Be(2);
+        h.App.CallCount("DeletePageContent").Should().Be(deletes + 2, "the fake keeps an outline the XML leaves out, as OneNote does, so only DeletePageContent removes the two lines");
+        h.App.Calls.Where(c => c.Call == "DeletePageContent").Select(c => c.Detail).Should().Contain(h.Notebook.PageIds[tueJan5] + " " + rowId);
         h.Notebook.Read(tueJan5).Outlines.Should().NotContain(o => o.ObjectId == rowId);
         h.SavedSidecar().Pages[tueJan5.Value].Anchors.Should().NotContainKey("timeBlockEvent:9");
         h.SavedSidecar().FrozenThrough.Should().Be(Jan4);
@@ -401,6 +544,63 @@ public class RefreshOrchestratorTests
     }
 
     [Fact]
+    public void With_the_bundled_holidays_on_a_dead_setup_source_still_exits_6_and_builds_the_streak()
+    {
+        StubCalendarFactory calendars = new() { Failure = new HttpRequestException("timeout") };
+        Harness h = new(calendars: calendars, holidays: true);
+        h.Type(S.CalendarSources[0], "Work | https://example.com/cal.ics");
+
+        RefreshResult first = h.Run(Request(calendar: true));
+
+        calendars.Created.Select(s => s.Kind).Should().Contain(CalendarSourceKind.Holidays, "the bundled list was read and did not fail");
+        first.Success.Should().BeFalse();
+        first.ExitCode.Should().Be(6, "every source on the Setup page failed; the tool's own holiday list does not count");
+        first.Summary!.FailedSources.Should().ContainSingle().Which.Should().StartWith("Work: timeout");
+        first.Summary.Changes.Should().BeEmpty("a feed outage never removes what was written");
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(1);
+        h.Notifier.Notifications.Should().BeEmpty();
+
+        h.Run(Request(calendar: true, today: Jan4.AddDays(1))).ExitCode.Should().Be(6);
+        h.Run(Request(calendar: true, today: Jan4.AddDays(2))).ExitCode.Should().Be(6);
+
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(3);
+        (string title, string message) = h.Notifier.Notifications.Should().ContainSingle().Which;
+        title.Should().Be(CalendarImportRunner.ToastTitle);
+        message.Should().Be("All 1 calendar source(s) failed 3 runs in a row. Last error: Work: timeout");
+    }
+
+    [Fact]
+    public void OneNote_failures_of_real_runs_count_toward_the_toast_and_a_success_resets_the_streak()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        h.App.UpdatePageContentFailure = _ => new OneNoteException("UpdatePageContent", OneNoteHResults.PageReadOnly, "The page is read-only.", null);
+
+        for (int run = 1; run <= 3; run++)
+        {
+            RefreshResult failed = h.Run(Request());
+            failed.ExitCode.Should().Be(5);
+            FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(run);
+            h.Notifier.Notifications.Should().HaveCount(run < 3 ? 0 : 1, "the toast comes with the third failure in a row");
+        }
+
+        (string title, string message) = h.Notifier.Notifications.Single();
+        title.Should().Be(RefreshOrchestrator.RefreshFailureToastTitle);
+        message.Should().StartWith("Refresh of SFP Q1 2027 failed 3 runs in a row. Last error: Writing page").And.Contain("read-only");
+
+        h.Run(Request(dryRun: true));
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(3, "a dry run writes nothing and leaves the streak alone");
+
+        h.App.UpdatePageContentFailure = null;
+        h.Run(Request()).ExitCode.Should().Be(0);
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(0, "a run that succeeds clears the streak");
+
+        h.App.Unavailable = new OneNoteUnavailableException();
+        h.Run(Request()).ExitCode.Should().Be(3);
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(1, "OneNote unavailable counts too once the sidecar path is known from the folders");
+    }
+
+    [Fact]
     public void Calendar_without_a_source_factory_warns_and_the_bundled_holidays_are_added_when_asked()
     {
         Harness none = new();
@@ -415,12 +615,383 @@ public class RefreshOrchestratorTests
             .Should().Contain(c => c.Page == PageKey.Day(new DateOnly(2027, 1, 18)) && c.SlotId == "allDayBand" && c.NewText.Contains("Martin Luther King", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Outlines_written_before_a_cancel_are_recorded_and_the_next_run_has_no_blocked_slots()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        using CancellationTokenSource cancel = new();
+        OnPageWrite progress = new(2, cancel.Cancel);
+
+        RefreshResult cancelled = h.Run(Request(), progress, cancel.Token);
+
+        cancelled.Success.Should().BeFalse();
+        cancelled.ExitCode.Should().Be(5);
+        cancelled.Error.Should().Be("Cancelled.");
+        progress.Pages.Should().Equal("Writing Annual Objectives", "Writing Objective 1");
+        Sidecar saved = h.SavedSidecar();
+        saved.Pages[PageKey.Annual(1).Value].Anchors.Should().ContainKey("annualRow:1", "the outlines written before the cancel are recorded");
+        saved.Pages[PageKey.Objective(1).Value].Anchors.Should().ContainKey("objectiveHeading");
+        saved.Pages[PageKey.Objective(1).Value].AnchorTexts.Should().Contain("objectiveHeading", "Ship the connector");
+        saved.Pages[MonJan4.Value].Anchors.Should().NotContainKey("objectiveLegend");
+        File.Exists(FailureCounter.PathBeside(h.SidecarPath)).Should().BeFalse("a cancelled run is not a failure of the daily task");
+
+        RefreshResult next = h.Run(Request());
+
+        next.Success.Should().BeTrue(next.Error);
+        next.Summary!.Changes.Should().NotContain(c => c.Blocked, "the outlines the cancelled run wrote are the tool's, not user objects in the slots");
+        next.Summary.ValuesWritten.Should().Be(104 + 1, "every legend and the scorecard row; the two pages written before the cancel are current");
+        h.Run(Request()).Summary!.Changes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Outlines_written_before_OneNote_went_away_are_recorded_too()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        OnPageWrite progress = new(3, () => h.App.Unavailable = new OneNoteUnavailableException());
+
+        RefreshResult failed = h.Run(Request(), progress, CancellationToken.None);
+
+        failed.ExitCode.Should().Be(3);
+        h.App.Unavailable = null;
+        Sidecar saved = h.SavedSidecar();
+        saved.Pages[PageKey.Annual(1).Value].Anchors.Should().ContainKey("annualRow:1");
+        saved.Pages[PageKey.Objective(1).Value].Anchors.Should().ContainKey("objectiveHeading");
+        h.Run(Request()).Summary!.Changes.Should().NotContain(c => c.Blocked);
+    }
+
+    [Fact]
+    public void A_slot_the_user_filled_after_planning_is_blocked_when_the_page_is_read_again_before_writing()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        h.Services = h.Services with { Propagators = (catalog, reader) => new ThenEdit(new Propagator(catalog, reader, Mono), () => h.Notebook.TypeUserText(MonJan4, M.Slots.ObjectiveLegend.Rect, "typed meanwhile")) };
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        PlannedChange legend = result.Summary!.Changes.Single(c => c.Page == MonJan4);
+        legend.Blocked.Should().BeTrue("the band was empty when the run planned and holds the user's note when it writes");
+        legend.Reason.Should().Contain("typed meanwhile");
+        h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "typed meanwhile").And.NotContain(o => o.PlainText.StartsWith("O1", StringComparison.Ordinal));
+        h.SavedSidecar().Pages[MonJan4.Value].Anchors.Should().NotContainKey("objectiveLegend");
+        result.Summary.ValuesWritten.Should().Be(103 + 3);
+    }
+
+    [Fact]
+    public void An_edit_made_after_planning_is_not_written_over()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        string note = h.Notebook.AddOutlineAt(MonJan4, new RectPt(400, 400, 200, 14), "draft", fixedWidth: false);
+        h.Services = h.Services with { Propagators = (catalog, reader) => new ThenEdit(new Propagator(catalog, reader, Mono), () => h.Notebook.EditOutlineText(MonJan4, note, "final")) };
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        PageXml monday = h.Notebook.Read(MonJan4);
+        monday.Outlines.Single(o => o.ObjectId == note).PlainText.Should().Be("final", "the page is read again before the write, so the copy read while planning is never sent back over the user's edit");
+        monday.Outlines.Should().Contain(o => o.PlainText == "O1 Ship the connector");
+    }
+
+    [Fact]
+    public void A_page_that_changes_between_the_read_and_the_write_is_read_again_and_written()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        string pageId = h.Notebook.PageIds[MonJan4];
+        int edits = 0;
+        h.App.BeforeWrite = id =>
+        {
+            if (id == pageId && edits++ == 0)
+            {
+                h.Notebook.TypeUserText(MonJan4, new RectPt(400, 400, 200, 14), "typed meanwhile");
+            }
+        };
+        int updates = h.App.UpdateCount(pageId);
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Summary!.Changes.Should().NotContain(c => c.Blocked);
+        h.App.UpdateCount(pageId).Should().Be(updates + 3, "the refused write, the user's edit inside it and the write after reading the page again");
+        h.Log.Messages(LogEventLevel.Warning).Should().Contain(m => m.Contains("Mon Jan 4", StringComparison.Ordinal) && m.Contains("changed while it was being written; reading it again", StringComparison.Ordinal));
+        PageXml monday = h.Notebook.Read(MonJan4);
+        monday.Outlines.Should().Contain(o => o.PlainText == "typed meanwhile");
+        monday.Outlines.Should().Contain(o => o.PlainText == "O1 Ship the connector");
+        h.SavedSidecar().Pages[MonJan4.Value].Anchors.Should().ContainKey("objectiveLegend");
+    }
+
+    [Fact]
+    public void A_page_that_keeps_changing_is_reported_and_left_for_the_next_run()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        string pageId = h.Notebook.PageIds[MonJan4];
+        int edits = 0;
+        h.App.BeforeWrite = id =>
+        {
+            if (id == pageId)
+            {
+                edits++;
+                h.Notebook.TypeUserText(MonJan4, new RectPt(400, 380 + (20 * edits), 200, 14), "typing " + edits);
+            }
+        };
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeTrue(result.Error);
+        result.ExitCode.Should().Be(0, "a page the user is editing is not a failure; it is tried again next run");
+        edits.Should().Be(2, "one write and one retry");
+        PlannedChange legend = result.Summary!.Changes.Single(c => c.Page == MonJan4);
+        legend.Blocked.Should().BeTrue();
+        legend.Reason.Should().Be(RefreshOrchestrator.ConflictReason);
+        result.Summary.Warnings.Should().Contain("Page Mon Jan 4 changed while Refresh was writing it; its changes were not written and will be tried again on the next run.");
+        result.Summary.ValuesWritten.Should().Be(103 + 3, "every other page is written");
+        h.Notebook.Read(MonJan4).Outlines.Should().NotContain(o => o.PlainText.StartsWith("O1", StringComparison.Ordinal));
+
+        h.App.BeforeWrite = null;
+        h.Run(Request()).Summary!.Changes.Should().ContainSingle().Which.Should().Match<PlannedChange>(c => c.Page == MonJan4 && !c.Blocked, "the next run writes it");
+    }
+
+    [Theory]
+    [InlineData("the update is refused twice")]
+    [InlineData("the first delete is refused")]
+    [InlineData("the update fails")]
+    public void An_outline_deleted_before_a_page_write_was_refused_leaves_no_record_behind(string refusal)
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        h.Type(S.StandingGoals[0], "Walk 30 min");
+        h.Run(Request()).Success.Should().BeTrue();
+        string legendId = h.SavedSidecar().Pages[MonJan4.Value].Anchors["objectiveLegend"];
+        PageXml setup = h.Notebook.Read(PageKey.Setup);
+        h.Notebook.EditOutlineText(PageKey.Setup, setup.Outlines.Single(o => o.PlainText == "Ship the connector").ObjectId, "");
+        h.Notebook.EditOutlineText(PageKey.Setup, setup.Outlines.Single(o => o.PlainText == "Walk 30 min").ObjectId, "Walk 45 min");
+        string pageId = h.Notebook.PageIds[MonJan4];
+        int calls = 0;
+        h.App.BeforeWrite = id =>
+        {
+            if (id != pageId)
+            {
+                return;
+            }
+
+            calls++;
+            bool update = h.App.Calls.Last().Call == "UpdatePageContent";
+            bool edit = refusal switch
+            {
+                "the update is refused twice" => update,
+                "the first delete is refused" => update || calls == 1,
+                _ => false,
+            };
+            if (edit)
+            {
+                h.Notebook.TypeUserText(MonJan4, new RectPt(400, 380 + (20 * calls), 200, 14), "typing " + calls);
+            }
+        };
+        if (refusal == "the update fails")
+        {
+            h.App.UpdatePageContentFailure = id => id == pageId ? new OneNoteException("UpdatePageContent", OneNoteHResults.PageReadOnly, "The page is read-only.", null) : null;
+        }
+
+        RefreshResult result = h.Run(Request());
+
+        h.Notebook.Read(MonJan4).Outlines.Should().NotContain(o => o.ObjectId == legendId, "the legend's outline was deleted before the page's update was refused");
+        SidecarPage monday = h.SavedSidecar().Pages[MonJan4.Value];
+        monday.Anchors.Should().NotContainKey("objectiveLegend", "the sidecar keeps no ID of an outline the run deleted");
+        monday.AnchorTexts.Should().NotContainKey("objectiveLegend");
+        monday.Anchors.Should().ContainKey("standingGoal:1", "the goal's outline was not rewritten and is still the tool's");
+        PlannedChange goal = result.Summary!.Changes.Single(c => c.Page == MonJan4 && c.SlotId == "standingGoal:1");
+        goal.Blocked.Should().BeTrue();
+        if (refusal == "the update fails")
+        {
+            result.ExitCode.Should().Be(RefreshOrchestrator.WriteFailureExitCode);
+            goal.Reason.Should().Contain("Mon Jan 4").And.Contain("read-only");
+        }
+        else
+        {
+            result.ExitCode.Should().Be(0, result.Error);
+            goal.Reason.Should().Be(RefreshOrchestrator.ConflictReason);
+            result.Summary.Changes.Single(c => c.Page == MonJan4 && c.SlotId == "objectiveLegend")
+                .Should().Match<PlannedChange>(c => c.Kind == ChangeKind.Remove && !c.Blocked, "the removal was made");
+        }
+
+        h.App.BeforeWrite = null;
+        h.App.UpdatePageContentFailure = null;
+        RefreshResult next = h.Run(Request());
+        next.Summary!.Changes.Where(c => c.Page == MonJan4).Should().ContainSingle()
+            .Which.Should().Match<PlannedChange>(c => c.SlotId == "standingGoal:1" && c.Kind == ChangeKind.Update && !c.Blocked, "only the goal is left to write");
+        h.Notebook.Read(MonJan4).Outlines.Should().Contain(o => o.PlainText == "Walk 45 min");
+    }
+
+    [Fact]
+    public void A_partial_calendar_failure_keeps_the_dead_sources_lines_writes_the_rest_and_says_so()
+    {
+        StubCalendarFactory calendars = new();
+        Harness h = new(calendars: calendars);
+        h.Type(S.CalendarSources[0], "Work | https://example.com/work.ics");
+        h.Type(S.CalendarSources[1], "Home | https://example.com/home.ics");
+        DateTime nine = new(2027, 1, 5, 9, 0, 0);
+        DateTime six = new(2027, 1, 6, 18, 0, 0);
+        DateTime seven = new(2027, 1, 7, 7, 0, 0);
+        CalendarEvent meeting = new("w1@2027-01-05T09:00", "Staff meeting", nine, nine.AddHours(1), false, false, false, "Work", null);
+        CalendarEvent dinner = new("h1@2027-01-06T18:00", "Dinner", six, six.AddHours(1), false, false, false, "Home", null);
+        calendars.EventsByLabel["Work"] = new[] { meeting };
+        calendars.EventsByLabel["Home"] = new[] { dinner };
+        h.Run(Request(calendar: true)).Summary!.EventsWritten.Should().Be(4, "Tuesday's 9 row and column, Wednesday's 18 row and column");
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+        string meetingRow = h.SavedSidecar().Pages[tueJan5.Value].Anchors["timeBlockEvent:9"];
+        calendars.FailuresByLabel["Work"] = new HttpRequestException("timeout");
+        calendars.EventsByLabel["Home"] = new[] { dinner, new CalendarEvent("h2@2027-01-07T07:00", "Gym", seven, seven.AddHours(1), false, false, false, "Home", null) };
+
+        RefreshResult partial = h.Run(Request(calendar: true));
+
+        partial.Success.Should().BeTrue(partial.Error);
+        partial.ExitCode.Should().Be(0, "one source answered");
+        partial.Summary!.FailedSources.Should().Equal("Work: timeout");
+        partial.Summary.Warnings.Should().Contain("Some calendar sources failed; their events were kept on the pages and no event lines were removed this run.")
+            .And.NotContain(w => w.Contains("Every calendar source failed", StringComparison.Ordinal));
+        partial.Summary.Changes.Should().NotContain(c => c.Kind == ChangeKind.Remove, "a dead feed never erases its events");
+        partial.Summary.EventsWritten.Should().Be(2, "Thursday's 7 row and column from the source that answered");
+        h.Notebook.Read(tueJan5).Outlines.Single(o => o.ObjectId == meetingRow).PlainText.Should().Be("9:00 Staff meeting");
+        h.Notebook.Read(PageKey.Day(new DateOnly(2027, 1, 7))).Outlines.Should().Contain(o => o.PlainText == "7:00 Gym");
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(0, "a partial failure is not a failed run");
+    }
+
+    [Fact]
+    public void A_calendar_line_the_user_moved_is_left_where_it_is_and_reported()
+    {
+        StubCalendarFactory calendars = new();
+        Harness h = new(calendars: calendars);
+        h.Type(S.CalendarSources[0], "Work | https://example.com/cal.ics");
+        DateTime nine = new(2027, 1, 5, 9, 0, 0);
+        calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff meeting", nine, nine.AddHours(1), false, false, false, "Work", null) };
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+        h.Run(Request(calendar: true));
+        string rowId = h.SavedSidecar().Pages[tueJan5.Value].Anchors["timeBlockEvent:9"];
+        h.Notebook.MoveOutline(tueJan5, rowId, 500, 400);
+        calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff sync", nine, nine.AddHours(1), false, false, false, "Work", null) };
+
+        RefreshResult second = h.Run(Request(calendar: true));
+
+        second.Success.Should().BeTrue(second.Error);
+        PlannedChange row = second.Summary!.Changes.Single(c => c.Page == tueJan5);
+        row.Blocked.Should().BeTrue();
+        row.Reason.Should().Be(Propagator.MovedReason);
+        PageXml page = h.Notebook.Read(tueJan5);
+        OutlineInfo moved = page.Outlines.Single(o => o.ObjectId == rowId);
+        moved.PlainText.Should().Be("9:00 Staff meeting", "a moved tool object is neither rewritten nor put back");
+        moved.X.Should().BeApproximately(500 + page.SheetOutline!.X, 0.01);
+        moved.Y.Should().BeApproximately(400 + page.SheetOutline.Y, 0.01);
+        second.Summary.EventsWritten.Should().Be(1, "Tuesday's column on the overview is updated");
+        RefreshText.SummaryLines(second, "SFP Q1 2027").Should().Contain(l => l.StartsWith("Skipped: Tue Jan 5  timeBlockEvent:9", StringComparison.Ordinal) && l.Contains("moved by the user", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_notebook_that_does_not_open_within_60_s_fails_the_run_with_exit_5_and_the_prd_message()
+    {
+        Harness h = new();
+        h.Services = h.Services with { OpenTimeout = null };
+        h.App.Close(h.Notebook.NotebookId);
+        h.App.GetHierarchyFailure = (id, scope) => id == h.Notebook.NotebookId && scope == HierarchyScope.Self
+            ? new OneNoteException("GetHierarchy", OneNoteHResults.NotebookDoesNotExist, "The notebook is still opening.", null)
+            : null;
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(5);
+        result.Error.Should().Be("Notebook 'SFP Q1 2027' did not open within 60 s.");
+        h.Log.Messages(LogEventLevel.Information).Should().Contain(m => m.Contains("Waiting for notebook", StringComparison.Ordinal) && m.Contains("(58 s)", StringComparison.Ordinal));
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(1, "the daily task's OneNote failures count toward the toast");
+    }
+
+    [Fact]
+    public void A_cancelled_refresh_exits_5_with_cancelled_and_writes_nothing()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        int updates = h.App.CallCount("UpdatePageContent");
+        using CancellationTokenSource cancel = new();
+        cancel.Cancel();
+
+        RefreshResult result = h.Run(Request(), new OnPageWrite(1, () => { }), cancel.Token);
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(5);
+        result.Error.Should().Be("Cancelled.");
+        result.Summary.Should().BeNull();
+        h.App.CallCount("UpdatePageContent").Should().Be(updates, "nothing is written");
+        h.SavedSidecar().LastRefresh.Should().BeNull();
+        RefreshText.SummaryLines(result, "SFP Q1 2027").First().Should().Be("Refresh of SFP Q1 2027 failed: Cancelled.");
+    }
+
+    /// <summary>Plans with the real propagator, then runs an action: the user editing a page between planning and writing.</summary>
+    private sealed class ThenEdit : IPropagator
+    {
+        private readonly IPropagator inner;
+        private readonly Action edit;
+
+        public ThenEdit(IPropagator inner, Action edit)
+        {
+            this.inner = inner;
+            this.edit = edit;
+        }
+
+        public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s) => Then(inner.Plan(plan, v, s));
+
+        public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s, bool writeInkedValues) => Then(inner.Plan(plan, v, s, writeInkedValues));
+
+        private IReadOnlyList<PlannedChange> Then(IReadOnlyList<PlannedChange> changes)
+        {
+            edit();
+            return changes;
+        }
+    }
+
+    /// <summary>Runs an action when the run reports it is writing its n-th page (not the "Writing changes" phase line).</summary>
+    private sealed class OnPageWrite : IProgress<string>
+    {
+        private readonly int page;
+        private readonly Action action;
+
+        public OnPageWrite(int page, Action action)
+        {
+            this.page = page;
+            this.action = action;
+        }
+
+        public List<string> Pages { get; } = new();
+
+        public void Report(string value)
+        {
+            if (!value.StartsWith("Writing ", StringComparison.Ordinal) || value == "Writing changes")
+            {
+                return;
+            }
+
+            Pages.Add(value);
+            if (Pages.Count == page)
+            {
+                action();
+            }
+        }
+    }
+
     /// <summary>A calendar source factory handing out one stub source for every Setup line, with the events and failure the test sets.</summary>
     private sealed class StubCalendarFactory : ICalendarSourceFactory
     {
         public IReadOnlyList<CalendarEvent> Events { get; set; } = Array.Empty<CalendarEvent>();
 
         public Exception? Failure { get; set; }
+
+        /// <summary>Events of one source by its Setup label, in place of <see cref="Events"/>.</summary>
+        public Dictionary<string, IReadOnlyList<CalendarEvent>> EventsByLabel { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>A failure of one source by its Setup label.</summary>
+        public Dictionary<string, Exception> FailuresByLabel { get; } = new(StringComparer.Ordinal);
 
         public List<(DateOnly From, DateOnly To)> Windows { get; } = new();
 
@@ -453,7 +1024,13 @@ public class RefreshOrchestratorTests
                     throw owner.Failure;
                 }
 
-                return owner.Events.Select(e => e with { SourceLabel = source.Label }).ToList();
+                if (owner.FailuresByLabel.TryGetValue(source.Label, out Exception? failure))
+                {
+                    throw failure;
+                }
+
+                IReadOnlyList<CalendarEvent> events = owner.EventsByLabel.TryGetValue(source.Label, out IReadOnlyList<CalendarEvent>? own) ? own : owner.Events;
+                return events.Select(e => e with { SourceLabel = source.Label }).ToList();
             }
         }
     }

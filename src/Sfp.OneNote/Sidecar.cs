@@ -61,4 +61,11 @@ public sealed record SidecarPage
 
     /// <summary>Slot or anchor id to OneNote object ID of the outline the tool wrote.</summary>
     public IReadOnlyDictionary<string, string> Anchors { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Slot id to the text Refresh last wrote in that slot's outline (plain text, lines joined by "\n"), so a later run
+    /// can tell that the user has typed into the tool's outline and leave it alone; empty in files written before it was
+    /// recorded, and for link anchors, which Refresh never rewrites.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> AnchorTexts { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
 }

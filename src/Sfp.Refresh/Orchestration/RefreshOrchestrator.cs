@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Sfp.Core.Dates;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
@@ -32,8 +33,8 @@ public enum TimeBlockWindowSource
 /// the Setup page's, see <see cref="CalendarWindow"/>), previous texts read from the tool-owned outlines, freeze and
 /// diff with the sidecar's FrozenThrough), then either lists every change (dry run, nothing written) or writes them
 /// page by page through the anchor writer, updates the sidecar (anchors, LastRefresh, FrozenThrough), syncs and fills
-/// the summary. Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every calendar
-/// source failed.
+/// the summary. Exit codes: 0 success, 2 notebook not found, 3 OneNote unavailable, 5 write failure, 6 every Setup
+/// calendar source failed. Every real run then updates the failure streak beside the sidecar (see <see cref="TrackStreak"/>).
 /// </summary>
 public sealed class RefreshOrchestrator : IRefreshOrchestrator
 {
@@ -45,6 +46,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
     /// <summary>Reason recorded on a change skipped because its value came from ink and the run was not told to write inked values.</summary>
     public const string InkedSkipReason = "The value came from ink and was not confirmed (pass --write-inked or confirm in the app).";
+
+    /// <summary>Title of the toast raised when OneNote made the third real run in a row fail (exit 3 or 5).</summary>
+    public const string RefreshFailureToastTitle = "sfp2onenote: refresh failing";
+
+    /// <summary>Reason recorded on a change not written because the page changed under the write twice in a row.</summary>
+    public const string ConflictReason = "The page changed while Refresh was writing it (twice in a row); nothing was written to it and it will be tried again on the next run.";
 
     private readonly RefreshServices services;
 
@@ -59,9 +66,17 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     {
         ArgumentNullException.ThrowIfNull(request);
         Stopwatch clock = Stopwatch.StartNew();
+        RunState state = new();
+        RefreshResult result = RunGuarded(request, progress, cancellationToken, clock, state);
+        TrackStreak(request, state, result);
+        return result;
+    }
+
+    private RefreshResult RunGuarded(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken, Stopwatch clock, RunState state)
+    {
         try
         {
-            return RunCore(request, progress, cancellationToken, clock);
+            return RunCore(request, progress, cancellationToken, clock, state);
         }
         catch (OneNoteUnavailableException ex)
         {
@@ -71,6 +86,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         catch (OperationCanceledException)
         {
             services.Log.Information("Refresh cancelled");
+            state.Cancelled = true;
             return new RefreshResult { Success = false, ExitCode = WriteFailureExitCode, Error = "Cancelled.", Elapsed = clock.Elapsed, LogPath = services.LogPath };
         }
         catch (OneNoteException ex)
@@ -86,18 +102,22 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
     }
 
-    private RefreshResult RunCore(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken, Stopwatch clock)
+    private RefreshResult RunCore(RefreshRequest request, IProgress<string>? progress, CancellationToken cancellationToken, Stopwatch clock, RunState state)
     {
         List<string> warnings = new();
         Manifest manifest = services.Manifest;
 
         progress?.Report("Opening notebook " + request.NotebookName);
         NotebookOpener opener = new(services.App, services.Sidecars, services.Log, services.OpenTimeout, services.Sleep);
-        OpenedNotebook? opened = opener.Open(request.NotebookName, request.NotebooksFolder, services.SearchFolders);
+        (Sidecar? Sidecar, string? Path) found = opener.FindSidecar(request.NotebookName, request.NotebooksFolder, services.SearchFolders);
+        state.SidecarPath = found.Path;
+        OpenedNotebook? opened = opener.Open(request.NotebookName, request.NotebooksFolder, services.SearchFolders, found);
         if (opened is null)
         {
             return Fail(NotFoundExitCode, $"Notebook '{request.NotebookName}' was not found: no sidecar names it, OneNote does not list it and no folder holds it. Generate it first, or pass --folder with the folder that holds it.", clock);
         }
+
+        state.SidecarPath = opened.SidecarPath;
 
         progress?.Report("Checking the sidecar");
         SidecarRecovery recovery = new(services.App, manifest, services.Dates, services.Plans, services.Log);
@@ -132,14 +152,14 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         progress?.Report("Planning propagation");
         IPropagator propagator = services.Propagators(catalog, pages.Read);
-        List<PlannedChange> changes = propagator.Plan(plan, values, sidecar).ToList();
+        List<PlannedChange> changes = propagator.Plan(plan, values, sidecar, request.WriteInkedValues).ToList();
         HashSet<PlannedChange> calendarChanges = new(ReferenceEqualityComparer.Instance);
 
         CalendarOutcome? calendar = null;
         if (request.Calendar)
         {
             progress?.Report("Importing calendar events");
-            calendar = PlanCalendar(request, values, sidecar, plan, catalog, pages, opened.SidecarPath, window, warnings);
+            calendar = PlanCalendar(request, values, sidecar, plan, catalog, pages, state, window, warnings);
             if (calendar is not null)
             {
                 changes.AddRange(calendar.Changes);
@@ -172,14 +192,21 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         }
 
         progress?.Report("Writing changes");
-        WriteOutcome written = WriteAll(changes, calendarChanges, plan, catalog, pages, request.WriteInkedValues, progress, cancellationToken);
-        sidecar = sidecar with
+        WriteState writeState = new(sidecar);
+        WriteOutcome written;
+        try
         {
-            Pages = written.Pages,
-            LastRefresh = services.Clock(),
-            FrozenThrough = calendar?.FrozenThrough ?? sidecar.FrozenThrough,
-        };
-        services.Sidecars.Save(opened.SidecarPath, sidecar);
+            written = WriteAll(changes, calendarChanges, plan, catalog, pages, writeState, request.WriteInkedValues, progress, cancellationToken);
+        }
+        catch
+        {
+            // Cancelled, OneNote gone or an unexpected failure part way through: the outlines written so far are still
+            // recorded, or the next run would find them unowned and block their own slots.
+            SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, afterFailure: true);
+            throw;
+        }
+
+        sidecar = SaveWritten(opened.SidecarPath, sidecar, writeState, calendar, afterFailure: false);
 
         RefreshSummary summary = new()
         {
@@ -253,19 +280,54 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         return window;
     }
 
-    /// <summary>Writes the unblocked changes page by page; inked values are skipped unless confirmed; the first OneNote failure stops the run with the page named.</summary>
+    /// <summary>
+    /// The sidecar with what the write phase recorded (anchors and the texts written), LastRefresh and FrozenThrough,
+    /// saved. After a failure part way through the save is best effort: a save error is logged so the failure itself
+    /// still reaches the result.
+    /// </summary>
+    private Sidecar SaveWritten(string path, Sidecar sidecar, WriteState state, CalendarOutcome? calendar, bool afterFailure)
+    {
+        Sidecar updated = sidecar with
+        {
+            Pages = state.Pages(sidecar),
+            LastRefresh = services.Clock(),
+            FrozenThrough = calendar?.FrozenThrough ?? sidecar.FrozenThrough,
+        };
+        if (!afterFailure)
+        {
+            services.Sidecars.Save(path, updated);
+            return updated;
+        }
+
+        try
+        {
+            services.Sidecars.Save(path, updated);
+            services.Log.Information("The run stopped part way; the objects written so far were recorded in {Path}", path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            services.Log.Error(ex, "The run stopped part way and the sidecar {Path} could not be saved", path);
+        }
+
+        return updated;
+    }
+
+    /// <summary>
+    /// Writes the unblocked changes page by page (<see cref="WritePage"/>); inked values are skipped unless confirmed; the
+    /// first OneNote failure stops the run with the page named. What each page write did is recorded in
+    /// <paramref name="state"/> as soon as it is done, so a run that stops part way still saves it.
+    /// </summary>
     private WriteOutcome WriteAll(
         List<PlannedChange> changes,
         HashSet<PlannedChange> calendarChanges,
         NotebookPlan plan,
         SlotCatalog catalog,
         PageCache pages,
+        WriteState state,
         bool writeInked,
         IProgress<string>? progress,
         CancellationToken cancellationToken)
     {
-        Dictionary<string, Dictionary<string, string>> anchors = pages.Sidecar.Pages.ToDictionary(
-            p => p.Key, p => new Dictionary<string, string>(p.Value.Anchors, StringComparer.Ordinal), StringComparer.Ordinal);
         List<PlannedChange> outcome = new();
         List<string> warnings = new();
         int touched = 0;
@@ -276,7 +338,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         foreach (IGrouping<PageKey, PlannedChange> group in changes.GroupBy(c => c.Page))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            List<AnchorWrite> writes = new();
+            List<PlannedChange> pending = new();
             foreach (PlannedChange change in group)
             {
                 if (change.Blocked)
@@ -297,32 +359,27 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                     continue;
                 }
 
-                anchors.TryGetValue(group.Key.Value, out Dictionary<string, string>? pageAnchors);
-                string? ownedId = pageAnchors is not null && pageAnchors.TryGetValue(change.SlotId, out string? id) ? id : null;
-                PageSpec? spec = plan.FindPage(group.Key);
-                SlotGeometry? geometry = spec is null ? null : catalog.Slot(spec, change.SlotId);
-                writes.Add(new AnchorWrite(change, geometry, ownedId));
+                pending.Add(change);
             }
 
-            if (writes.Count == 0)
+            if (pending.Count == 0)
             {
                 continue;
             }
 
+            PageSpec? spec = plan.FindPage(group.Key);
             string? pageId = pages.PageId(group.Key);
-            PageXml? current = pages.Read(group.Key);
-            if (pageId is null || current is null)
+            if (spec is null || pageId is null)
             {
-                outcome.AddRange(writes.Select(w => w.Change with { Blocked = true, Reason = Propagator.UnreadablePageReason }));
+                outcome.AddRange(pending.Select(c => c with { Blocked = true, Reason = Propagator.UnreadablePageReason }));
                 continue;
             }
 
-            string title = plan.FindPage(group.Key)?.Title ?? group.Key.Value;
-            progress?.Report("Writing " + title);
-            AnchorWriteResult result;
+            progress?.Report("Writing " + spec.Title);
+            PageWrite page;
             try
             {
-                result = services.Writer.Write(pageId, current, writes);
+                page = WritePage(spec, pageId, pending, catalog, pages, state);
             }
             catch (OneNoteUnavailableException)
             {
@@ -330,58 +387,188 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             }
             catch (OneNoteException ex)
             {
-                services.Log.Error(ex, "Writing page {Title} failed", title);
-                error = $"Writing page '{title}' failed: {ex.Message}";
-                outcome.AddRange(writes.Select(w => w.Change with { Blocked = true, Reason = error }));
+                services.Log.Error(ex, "Writing page {Title} failed", spec.Title);
+                error = $"Writing page '{spec.Title}' failed: {ex.Message}";
+                outcome.AddRange(pending.Select(c => c with { Blocked = true, Reason = error }));
                 continue;
             }
 
-            pages.Invalidate(group.Key);
-            touched++;
-            Dictionary<string, string> updatedAnchors = anchors.TryGetValue(group.Key.Value, out Dictionary<string, string>? existing)
-                ? existing
-                : new Dictionary<string, string>(StringComparer.Ordinal);
-            anchors[group.Key.Value] = updatedAnchors;
-            foreach ((string slotId, string objectId) in result.Created)
+            outcome.AddRange(page.Changes);
+            warnings.AddRange(page.Warnings);
+            touched += page.Touched ? 1 : 0;
+            foreach ((PlannedChange planned, PlannedChange written) in page.Written.Where(w => w.Written.Kind != ChangeKind.Remove))
             {
-                updatedAnchors[slotId] = objectId;
-            }
-
-            foreach (string slotId in result.Removed)
-            {
-                updatedAnchors.Remove(slotId);
-            }
-
-            foreach (string slotId in result.Unresolved)
-            {
-                warnings.Add($"Page {title}: the object written for {slotId} could not be found again; it will be re-planned next run.");
-            }
-
-            foreach (AnchorWrite write in writes)
-            {
-                outcome.Add(write.Change);
-                if (write.Change.Kind != ChangeKind.Remove)
+                if (calendarChanges.Contains(planned))
                 {
-                    if (calendarChanges.Contains(write.Change))
-                    {
-                        eventsWritten++;
-                    }
-                    else
-                    {
-                        valuesWritten++;
-                    }
+                    eventsWritten++;
+                }
+                else
+                {
+                    valuesWritten++;
                 }
             }
         }
 
-        Dictionary<string, SidecarPage> pagesWithAnchors = pages.Sidecar.Pages.ToDictionary(
-            p => p.Key,
-            p => anchors.TryGetValue(p.Key, out Dictionary<string, string>? a) ? p.Value with { Anchors = a } : p.Value,
-            StringComparer.Ordinal);
-        return new WriteOutcome(outcome, pagesWithAnchors, touched, valuesWritten, eventsWritten, warnings, error);
+        return new WriteOutcome(outcome, touched, valuesWritten, eventsWritten, warnings, error);
     }
 
-    /// <summary>Fetches the Setup sources (plus the bundled holidays), places the events and diffs them against what the tool wrote last.</summary>
+    /// <summary>
+    /// Writes one page's changes. The page is read again just before the write and every change is decided again
+    /// against what the page holds now (<see cref="Propagator.Decide"/> with the run's ownership records): a slot the
+    /// user filled or edited since planning is blocked, a change already in place is dropped, and a removal whose outline
+    /// is already gone only drops its ID. The write passes the page's lastModifiedTime, so a page the user changes between
+    /// this read and the write is not written over; on hrLastModifiedDateDidNotMatch the page is read, re-checked and
+    /// written once more, and when it changed again its changes are reported as not written, for the next run. When the
+    /// write fails for good after some of its removals were made, the page is read again and the records of the outlines
+    /// gone from it are dropped (<see cref="RemovedBeforeFailure"/>), so the sidecar never keeps the ID of a deleted
+    /// outline; on a conflict those removals are reported done, any other failure still fails the page.
+    /// </summary>
+    private PageWrite WritePage(PageSpec spec, string pageId, IReadOnlyList<PlannedChange> pending, SlotCatalog catalog, PageCache pages, WriteState state)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            pages.Invalidate(spec.Key);
+            PageXml? fresh = pages.Read(spec.Key);
+            if (fresh is null)
+            {
+                return new PageWrite(pending.Select(c => c with { Blocked = true, Reason = Propagator.UnreadablePageReason }).ToList(), new(), false, new());
+            }
+
+            (List<(PlannedChange Planned, AnchorWrite Write)> writes, List<PlannedChange> settled, List<string> gone) = Recheck(spec, pending, fresh, catalog, state);
+            if (writes.Count == 0)
+            {
+                state.Forget(spec.Key, gone);
+                return new PageWrite(settled, new(), false, new());
+            }
+
+            AnchorWriteResult result;
+            try
+            {
+                result = services.Writer.Write(pageId, fresh, writes.Select(w => w.Write).ToList());
+            }
+            catch (OneNoteException ex) when (ex is not OneNoteUnavailableException)
+            {
+                bool conflict = ex.HResult == OneNoteHResults.LastModifiedDateDidNotMatch;
+                if (conflict && attempt == 1)
+                {
+                    // Removals made before the refusal are found gone by the next attempt's re-check.
+                    services.Log.Warning("Page {Title} changed while it was being written; reading it again", spec.Title);
+                    continue;
+                }
+
+                pages.Invalidate(spec.Key);
+                List<AnchorWrite> removed = RemovedBeforeFailure(spec.Key, writes.Select(w => w.Write), pages);
+                state.Forget(spec.Key, gone.Concat(removed.Select(w => w.Change.SlotId)));
+                if (!conflict)
+                {
+                    throw;
+                }
+
+                services.Log.Warning(ex, "Page {Title} changed again while it was being written; its changes are left for the next run", spec.Title);
+                List<PlannedChange> conflicted = settled
+                    .Concat(writes.Select(w => removed.Contains(w.Write) ? w.Write.Change : w.Write.Change with { Blocked = true, Reason = ConflictReason }))
+                    .ToList();
+                return new PageWrite(conflicted, new(), false, new() { $"Page {spec.Title} changed while Refresh was writing it; its changes were not written and will be tried again on the next run." });
+            }
+
+            pages.Invalidate(spec.Key);
+            state.Record(spec.Key, result, writes.Select(w => w.Write).ToList());
+            state.Forget(spec.Key, gone);
+            List<string> warnings = result.Unresolved
+                .Select(slotId => $"Page {spec.Title}: the object written for {slotId} could not be found again; it will be re-planned next run.")
+                .ToList();
+            return new PageWrite(
+                settled.Concat(writes.Select(w => w.Write.Change)).ToList(),
+                writes.Select(w => (w.Planned, w.Write.Change)).ToList(),
+                true,
+                warnings);
+        }
+    }
+
+    /// <summary>
+    /// The removals among <paramref name="writes"/> whose outline is no longer on the page, read again after OneNote
+    /// refused the write part way: each removal is its own DeletePageContent call made before the one UpdatePageContent,
+    /// so some may be done although the write as a whole failed. None when the page cannot be read.
+    /// </summary>
+    private static List<AnchorWrite> RemovedBeforeFailure(PageKey key, IEnumerable<AnchorWrite> writes, PageCache pages)
+    {
+        List<AnchorWrite> removals = writes.Where(w => w.Change.Kind == ChangeKind.Remove && !string.IsNullOrEmpty(w.ObjectId)).ToList();
+        if (removals.Count == 0)
+        {
+            return removals;
+        }
+
+        PageXml? now = pages.Read(key);
+        if (now is null)
+        {
+            return new List<AnchorWrite>();
+        }
+
+        HashSet<string> present = now.Outlines.Select(o => o.ObjectId).ToHashSet(StringComparer.Ordinal);
+        return removals.Where(w => !present.Contains(w.ObjectId!)).ToList();
+    }
+
+    /// <summary>
+    /// Decides every pending change of a page again against the page as just read: the writes still to make (with their
+    /// geometry and owned object ID), the changes settled without a write (blocked now, or a removal whose outline is
+    /// already gone) and the slots whose outline is gone (their IDs are dropped).
+    /// </summary>
+    private (List<(PlannedChange Planned, AnchorWrite Write)> Writes, List<PlannedChange> Settled, List<string> Gone) Recheck(
+        PageSpec spec, IReadOnlyList<PlannedChange> pending, PageXml fresh, SlotCatalog catalog, WriteState state)
+    {
+        IReadOnlyDictionary<string, string> anchors = state.Anchors(spec.Key);
+        IReadOnlyDictionary<string, string> texts = state.Texts(spec.Key);
+        HashSet<string> ownedIds = anchors.Values.ToHashSet(StringComparer.Ordinal);
+        List<(PlannedChange Planned, AnchorWrite Write)> writes = new();
+        List<PlannedChange> settled = new();
+        List<string> gone = new();
+        foreach (PlannedChange change in pending)
+        {
+            SlotGeometry? geometry = catalog.Slot(spec, change.SlotId);
+            if (geometry is null)
+            {
+                settled.Add(change with { Blocked = true, Reason = "The page has no slot for this change." });
+                continue;
+            }
+
+            string? ownedId = anchors.TryGetValue(change.SlotId, out string? id) ? id : null;
+            string? written = texts.TryGetValue(change.SlotId, out string? last) ? last : null;
+            SlotState slot = SlotInspector.Inspect(fresh, geometry.Rect, ownedId, ownedIds, catalog.Manifest.PageWidthPt);
+            PlannedChange? now = Propagator.Decide(change.Page, change.SlotId, change.Kind == ChangeKind.Remove ? "" : change.NewText, slot, written);
+            if (now is null)
+            {
+                if (change.Kind == ChangeKind.Remove && slot.Owned is null)
+                {
+                    gone.Add(change.SlotId);
+                    settled.Add(change);
+                }
+                else
+                {
+                    services.Log.Information("Page {Title}: {Slot} already holds its text; nothing to write", spec.Title, change.SlotId);
+                }
+
+                continue;
+            }
+
+            now = now with { Inked = change.Inked };
+            if (now.Blocked)
+            {
+                services.Log.Information("Page {Title}: {Slot} changed since planning and is left alone: {Reason}", spec.Title, change.SlotId, now.Reason);
+                settled.Add(now);
+                continue;
+            }
+
+            writes.Add((change, new AnchorWrite(now, geometry, now.Kind == ChangeKind.Create ? null : ownedId)));
+        }
+
+        return (writes, settled, gone);
+    }
+
+    /// <summary>
+    /// Fetches the Setup sources (plus the bundled holidays), places the events and diffs them against what the tool wrote
+    /// last. Whether every source failed (exit 6, the failure streak) is decided by the Setup sources alone: the bundled
+    /// holiday list is local and added by the tool, so it would otherwise keep a dead calendar feed from ever counting.
+    /// </summary>
     private CalendarOutcome? PlanCalendar(
         RefreshRequest request,
         SetupValues values,
@@ -389,7 +576,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         NotebookPlan plan,
         SlotCatalog catalog,
         PageCache pages,
-        string sidecarPath,
+        RunState state,
         TimeBlockWindow window,
         List<string> warnings)
     {
@@ -399,10 +586,11 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             return null;
         }
 
-        List<CalendarSource> sources = values.Sources.ToList();
-        if (services.IncludeBundledHolidays && !sources.Any(s => s.Kind == CalendarSourceKind.Holidays))
+        List<CalendarSource> setupSources = values.Sources.ToList();
+        List<CalendarSource> bundled = new();
+        if (services.IncludeBundledHolidays && !setupSources.Any(s => s.Kind == CalendarSourceKind.Holidays))
         {
-            sources.Add(new CalendarSource("Holidays", CalendarSourceKind.Holidays, HolidayCalendarSource.DefaultListId, null, null));
+            bundled.Add(new CalendarSource("Holidays", CalendarSourceKind.Holidays, HolidayCalendarSource.DefaultListId, null, null));
         }
 
         DateOnly today = request.Today;
@@ -416,15 +604,16 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             return new CalendarOutcome(Array.Empty<PlannedChange>(), frozen, Array.Empty<string>(), false);
         }
 
-        CalendarFetchResult fetched = CalendarImportRunner.Fetch(sources, services.CalendarSources, from, to, services.Log);
-        if (!request.DryRun)
-        {
-            FailureCounter counter = FailureCounter.LoadBeside(sidecarPath);
-            CalendarImportRunner.Track(fetched, counter, services.Notifier ?? new LogOnlyNotifier(services), services.Clock(), services.Log);
-        }
+        CalendarFetchResult setup = CalendarImportRunner.Fetch(setupSources, services.CalendarSources, from, to, services.Log);
+        CalendarFetchResult tool = CalendarImportRunner.Fetch(bundled, services.CalendarSources, from, to, services.Log);
+        CalendarFetchResult fetched = new(
+            setup.Events.Concat(tool.Events).OrderBy(e => e.Start).ThenBy(e => e.Title, StringComparer.Ordinal).ToList(),
+            setup.Failures.Concat(tool.Failures).ToList(),
+            setup.SourceCount + tool.SourceCount);
+        state.SetupFetch = setup;
 
         IReadOnlyList<string> failedSources = fetched.Failures.Select(f => f.Label + ": " + f.Message).ToList();
-        if (fetched.AllSourcesFailed)
+        if (setup.AllSourcesFailed)
         {
             warnings.Add("Every calendar source failed; the events already on the pages were left as they are.");
             return new CalendarOutcome(Array.Empty<PlannedChange>(), sidecar.FrozenThrough ?? frozen, failedSources, true);
@@ -487,7 +676,10 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         return change.NewText.Split('\n').All(old.Contains);
     }
 
-    /// <summary>Applies the ownership rules to a calendar change: a user object in the slot or a moved tool object blocks it.</summary>
+    /// <summary>
+    /// Applies the ownership rules to a calendar change: a user object in the slot, a moved tool object, or a tool object
+    /// whose text the user edited (it no longer holds the text the tool last wrote) blocks it.
+    /// </summary>
     private static PlannedChange Check(PlannedChange change, NotebookPlan plan, SlotCatalog catalog, PageCache pages, Sidecar sidecar)
     {
         PageSpec? spec = plan.FindPage(change.Page);
@@ -511,6 +703,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             return change with { Blocked = true, Reason = Propagator.MovedReason };
         }
 
+        string? written = record is not null && record.AnchorTexts.TryGetValue(change.SlotId, out string? last) ? last : null;
+        if (state.Owned is not null && Propagator.IsEdited(state.OwnedText, written))
+        {
+            return change with { Blocked = true, Reason = Propagator.EditedReason };
+        }
+
         if (change.Kind != ChangeKind.Remove && state.IsBlocked)
         {
             return change with { Blocked = true, Reason = Propagator.BlockedReason(state) };
@@ -524,6 +722,62 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         return change;
     }
 
+    /// <summary>
+    /// The PRD's "three consecutive failures raise a Windows toast", updated once per real run from how it ended: a run
+    /// that succeeded clears the streak; a run whose every Setup calendar source failed (exit 6) or that OneNote failed
+    /// (exit 3 or 5) adds one, and from the third in a row on each such run raises the toast. Dry runs, cancelled runs, a
+    /// notebook that was not found (exit 2) and runs whose sidecar path never became known leave the streak alone. The
+    /// counter file lives beside the sidecar; failing to update it is logged, never fatal.
+    /// </summary>
+    private void TrackStreak(RefreshRequest request, RunState state, RefreshResult result)
+    {
+        if (request.DryRun || state.Cancelled || state.SidecarPath is null)
+        {
+            return;
+        }
+
+        try
+        {
+            FailureCounter counter = FailureCounter.LoadBeside(state.SidecarPath);
+            ISourceFailureNotifier notifier = services.Notifier ?? new LogOnlyNotifier(services);
+            DateTimeOffset now = services.Clock();
+            switch (result.ExitCode)
+            {
+                case 0:
+                    if (counter.ConsecutiveTotalFailures > 0)
+                    {
+                        services.Log.Information("Refresh succeeded after {Count} failed runs", counter.ConsecutiveTotalFailures);
+                    }
+
+                    counter.Reset(now);
+                    counter.Save();
+                    break;
+                case SourcesUnreachableExitCode when state.SetupFetch is not null:
+                    CalendarImportRunner.Track(state.SetupFetch, counter, notifier, now, services.Log);
+                    break;
+                case OneNoteUnavailableExitCode or WriteFailureExitCode:
+                    counter.RecordTotalFailure(now, result.Error);
+                    counter.Save();
+                    services.Log.Warning("Refresh of {Name} failed ({Streak} runs in a row): {Error}", request.NotebookName, counter.ConsecutiveTotalFailures, result.Error);
+                    if (counter.ShouldToast)
+                    {
+                        notifier.Notify(RefreshFailureToastTitle, string.Format(
+                            CultureInfo.InvariantCulture,
+                            "Refresh of {0} failed {1} runs in a row. Last error: {2}",
+                            request.NotebookName,
+                            counter.ConsecutiveTotalFailures,
+                            result.Error ?? "unknown"));
+                    }
+
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            services.Log.Warning(ex, "The failure counter beside {Path} could not be updated", state.SidecarPath);
+        }
+    }
+
     private RefreshResult Fail(int exitCode, string error, Stopwatch clock) =>
         new() { Success = false, ExitCode = exitCode, Error = error, Elapsed = clock.Elapsed, LogPath = services.LogPath };
 
@@ -533,14 +787,111 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
     private sealed record CalendarOutcome(IReadOnlyList<PlannedChange> Changes, DateOnly FrozenThrough, IReadOnlyList<string> FailedSources, bool AllSourcesFailed);
 
+    /// <summary>What a run learned along the way that the failure streak needs once it has ended, however it ended.</summary>
+    private sealed class RunState
+    {
+        /// <summary>Where the sidecar is (and the failure counter beside it), once known.</summary>
+        public string? SidecarPath { get; set; }
+
+        /// <summary>The fetch of the Setup calendar sources alone, when the run imported the calendar.</summary>
+        public CalendarFetchResult? SetupFetch { get; set; }
+
+        public bool Cancelled { get; set; }
+    }
+
     private sealed record WriteOutcome(
         List<PlannedChange> Changes,
-        Dictionary<string, SidecarPage> Pages,
         int PagesTouched,
         int ValuesWritten,
         int EventsWritten,
         List<string> Warnings,
         string? Error);
+
+    /// <summary>What one page write did: every change with its final state, the writes made (as planned, as written), whether OneNote was written, and warnings.</summary>
+    private sealed record PageWrite(
+        List<PlannedChange> Changes,
+        List<(PlannedChange Planned, PlannedChange Written)> Written,
+        bool Touched,
+        List<string> Warnings);
+
+    /// <summary>
+    /// The sidecar's ownership records (slot to object ID, slot to the text the tool wrote) as the write phase changes
+    /// them, page by page, so the sidecar saved at the end, or after a run that stopped part way, holds every object the
+    /// run wrote.
+    /// </summary>
+    private sealed class WriteState
+    {
+        private static readonly IReadOnlyDictionary<string, string> None = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        private readonly Dictionary<string, Dictionary<string, string>> anchors;
+        private readonly Dictionary<string, Dictionary<string, string>> texts;
+
+        public WriteState(Sidecar sidecar)
+        {
+            anchors = sidecar.Pages.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value.Anchors, StringComparer.Ordinal), StringComparer.Ordinal);
+            texts = sidecar.Pages.ToDictionary(p => p.Key, p => new Dictionary<string, string>(p.Value.AnchorTexts, StringComparer.Ordinal), StringComparer.Ordinal);
+        }
+
+        /// <summary>Slot id to object ID of the page's tool-owned outlines, as of now.</summary>
+        public IReadOnlyDictionary<string, string> Anchors(PageKey page) => anchors.TryGetValue(page.Value, out Dictionary<string, string>? a) ? a : None;
+
+        /// <summary>Slot id to the text the tool last wrote there, as of now.</summary>
+        public IReadOnlyDictionary<string, string> Texts(PageKey page) => texts.TryGetValue(page.Value, out Dictionary<string, string>? t) ? t : None;
+
+        /// <summary>Records one page write: created outlines get their ID and text, updated ones their text, removed ones lose both.</summary>
+        public void Record(PageKey page, AnchorWriteResult result, IReadOnlyList<AnchorWrite> writes)
+        {
+            Dictionary<string, string> pageAnchors = Get(anchors, page);
+            Dictionary<string, string> pageTexts = Get(texts, page);
+            foreach ((string slotId, string objectId) in result.Created)
+            {
+                pageAnchors[slotId] = objectId;
+                pageTexts[slotId] = TextOf(writes, slotId);
+            }
+
+            foreach (string slotId in result.Updated)
+            {
+                pageTexts[slotId] = TextOf(writes, slotId);
+            }
+
+            Forget(page, result.Removed);
+        }
+
+        /// <summary>Drops the records of slots whose outline is gone.</summary>
+        public void Forget(PageKey page, IEnumerable<string> slotIds)
+        {
+            Dictionary<string, string> pageAnchors = Get(anchors, page);
+            Dictionary<string, string> pageTexts = Get(texts, page);
+            foreach (string slotId in slotIds)
+            {
+                pageAnchors.Remove(slotId);
+                pageTexts.Remove(slotId);
+            }
+        }
+
+        /// <summary>The sidecar's pages with the records as of now.</summary>
+        public Dictionary<string, SidecarPage> Pages(Sidecar sidecar) => sidecar.Pages.ToDictionary(
+            p => p.Key,
+            p => p.Value with
+            {
+                Anchors = anchors.TryGetValue(p.Key, out Dictionary<string, string>? a) ? new Dictionary<string, string>(a, StringComparer.Ordinal) : p.Value.Anchors,
+                AnchorTexts = texts.TryGetValue(p.Key, out Dictionary<string, string>? t) ? new Dictionary<string, string>(t, StringComparer.Ordinal) : p.Value.AnchorTexts,
+            },
+            StringComparer.Ordinal);
+
+        private static string TextOf(IReadOnlyList<AnchorWrite> writes, string slotId) => writes.First(w => w.Change.SlotId == slotId).Change.NewText;
+
+        private static Dictionary<string, string> Get(Dictionary<string, Dictionary<string, string>> records, PageKey page)
+        {
+            if (!records.TryGetValue(page.Value, out Dictionary<string, string>? record))
+            {
+                record = new Dictionary<string, string>(StringComparer.Ordinal);
+                records[page.Value] = record;
+            }
+
+            return record;
+        }
+    }
 
     /// <summary>Used when no notifier is injected: the toast text goes to the log only.</summary>
     private sealed class LogOnlyNotifier : ISourceFailureNotifier
