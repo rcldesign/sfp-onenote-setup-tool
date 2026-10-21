@@ -1,5 +1,8 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using Sfp.OneNote.Com;
+using Sfp.TestSupport;
 
 namespace Sfp.OneNote.Tests.Com;
 
@@ -85,6 +88,58 @@ public class OneNoteHResultsTests
         OneNoteHResults.InsertingFile.Should().Be(unchecked((int)0x80042016));
         OneNoteHResults.TimeOut.Should().Be(unchecked((int)0x80042023));
         OneNoteHResults.AppInModalUI.Should().Be(unchecked((int)0x80042030));
+    }
+
+    /// <summary>
+    /// onenote-3: the M0 spike's Python copy of the table (tools/spike/spike_common.py, the scripts the owner runs on the
+    /// PC) is checked against the same published rows, so the two copies cannot drift again: every OneNote row of its
+    /// ONENOTE_ERRORS in the published order and name, every other row the wrapper also names named alike, the DATE
+    /// fallback on hrLastModifiedDateDidNotMatch, and the retry set equal to the wrapper's busy results.
+    /// </summary>
+    [Fact]
+    public void The_spike_scripts_copy_of_the_table_matches_the_published_rows_and_the_wrapper()
+    {
+        string source = File.ReadAllText(Path.Combine(TestPaths.RepoRoot, "tools", "spike", "spike_common.py"));
+        Dictionary<string, uint> constants = Regex.Matches(source, @"^(?<name>[A-Z][A-Z0-9_]*) = 0x(?<hex>[0-9A-Fa-f]{8})\s*(#.*)?$", RegexOptions.Multiline)
+            .ToDictionary(m => m.Groups["name"].Value, m => uint.Parse(m.Groups["hex"].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture), StringComparer.Ordinal);
+        uint Value(string key) => key.StartsWith("0x", StringComparison.Ordinal)
+            ? uint.Parse(key[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture)
+            : constants.Should().ContainKey(key, "a symbolic key of the table is a hex constant of the script").WhoseValue;
+
+        Match table = Regex.Match(source, @"^ONENOTE_ERRORS = \{\r?\n(?<body>.*?)^\}", RegexOptions.Multiline | RegexOptions.Singleline);
+        table.Success.Should().BeTrue("spike_common.py defines ONENOTE_ERRORS");
+        List<(uint Value, string Name)> rows = table.Groups["body"].Value
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .Select(line =>
+            {
+                Match row = Regex.Match(line, @"^(?<key>0x[0-9A-Fa-f]{8}|[A-Z][A-Z0-9_]*): ""(?<name>[A-Za-z0-9_]+)"",$");
+                row.Success.Should().BeTrue("every line of the table is a 'key: \"name\",' row, which '" + line + "' is not");
+                return (Value(row.Groups["key"].Value), row.Groups["name"].Value);
+            })
+            .ToList();
+
+        rows.Where(r => r.Value is >= 0x80042000 and <= 0x800420FF).Should().Equal(Published, "the spike's OneNote rows are Microsoft's table, every row, in its order");
+        foreach ((uint value, string name) in rows)
+        {
+            string hex = "0x" + value.ToString("X8", CultureInfo.InvariantCulture);
+            string described = OneNoteHResults.Describe(unchecked((int)value));
+            if (!string.Equals(described, hex, StringComparison.Ordinal))
+            {
+                described.Should().Be(name + " (" + hex + ")", "a row the wrapper also names carries the wrapper's name");
+            }
+        }
+
+        constants.Should().ContainKey("HR_LAST_MODIFIED_DATE_DID_NOT_MATCH")
+            .WhoseValue.Should().Be(unchecked((uint)OneNoteHResults.LastModifiedDateDidNotMatch), "the DATE fallback fires on hrLastModifiedDateDidNotMatch");
+        Match retry = Regex.Match(source, @"^RETRY_CODES = \{(?<members>[^}]*)\}", RegexOptions.Multiline);
+        retry.Success.Should().BeTrue("spike_common.py defines RETRY_CODES");
+        List<uint> retried = retry.Groups["members"].Value.Split(',').Select(m => m.Trim()).Where(m => m.Length > 0).Select(Value).ToList();
+        retried.Should().BeEquivalentTo(
+            new[] { OneNoteHResults.RpcCallRejected, OneNoteHResults.RpcServerCallRetryLater, OneNoteHResults.AppInModalUI }.Select(hr => unchecked((uint)hr)),
+            "the spike retries once what the wrapper retries once");
+        retried.Should().OnlyContain(hr => OneNoteHResults.IsBusy(unchecked((int)hr)));
     }
 
     [Theory]
