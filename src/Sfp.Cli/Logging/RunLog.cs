@@ -76,6 +76,26 @@ public sealed class RunLog : IDisposable
     }
 
     /// <summary>
+    /// <see cref="Start"/> after making sure the log file can be written: the folder is created and the file opened once,
+    /// because the file sink, unlike <see cref="Directory.CreateDirectory(string)"/>, does not throw for a file it cannot
+    /// open (it logs nothing, and the run would name a log file that does not exist). A folder or file that cannot be used
+    /// throws here instead (<see cref="IOException"/>, <see cref="UnauthorizedAccessException"/> and the like), so the
+    /// caller can fall back. The app's log factory starts its logs this way.
+    /// </summary>
+    public static RunLog StartChecked(string verb, bool quiet, string? directory = null, DateTimeOffset? now = null, bool printsOwnProgress = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(verb);
+        string dir = directory ?? DefaultDirectory;
+        DateTimeOffset stamp = now ?? DateTimeOffset.Now;
+        Directory.CreateDirectory(dir);
+        using (new FileStream(FilePath(dir, verb, stamp), FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+        {
+        }
+
+        return Start(verb, quiet, dir, stamp, printsOwnProgress);
+    }
+
+    /// <summary>
     /// <see cref="Start"/> for a CLI verb, which must not stop for its log folder: the daily refresh task runs unattended.
     /// When <paramref name="directory"/> (the default folder when null) cannot be created or cannot hold the log file,
     /// one line naming the folder and the reason goes to <paramref name="stderr"/>, even when quiet (it is a setting the
@@ -115,21 +135,12 @@ public sealed class RunLog : IDisposable
         return null;
     }
 
-    /// <summary>
-    /// Starts the log in <paramref name="dir"/> or says why it cannot. The file is opened once first because the file
-    /// sink, unlike <see cref="Directory.CreateDirectory(string)"/>, does not throw for a file it cannot open: it logs
-    /// nothing, and the run would name a log file that does not exist.
-    /// </summary>
+    /// <summary>Starts the log in <paramref name="dir"/> with <see cref="StartChecked"/>, or says why it cannot.</summary>
     private static bool TryStart(string verb, bool quiet, string dir, DateTimeOffset stamp, bool printsOwnProgress, [NotNullWhen(true)] out RunLog? log, [NotNullWhen(false)] out string? reason)
     {
         try
         {
-            Directory.CreateDirectory(dir);
-            using (new FileStream(FilePath(dir, verb, stamp), FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
-            {
-            }
-
-            log = Start(verb, quiet, dir, stamp, printsOwnProgress);
+            log = StartChecked(verb, quiet, dir, stamp, printsOwnProgress);
             reason = null;
             return true;
         }
