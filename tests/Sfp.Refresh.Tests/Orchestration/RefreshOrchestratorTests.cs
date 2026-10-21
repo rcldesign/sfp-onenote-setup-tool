@@ -755,6 +755,108 @@ public class RefreshOrchestratorTests
         h.Run(Request()).Summary!.Changes.Should().ContainSingle().Which.Should().Match<PlannedChange>(c => c.Page == MonJan4 && !c.Blocked, "the next run writes it");
     }
 
+    [Fact]
+    public void A_partial_calendar_failure_keeps_the_dead_sources_lines_writes_the_rest_and_says_so()
+    {
+        StubCalendarFactory calendars = new();
+        Harness h = new(calendars: calendars);
+        h.Type(S.CalendarSources[0], "Work | https://example.com/work.ics");
+        h.Type(S.CalendarSources[1], "Home | https://example.com/home.ics");
+        DateTime nine = new(2027, 1, 5, 9, 0, 0);
+        DateTime six = new(2027, 1, 6, 18, 0, 0);
+        DateTime seven = new(2027, 1, 7, 7, 0, 0);
+        CalendarEvent meeting = new("w1@2027-01-05T09:00", "Staff meeting", nine, nine.AddHours(1), false, false, false, "Work", null);
+        CalendarEvent dinner = new("h1@2027-01-06T18:00", "Dinner", six, six.AddHours(1), false, false, false, "Home", null);
+        calendars.EventsByLabel["Work"] = new[] { meeting };
+        calendars.EventsByLabel["Home"] = new[] { dinner };
+        h.Run(Request(calendar: true)).Summary!.EventsWritten.Should().Be(4, "Tuesday's 9 row and column, Wednesday's 18 row and column");
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+        string meetingRow = h.SavedSidecar().Pages[tueJan5.Value].Anchors["timeBlockEvent:9"];
+        calendars.FailuresByLabel["Work"] = new HttpRequestException("timeout");
+        calendars.EventsByLabel["Home"] = new[] { dinner, new CalendarEvent("h2@2027-01-07T07:00", "Gym", seven, seven.AddHours(1), false, false, false, "Home", null) };
+
+        RefreshResult partial = h.Run(Request(calendar: true));
+
+        partial.Success.Should().BeTrue(partial.Error);
+        partial.ExitCode.Should().Be(0, "one source answered");
+        partial.Summary!.FailedSources.Should().Equal("Work: timeout");
+        partial.Summary.Warnings.Should().Contain("Some calendar sources failed; their events were kept on the pages and no event lines were removed this run.")
+            .And.NotContain(w => w.Contains("Every calendar source failed", StringComparison.Ordinal));
+        partial.Summary.Changes.Should().NotContain(c => c.Kind == ChangeKind.Remove, "a dead feed never erases its events");
+        partial.Summary.EventsWritten.Should().Be(2, "Thursday's 7 row and column from the source that answered");
+        h.Notebook.Read(tueJan5).Outlines.Single(o => o.ObjectId == meetingRow).PlainText.Should().Be("9:00 Staff meeting");
+        h.Notebook.Read(PageKey.Day(new DateOnly(2027, 1, 7))).Outlines.Should().Contain(o => o.PlainText == "7:00 Gym");
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(0, "a partial failure is not a failed run");
+    }
+
+    [Fact]
+    public void A_calendar_line_the_user_moved_is_left_where_it_is_and_reported()
+    {
+        StubCalendarFactory calendars = new();
+        Harness h = new(calendars: calendars);
+        h.Type(S.CalendarSources[0], "Work | https://example.com/cal.ics");
+        DateTime nine = new(2027, 1, 5, 9, 0, 0);
+        calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff meeting", nine, nine.AddHours(1), false, false, false, "Work", null) };
+        PageKey tueJan5 = PageKey.Day(new DateOnly(2027, 1, 5));
+        h.Run(Request(calendar: true));
+        string rowId = h.SavedSidecar().Pages[tueJan5.Value].Anchors["timeBlockEvent:9"];
+        h.Notebook.MoveOutline(tueJan5, rowId, 500, 400);
+        calendars.Events = new[] { new CalendarEvent("m1@2027-01-05T09:00", "Staff sync", nine, nine.AddHours(1), false, false, false, "Work", null) };
+
+        RefreshResult second = h.Run(Request(calendar: true));
+
+        second.Success.Should().BeTrue(second.Error);
+        PlannedChange row = second.Summary!.Changes.Single(c => c.Page == tueJan5);
+        row.Blocked.Should().BeTrue();
+        row.Reason.Should().Be(Propagator.MovedReason);
+        PageXml page = h.Notebook.Read(tueJan5);
+        OutlineInfo moved = page.Outlines.Single(o => o.ObjectId == rowId);
+        moved.PlainText.Should().Be("9:00 Staff meeting", "a moved tool object is neither rewritten nor put back");
+        moved.X.Should().BeApproximately(500 + page.SheetOutline!.X, 0.01);
+        moved.Y.Should().BeApproximately(400 + page.SheetOutline.Y, 0.01);
+        second.Summary.EventsWritten.Should().Be(1, "Tuesday's column on the overview is updated");
+        RefreshText.SummaryLines(second, "SFP Q1 2027").Should().Contain(l => l.StartsWith("Skipped: Tue Jan 5  timeBlockEvent:9", StringComparison.Ordinal) && l.Contains("moved by the user", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_notebook_that_does_not_open_within_60_s_fails_the_run_with_exit_5_and_the_prd_message()
+    {
+        Harness h = new();
+        h.Services = h.Services with { OpenTimeout = null };
+        h.App.Close(h.Notebook.NotebookId);
+        h.App.GetHierarchyFailure = (id, scope) => id == h.Notebook.NotebookId && scope == HierarchyScope.Self
+            ? new OneNoteException("GetHierarchy", OneNoteHResults.NotebookDoesNotExist, "The notebook is still opening.", null)
+            : null;
+
+        RefreshResult result = h.Run(Request());
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(5);
+        result.Error.Should().Be("Notebook 'SFP Q1 2027' did not open within 60 s.");
+        h.Log.Messages(LogEventLevel.Information).Should().Contain(m => m.Contains("Waiting for notebook", StringComparison.Ordinal) && m.Contains("(58 s)", StringComparison.Ordinal));
+        FailureCounter.LoadBeside(h.SidecarPath).ConsecutiveTotalFailures.Should().Be(1, "the daily task's OneNote failures count toward the toast");
+    }
+
+    [Fact]
+    public void A_cancelled_refresh_exits_5_with_cancelled_and_writes_nothing()
+    {
+        Harness h = new();
+        h.Type(S.Objectives[0], "Ship the connector");
+        int updates = h.App.CallCount("UpdatePageContent");
+        using CancellationTokenSource cancel = new();
+        cancel.Cancel();
+
+        RefreshResult result = h.Run(Request(), new OnPageWrite(1, () => { }), cancel.Token);
+
+        result.Success.Should().BeFalse();
+        result.ExitCode.Should().Be(5);
+        result.Error.Should().Be("Cancelled.");
+        result.Summary.Should().BeNull();
+        h.App.CallCount("UpdatePageContent").Should().Be(updates, "nothing is written");
+        h.SavedSidecar().LastRefresh.Should().BeNull();
+        RefreshText.SummaryLines(result, "SFP Q1 2027").First().Should().Be("Refresh of SFP Q1 2027 failed: Cancelled.");
+    }
+
     /// <summary>Plans with the real propagator, then runs an action: the user editing a page between planning and writing.</summary>
     private sealed class ThenEdit : IPropagator
     {
@@ -814,6 +916,12 @@ public class RefreshOrchestratorTests
 
         public Exception? Failure { get; set; }
 
+        /// <summary>Events of one source by its Setup label, in place of <see cref="Events"/>.</summary>
+        public Dictionary<string, IReadOnlyList<CalendarEvent>> EventsByLabel { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>A failure of one source by its Setup label.</summary>
+        public Dictionary<string, Exception> FailuresByLabel { get; } = new(StringComparer.Ordinal);
+
         public List<(DateOnly From, DateOnly To)> Windows { get; } = new();
 
         public List<CalendarSource> Created { get; } = new();
@@ -845,7 +953,13 @@ public class RefreshOrchestratorTests
                     throw owner.Failure;
                 }
 
-                return owner.Events.Select(e => e with { SourceLabel = source.Label }).ToList();
+                if (owner.FailuresByLabel.TryGetValue(source.Label, out Exception? failure))
+                {
+                    throw failure;
+                }
+
+                IReadOnlyList<CalendarEvent> events = owner.EventsByLabel.TryGetValue(source.Label, out IReadOnlyList<CalendarEvent>? own) ? own : owner.Events;
+                return events.Select(e => e with { SourceLabel = source.Label }).ToList();
             }
         }
     }

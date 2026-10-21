@@ -92,6 +92,30 @@ public class NotebookOpenerTests
     }
 
     [Fact]
+    public void A_notebook_that_does_not_open_within_60_s_is_reported_with_the_prd_message()
+    {
+        string folder = TestPaths.NewTempDir("slow");
+        FakeNotebook nb = FakeNotebook.Generate(folder: folder);
+        SidecarStore store = new();
+        store.Save(store.PathFor(nb.NotebookPath), nb.Sidecar);
+        nb.App.Close(nb.NotebookId);
+        nb.App.GetHierarchyFailure = (id, scope) => id == nb.NotebookId && scope == HierarchyScope.Self
+            ? new OneNoteException("GetHierarchy", OneNoteHResults.NotebookDoesNotExist, "The notebook is still opening.", null)
+            : null;
+        List<TimeSpan> waits = new();
+        CapturingLog log = new();
+        NotebookOpener opener = new(nb.App, store, log.Logger, openTimeout: null, sleep: waits.Add);
+
+        Action act = () => opener.Open("SFP Q1 2027", null, new[] { folder });
+
+        act.Should().Throw<OneNoteException>().WithMessage("Notebook 'SFP Q1 2027' did not open within 60 s.");
+        NotebookOpener.DefaultOpenTimeout.Should().Be(TimeSpan.FromSeconds(60));
+        waits.Should().HaveCount(30, "polled every 2 s up to the 60 s the PRD allows").And.AllSatisfy(w => w.Should().Be(TimeSpan.FromSeconds(2)));
+        log.Messages(Serilog.Events.LogEventLevel.Information).Count(m => m.Contains("Waiting for notebook", StringComparison.Ordinal)).Should().Be(30);
+        nb.App.Calls.Should().Contain(("OpenHierarchy", nb.NotebookPath + ":None"), "the closed notebook was opened from its sidecar path first");
+    }
+
+    [Fact]
     public void Nothing_is_returned_when_the_notebook_is_nowhere_and_unavailability_propagates()
     {
         FakeOneNoteApp app = new();
