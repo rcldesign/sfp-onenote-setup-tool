@@ -57,7 +57,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
     /// <summary>
     /// Error of a run refused because another run of the same notebook holds the lock beside its sidecar ({0}: the
-    /// notebook, {1}: the run that holds it); exit 5, and the failure streak is left alone.
+    /// notebook, {1}: the run that holds it); exit 5. The failure streak is left alone while the holder is a live run,
+    /// and advances when the lock turned out to be stale and could not be taken over (<see cref="RefreshLock.IsStuck"/>).
     /// </summary>
     public const string AlreadyRunningFormat = "Another Refresh of '{0}' is running ({1}); this run was not started. Try again when it has finished.";
 
@@ -551,6 +552,15 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             catch (OneNoteUnavailableException)
             {
                 throw;
+            }
+            catch (UnwritableTextException ex)
+            {
+                // Text the page XML cannot carry (a character XML 1.0 does not allow that normalization missed): this
+                // page is skipped and reported; the run goes on with the other pages.
+                services.Log.Error(ex, "Page {Title} was not written", spec.Title);
+                outcome.AddRange(pending.Select(c => c with { Blocked = true, Reason = ex.Message }));
+                warnings.Add($"Page {spec.Title} was not written: {ex.Message}");
+                continue;
             }
             catch (OneNoteException ex)
             {
