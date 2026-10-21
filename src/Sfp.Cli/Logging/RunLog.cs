@@ -132,7 +132,7 @@ public sealed class RunLog : IDisposable
         {
             stderr.WriteLine("Could not use the log folder " + dir + ": " + Sentence(reason) + " This run logs to " + fallback + " instead.");
 
-            // Information: the file keeps the reason, and the console, which shows a verb's warnings, has the line above.
+            // The file keeps the reason; the line above is the one the console shows.
             log.Logger.Information("The log folder {Folder} could not be used: {Reason}", dir, reason);
             return log;
         }
@@ -170,16 +170,14 @@ public sealed class RunLog : IDisposable
     }
 
     /// <summary>
-    /// Whether the console shows an event of <paramref name="level"/>. A verb that prints its own progress, summary and
-    /// failure block (<paramref name="printsOwnProgress"/>) gets the warnings only, and nothing when
-    /// <paramref name="quiet"/>: its Information lines (every COM call, every rendered page) would repeat the progress,
-    /// and its errors are the failure it prints itself, so they go to the file only. Any other verb gets errors only when
-    /// quiet, else Information and up.
+    /// Whether the console shows an event of <paramref name="level"/>. A verb that prints its own progress, summary,
+    /// warnings and failure block (<paramref name="printsOwnProgress"/>: generate and refresh) gets nothing from its log,
+    /// at any level, quiet or not: the lines it prints are its only console output, so an event it reports itself never
+    /// reaches the console twice, whatever level a module logs it at, and the log file keeps every event. Any other verb
+    /// gets errors only when <paramref name="quiet"/>, else Information and up.
     /// </summary>
     public static bool ConsoleShows(LogEventLevel level, bool quiet, bool printsOwnProgress) =>
-        printsOwnProgress
-            ? !quiet && level == LogEventLevel.Warning
-            : level >= (quiet ? LogEventLevel.Error : LogEventLevel.Information);
+        !printsOwnProgress && level >= (quiet ? LogEventLevel.Error : LogEventLevel.Information);
 
     public void Dispose() => _logger.Dispose();
 }

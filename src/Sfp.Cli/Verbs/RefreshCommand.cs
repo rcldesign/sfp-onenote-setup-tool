@@ -149,9 +149,10 @@ public static class RefreshCommand
             return ExitCodes.ValidationError;
         }
 
-        // The verb prints its own progress, listing, summary and failures, so the log's console sink keeps to warnings; the
-        // errors (the exception of a failure printed below included) go to the log file only. A log folder that cannot be
-        // used moves the log to the temp folder with a one-line notice: the unattended daily task must not stop for it.
+        // The verb prints its own progress, listing, summary and failures, so the log's console sink shows nothing
+        // (RunLog.ConsoleShows): those lines are the only console output and the log file keeps every event, exceptions
+        // included. A log folder that cannot be used moves the log to the temp folder with a one-line notice: the
+        // unattended daily task must not stop for it.
         RunLog? started = RunLog.StartWithFallback("refresh", args.Quiet, stderr, logDirectory, printsOwnProgress: true);
         if (started is null)
         {

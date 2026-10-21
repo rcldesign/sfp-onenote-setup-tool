@@ -136,6 +136,12 @@ public class GenerateCommandTests
         System.Text.RegularExpressions.Regex.Matches(text, System.Text.RegularExpressions.Regex.Escape(value)).Count;
 
     /// <summary>
+    /// The level of a run log line, as its console line ("[09:30:00 WRN] ...") and its file line ("... [WRN] ...") show
+    /// it; no line a verb prints itself has one.
+    /// </summary>
+    private const string LogLevelToken = @"\b(VRB|DBG|INF|WRN|ERR|FTL)\]";
+
+    /// <summary>
     /// Runs a command line through <see cref="Program.Run"/> as the executable does. The verbs and the run log's console
     /// sink write to the console, so both console streams are captured; the run log goes to <paramref name="logDir"/>
     /// through SFP2ONENOTE_LOGDIR, as a user's override would send it.
@@ -561,43 +567,42 @@ public class GenerateCommandTests
     }
 
     [Fact]
-    public void The_console_shows_the_run_logs_warnings_but_not_its_information_lines()
+    public void The_console_shows_nothing_from_the_run_log_of_a_verb_that_prints_its_own_output()
     {
-        // The verb prints its own progress and summary; the run log's console sink keeps to warnings and errors so every
-        // COM call and rendered page (logged at Information) does not flood the console or repeat the progress lines.
-        RunLog.ConsoleShows(LogEventLevel.Warning, quiet: false, printsOwnProgress: true).Should().BeTrue();
-        RunLog.ConsoleShows(LogEventLevel.Information, quiet: false, printsOwnProgress: true).Should().BeFalse();
-        RunLog.ConsoleShows(LogEventLevel.Error, quiet: false, printsOwnProgress: true).Should().BeFalse("the verb prints its failures itself");
-        RunLog.ConsoleShows(LogEventLevel.Warning, quiet: true, printsOwnProgress: true).Should().BeFalse();
-        RunLog.ConsoleShows(LogEventLevel.Error, quiet: true, printsOwnProgress: true).Should().BeFalse();
+        // Fix round 4 cliapp-1: generate and refresh print their own progress, summary, warnings and failure block. The run
+        // log's console sink showed their warnings, and modules kept logging at Warning what the verbs print, so those
+        // lines reached the console twice. The sink now shows nothing for these verbs, at any level, quiet or not, and the
+        // log file keeps every event. Any other caller keeps errors when quiet, else Information and up.
+        foreach (LogEventLevel level in Enum.GetValues<LogEventLevel>())
+        {
+            RunLog.ConsoleShows(level, quiet: false, printsOwnProgress: true).Should().BeFalse("{0} without --quiet", level);
+            RunLog.ConsoleShows(level, quiet: true, printsOwnProgress: true).Should().BeFalse("{0} with --quiet", level);
+        }
+
         RunLog.ConsoleShows(LogEventLevel.Error, quiet: true, printsOwnProgress: false).Should().BeTrue();
         RunLog.ConsoleShows(LogEventLevel.Warning, quiet: true, printsOwnProgress: false).Should().BeFalse();
         RunLog.ConsoleShows(LogEventLevel.Information, quiet: false, printsOwnProgress: false).Should().BeTrue();
+        RunLog.ConsoleShows(LogEventLevel.Debug, quiet: false, printsOwnProgress: false).Should().BeFalse();
 
         string info = "information-" + Guid.NewGuid().ToString("N");
         string warning = "warning-" + Guid.NewGuid().ToString("N");
+        string error = "error-" + Guid.NewGuid().ToString("N");
         GenerateResult ok = new() { Success = true, ExitCode = 0, Phase = GeneratePhase.Done, OutputPath = "x", NotebookName = "n" };
-        StringWriter console = new();
-        TextWriter originalOut = Console.Out;
-        TextWriter originalError = Console.Error;
-        Console.SetOut(console);
-        Console.SetError(console);
-        try
+        foreach (bool quiet in new[] { false, true })
         {
-            GenerateCommand.Run(Args(), new StringWriter(), new StringWriter(), (_, log, _) =>
+            string logs = Path.Combine(Root, "logs-console-" + quiet);
+            string console = WithConsole(() => GenerateCommand.Run(Args() with { Quiet = quiet }, new StringWriter(), new StringWriter(), (_, log, _) =>
             {
                 log.Information("{Marker}", info);
                 log.Warning("{Marker}", warning);
+                log.Error("{Marker}", error);
                 return new CannedOrchestrator(ok);
-            }, Path.Combine(Root, "logs"));
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
-        }
+            }, logs));
 
-        console.ToString().Should().Contain(warning).And.NotContain(info);
+            console.Should().BeEmpty("the verb writes to its own streams and the log's console sink shows nothing (quiet {0})", quiet);
+            File.ReadAllText(Directory.GetFiles(logs, "*-generate.log").Should().ContainSingle().Which)
+                .Should().Contain("[INF] " + info).And.Contain("[WRN] " + warning).And.Contain("[ERR] " + error);
+        }
     }
 
     [Fact]
@@ -636,8 +641,8 @@ public class GenerateCommandTests
             Occurrences(refreshAll, message).Should().Be(1, "refresh shows the message once (quiet {0}): {1}", quiet, refreshAll);
             generateErr.ToString().Should().Contain("Error: " + message);
             refreshErr.ToString().Should().Contain(message);
-            generateAll.Should().NotContain("   at ").And.NotContain("[ERR]");
-            refreshAll.Should().NotContain("   at ").And.NotContain("[ERR]");
+            generateAll.Should().NotContain("   at ").And.NotMatchRegex(LogLevelToken, "no line of the run log reaches the console (quiet {0})", quiet);
+            refreshAll.Should().NotContain("   at ").And.NotMatchRegex(LogLevelToken, "no line of the run log reaches the console (quiet {0})", quiet);
 
             // The log files keep the errors, the refresh one with its exception and stack trace.
             File.ReadAllText(Directory.GetFiles(generateLogs, "*-generate.log").Should().ContainSingle().Which).Should().Contain("[ERR] Preflight failed: " + message);
@@ -665,6 +670,113 @@ public class GenerateCommandTests
         logged.Level.Should().Be(LogEventLevel.Information);
         RunLog.ConsoleShows(logged.Level, quiet: false, printsOwnProgress: true).Should().BeFalse("the verb's own Warning line is the one the user sees");
     }
+
+    [Fact]
+    public void A_partial_notebook_onenote_would_not_close_is_reported_once_with_or_without_quiet()
+    {
+        // Fix round 4 cliapp-1 (case d): a page fails to render and OneNote refuses CloseNotebook (a dialog is open). The
+        // orchestrator logs the refused close at Warning and the verb prints the failure block with the run's warning, so
+        // without --quiet the run log's console sink showed the event a second time. The verb's lines are the only console
+        // output now; the log file keeps the orchestrator's line.
+        foreach (bool quiet in new[] { false, true })
+        {
+            string name = "not-closed-" + quiet;
+            string logs = Path.Combine(Root, "logs-" + name);
+            FakeNotebookWriter writer = new() { CreateFolderOnDisk = true, CloseNotebookFailure = new OneNoteBusyException("CloseNotebook", OneNoteHResults.AppInModalUI, null) };
+            FakePageRenderer renderer = new() { Failure = page => page.Key == Sfp.Core.Plan.PageKey.Cover ? new InvalidOperationException("PDFium could not decode the page") : null };
+
+            (int code, string shown) = RunShown(Args() with { Out = Path.Combine(Root, "out-" + name), Quiet = quiet }, logs, (log, logPath) => RealOrchestrator(writer, renderer, log, logPath));
+
+            string notebook = Path.Combine(Root, "out-" + name, "SFP Q1 2027");
+            code.Should().Be(ExitCodes.RenderError, shown);
+            Occurrences(shown, "Error: Rendering pages, page Cover: ").Should().Be(1, shown);
+            Occurrences(shown, GenerateMessages.PartialNotebookNotDeleted(notebook, "OneNote did not close it")).Should().Be(1, shown);
+            Occurrences(shown, "CloseNotebook failed").Should().Be(0, "the orchestrator's own line stays in the log file (quiet {0}): {1}", quiet, shown);
+            shown.Should().NotMatchRegex(LogLevelToken, "no line of the run log reaches the console (quiet {0})", quiet);
+            LogFile(logs).Should().Contain("[WRN] CloseNotebook failed while removing the partial notebook");
+        }
+    }
+
+    [Fact]
+    public void A_next_quarter_link_left_unwritten_behind_a_held_lock_is_reported_once()
+    {
+        // Fix round 4 cliapp-1 (case e): generate --previous while a Refresh of the previous notebook holds its lock. The
+        // link writer logs its give-up at Warning and the verb prints the run's warning, so without --quiet the run log's
+        // console sink showed it a second time. The writer's clock and sleep make its 30-second wait instant.
+        Sfp.Core.Manifests.Manifest manifest = Support.TestManifest.Load();
+        foreach (bool quiet in new[] { false, true })
+        {
+            string name = "lock-held-" + quiet;
+            string logs = Path.Combine(Root, "logs-" + name);
+            string previous = Path.Combine(Root, "previous-" + name, "SFP Q4 2026");
+            Directory.CreateDirectory(previous);
+            string sidecar = new SidecarStore().PathFor(previous);
+            File.WriteAllText(sidecar, "{}");
+            DateTimeOffset now = new(2026, 10, 21, 5, 0, 0, TimeSpan.Zero);
+            using RefreshLock held = RefreshLock.TryAcquire(sidecar, now, Serilog.Core.Logger.None, out _)!;
+            using FakeOneNoteApp app = new();
+
+            (int code, string shown) = RunShown(
+                Args() with { Out = Path.Combine(Root, "out-" + name), Previous = previous, Quiet = quiet },
+                logs,
+                (log, logPath) => RealOrchestrator(
+                    new FakeNotebookWriter { CreateFolderOnDisk = true },
+                    new FakePageRenderer(),
+                    log,
+                    logPath,
+                    () => new Sfp.OneNote.Writer.NextQuarterLinkWriter(app, new SidecarStore(), manifest, Xml.MonJan4.Options(manifest), log, () => now, wait => now += wait)));
+
+            code.Should().Be(0, shown);
+            if (quiet)
+            {
+                shown.Should().BeEmpty("--quiet prints nothing for a run that succeeds, its warnings included, and the run log's console sink shows nothing");
+            }
+            else
+            {
+                Occurrences(shown, "Warning: The Next quarter link was not written to the previous notebook " + previous + ": ").Should().Be(1, shown);
+                Occurrences(shown, "still held its lock after 30 seconds").Should().Be(1, shown);
+            }
+
+            Occurrences(shown, "still holds its lock").Should().Be(0, "the writer's own line stays in the log file (quiet {0}): {1}", quiet, shown);
+            shown.Should().NotMatchRegex(LogLevelToken, "no line of the run log reaches the console (quiet {0})", quiet);
+            LogFile(logs).Should().Contain("[WRN] A Refresh of the notebook of " + sidecar + " still holds its lock after 30 s");
+        }
+    }
+
+    /// <summary>
+    /// A real <see cref="GenerateOrchestrator"/> over the fake writer and renderer, composed with the run's log as the
+    /// verb composes the production one, and <paramref name="links"/> for --previous.
+    /// </summary>
+    private static GenerateOrchestrator RealOrchestrator(FakeNotebookWriter writer, FakePageRenderer renderer, Serilog.ILogger log, string logPath, Func<Sfp.OneNote.Writer.INextQuarterLinkWriter>? links = null)
+    {
+        Sfp.Core.Dates.DateEngine dates = new();
+        return new GenerateOrchestrator(
+            new FakePreflight(),
+            dates,
+            new Sfp.Core.Plan.PlanBuilder(dates),
+            renderer,
+            () => writer,
+            new SidecarStore(),
+            new GenerateOrchestratorOptions { FontFamily = "TeX Gyre Bonum", LogPath = logPath, MaxDegreeOfParallelism = 1, RenderBufferCapacity = 1 },
+            log,
+            links);
+    }
+
+    /// <summary>
+    /// Runs the verb over the orchestrator <paramref name="build"/> composes with the run's log, and returns the exit code
+    /// and everything shown: the console, where the run log's console sink writes, and the verb's own two streams.
+    /// </summary>
+    private static (int Code, string Shown) RunShown(GenerateArgs args, string logs, Func<Serilog.ILogger, string, IGenerateOrchestrator> build)
+    {
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+        int code = -1;
+        string console = WithConsole(() => code = GenerateCommand.Run(args, stdout, stderr, (_, log, logPath) => build(log, logPath), logs));
+        return (code, console + stdout + stderr);
+    }
+
+    /// <summary>The one generate log file in <paramref name="logs"/>.</summary>
+    private static string LogFile(string logs) => File.ReadAllText(Directory.GetFiles(logs, "*-generate.log").Should().ContainSingle().Which);
 
     [Fact]
     public void A_log_folder_that_cannot_be_created_moves_the_log_to_the_temp_folder_and_the_run_goes_on()
