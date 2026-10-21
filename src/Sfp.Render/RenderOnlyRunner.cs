@@ -19,7 +19,7 @@ public sealed record RenderOnlyResult(int PagesRendered, int PngFiles, string In
 /// Renders every page of a plan to {outDir}/{key with ':' as '-'}.png plus pages.json, in parallel
 /// (<see cref="RenderParallelism.Default"/> workers by default: the processor count, at most four; PDFium is serialized
 /// by the rasterizer, overlays and PNG encoding run side by side). Before any page renders, a pages.json an earlier run
-/// left in the folder is read and the PNG files it lists are deleted with it; no other file in the folder is touched.
+/// left in the folder is read and deleted, then the PNG files it lists; no other file in the folder is touched.
 /// Each page's PNG is written and released before the next page on that worker, so memory stays at a few pages.
 /// Progress is reported per finished page; cancellation stops after the pages in flight and writes no pages.json, so
 /// the folder holds no index over a partial render. A page that fails to render stops the run the same way; with
@@ -113,9 +113,12 @@ public sealed class RenderOnlyRunner
     }
 
     /// <summary>
-    /// Deletes the PNG files the folder's pages.json lists, then the index, so a run that fails or is cancelled leaves no
-    /// index over partly overwritten PNGs and a run that succeeds leaves no PNG of a page its plan no longer has. Only a
-    /// plain .png file name the index records is deleted (never a path into another folder), and no other file is touched.
+    /// Reads the folder's pages.json and deletes it before the PNG files it lists, so a PNG delete that fails (a read-only
+    /// file, one open in another program) leaves no index over a partly deleted render, a run that fails or is cancelled
+    /// later leaves no index over partly overwritten PNGs, and a run that succeeds leaves no PNG of a page its plan no
+    /// longer has. Only a plain .png file name the index records is deleted (never a path into another folder), and no
+    /// other file is touched. A PNG delete that fails stops the run with its exception; the listed PNGs it did not reach
+    /// stay in the folder with no index naming them.
     /// </summary>
     private static void RemovePreviousRun(string outDir)
     {
@@ -135,6 +138,7 @@ public sealed class RenderOnlyRunner
             throw new InvalidDataException($"{indexPath} is not an index this tool can read, so the PNG files of the run that wrote it are unknown and nothing was deleted. Remove it or render into another folder. {ex.Message}", ex);
         }
 
+        File.Delete(indexPath);
         IEnumerable<string?> files = (previous.Pages ?? Array.Empty<RenderIndexPage>()).Select(p => p?.Png);
         foreach (string png in files.OfType<string>())
         {
@@ -143,8 +147,6 @@ public sealed class RenderOnlyRunner
                 File.Delete(Path.Combine(outDir, png));
             }
         }
-
-        File.Delete(indexPath);
     }
 
     /// <summary>Renders one page, naming it in a <see cref="PageRenderException"/> when it fails and <see cref="NamePageFailures"/> is set.</summary>
