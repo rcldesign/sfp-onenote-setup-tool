@@ -216,6 +216,9 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     /// <summary>The fields unlock when no run is on.</summary>
     public bool FieldsEnabled => !Run.IsRunning;
 
+    /// <summary>The window is closing and waits for runs to stop (<see cref="BeginClosing"/>); nothing new can start.</summary>
+    public bool IsClosing { get; private set; }
+
     /// <summary>
     /// The PRD's "fallback font in use" banner: the font service's warnings, one per line, or null when the template
     /// typeface is installed. Shown before Generate so the user knows the dates will use the bundled face.
@@ -337,24 +340,57 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Readies the tab for the window to close; true when it may close. During a run the user is asked whether to cancel
     /// it: no keeps the window open (false); yes cancels the run and completes only once the run has stopped, after the
-    /// orchestrator deleted the partial notebook, so closing never leaves one behind. The preview render is stopped and
-    /// awaited too, so the composition root can dispose the renderer's fonts and rasterizer afterwards. Completes at once
-    /// when nothing is running.
+    /// orchestrator deleted the partial notebook. The preview render is stopped and awaited too, so the composition root
+    /// can dispose the renderer's fonts and rasterizer afterwards. While it waits the tab is closing
+    /// (<see cref="BeginClosing"/>), so no new run starts. Completes at once when nothing is running.
     /// </summary>
     public async Task<bool> PrepareToCloseAsync()
     {
-        if (Run.IsRunning)
+        if (!ConfirmClose())
         {
-            if (!_dialogs.Confirm(CloseWhileRunningTitle, CloseWhileRunningQuestion))
-            {
-                return false;
-            }
-
-            await Run.CancelAndWaitAsync();
+            return false;
         }
 
-        await Previews.StopAsync();
+        Task stopped = StopForCloseAsync();
+        if (!stopped.IsCompleted)
+        {
+            BeginClosing();
+        }
+
+        await stopped;
         return true;
+    }
+
+    /// <summary>
+    /// The window's close flow asks this first, and asking changes nothing: true when no run is on or the user agreed to
+    /// cancel the one in progress (one Yes/No question).
+    /// </summary>
+    public bool ConfirmClose() => !Run.IsRunning || _dialogs.Confirm(CloseWhileRunningTitle, CloseWhileRunningQuestion);
+
+    /// <summary>Cancels the run in progress and stops the preview strip for good; completes once both have stopped.</summary>
+    public async Task StopForCloseAsync()
+    {
+        await Run.CancelAndWaitAsync();
+        await Previews.StopAsync();
+    }
+
+    /// <summary>
+    /// The window is closing and waits for runs to stop: Generate and the Browse buttons stay disabled from now on, so
+    /// no run starts that the close would then cut off.
+    /// </summary>
+    public void BeginClosing()
+    {
+        if (IsClosing)
+        {
+            return;
+        }
+
+        IsClosing = true;
+        OnPropertyChanged(nameof(IsClosing));
+        Revalidate();
+        BrowsePdfCommand.NotifyCanExecuteChanged();
+        BrowseFolderCommand.NotifyCanExecuteChanged();
+        BrowsePreviousCommand.NotifyCanExecuteChanged();
     }
 
     public void Dispose()
@@ -400,7 +436,9 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         InputChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    [RelayCommand]
+    private bool CanBrowse => !IsClosing;
+
+    [RelayCommand(CanExecute = nameof(CanBrowse))]
     private void BrowsePdf()
     {
         string? chosen = _dialogs.PickFile("Choose the SFP template PDF", "PDF files (*.pdf)|*.pdf|All files (*.*)|*.*", PdfPath);
@@ -410,7 +448,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanBrowse))]
     private void BrowseFolder()
     {
         string? chosen = _dialogs.PickFolder("Choose the output folder", OutputFolder);
@@ -420,7 +458,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanBrowse))]
     private void BrowsePrevious()
     {
         string start = string.IsNullOrWhiteSpace(PreviousNotebook) ? OutputFolder : PreviousNotebook;
@@ -550,7 +588,7 @@ public sealed partial class GenerateViewModel : ObservableObject, IDisposable
         SizeEstimate = GenerateOptions.AllowedDpis.Contains(Dpi) && QuarterOf(Start ?? _lastValidStart) is { } quarter
             ? NotebookSizeEstimate.Describe(Dpi, GenerateFormDefaults.PageCount(quarter))
             : "";
-        CanGenerate = _validation.CanGenerate && !Run.IsRunning;
+        CanGenerate = _validation.CanGenerate && !Run.IsRunning && !IsClosing;
         OnPropertyChanged(nameof(Start));
         OnPropertyChanged(nameof(DefaultNotebookName));
         OnPropertyChanged(nameof(Validation));

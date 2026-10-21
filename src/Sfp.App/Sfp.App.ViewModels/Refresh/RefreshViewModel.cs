@@ -153,6 +153,9 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
 
     public bool HasSelection => SelectedNotebook is not null;
 
+    /// <summary>The window is closing and waits for runs to stop (<see cref="BeginClosing"/>); no run or reload starts.</summary>
+    public bool IsClosing { get; private set; }
+
     /// <summary>The folders the notebook list scans: the known output folders plus the default folder, each once.</summary>
     public IReadOnlyList<string> Folders => _knownFolders
         .Append(_env.DefaultOutputFolder)
@@ -270,7 +273,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     public Task RunAsync(bool dryRun)
     {
         RefreshRequest? request = ToRequest(dryRun);
-        if (request is null || IsBusy)
+        if (request is null || IsBusy || IsClosing)
         {
             return Task.CompletedTask;
         }
@@ -284,6 +287,24 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     /// cancel the one in progress (one Yes/No question). <see cref="CancelAndWaitAsync"/> then stops it.
     /// </summary>
     public bool ConfirmClose() => !IsBusy || _dialogs.Confirm(CloseWhileRunningTitle, CloseWhileRunningQuestion);
+
+    /// <summary>
+    /// The window is closing and waits for runs to stop: Preview changes, Refresh now and Reload stay disabled from now
+    /// on, so no run starts that the close would then cut off.
+    /// </summary>
+    public void BeginClosing()
+    {
+        if (IsClosing)
+        {
+            return;
+        }
+
+        IsClosing = true;
+        OnPropertyChanged(nameof(IsClosing));
+        PreviewChangesCommand.NotifyCanExecuteChanged();
+        RefreshNowCommand.NotifyCanExecuteChanged();
+        ReloadNotebooksCommand.NotifyCanExecuteChanged();
+    }
 
     /// <summary>
     /// Cancels the run in progress and completes once it has stopped and the cancelled line is shown: the orchestrator
@@ -439,7 +460,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(CanReload))]
     private Task ReloadNotebooksAsync() => ReloadAsync();
 
-    private bool CanReload => !IsBusy;
+    private bool CanReload => !IsBusy && !IsClosing;
 
     [RelayCommand(CanExecute = nameof(CanRun))]
     private Task PreviewChangesAsync() => RunAsync(dryRun: true);
@@ -447,7 +468,7 @@ public sealed partial class RefreshViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(CanRun))]
     private Task RefreshNowAsync() => RunAsync(dryRun: false);
 
-    private bool CanRun => HasSelection && !IsBusy;
+    private bool CanRun => HasSelection && !IsBusy && !IsClosing;
 
     [RelayCommand(CanExecute = nameof(IsBusy))]
     private void Cancel()

@@ -94,23 +94,27 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// The window's Closing handler asks this first; true when the window may close. A run on either tab is cancelled
     /// after the user agrees, and awaited before the window closes: a Generate run so its partial notebook is deleted, a
     /// Refresh run so it stops after the current page with what it wrote saved in the sidecar. The preview render is
-    /// stopped before the renderer is disposed. The Refresh question is asked first because asking it changes nothing,
-    /// so a No to either question keeps the window open and every run going. See
-    /// <see cref="GenerateViewModel.PrepareToCloseAsync"/> and <see cref="RefreshViewModel.ConfirmClose"/>.
+    /// stopped before the renderer is disposed. Both questions are asked before anything is cancelled (asking changes
+    /// nothing), the Refresh one first, so a No to either keeps the window open and every run going. Once the close is
+    /// accepted and has to wait, both tabs are closing (<see cref="GenerateViewModel.BeginClosing"/>,
+    /// <see cref="RefreshViewModel.BeginClosing"/>): nothing new starts, and the runs are checked again after the wait
+    /// until both tabs are idle. Completes at once when nothing runs.
     /// </summary>
     public async Task<bool> PrepareToCloseAsync()
     {
-        if (!Refresh.ConfirmClose())
+        if (!Refresh.ConfirmClose() || !Generate.ConfirmClose())
         {
             return false;
         }
 
-        if (!await Generate.PrepareToCloseAsync())
+        Task stopped = StopRunsAsync();
+        if (!stopped.IsCompleted)
         {
-            return false;
+            Generate.BeginClosing();
+            Refresh.BeginClosing();
         }
 
-        await Refresh.CancelAndWaitAsync();
+        await stopped;
         return true;
     }
 
@@ -145,6 +149,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
 
         return parts.Count == 0 ? null : string.Join(" ", parts);
+    }
+
+    /// <summary>Cancels both tabs' runs and waits for them, then looks again, until neither tab runs anything.</summary>
+    private async Task StopRunsAsync()
+    {
+        do
+        {
+            Task generateStopped = Generate.StopForCloseAsync();
+            Task refreshStopped = Refresh.CancelAndWaitAsync();
+            await generateStopped;
+            await refreshStopped;
+        }
+        while (Generate.Run.IsRunning || Refresh.IsBusy);
     }
 
     private void OnGenerateInputChanged(object? sender, EventArgs e) => Save(force: false);
