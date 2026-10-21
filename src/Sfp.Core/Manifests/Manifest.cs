@@ -262,6 +262,9 @@ public sealed record DateSlot
     public IReadOnlyList<LinePt> Slashes { get; init; } = Array.Empty<LinePt>();
 
     public required RectPt SlashErase { get; init; }
+
+    /// <summary>Ink bounds of the printed slashes, measured on the PDF; <see cref="SlashErase"/> must contain them.</summary>
+    public required RectPt SlashPrinted { get; init; }
 }
 
 public sealed record Span(double From, double To);
@@ -271,6 +274,9 @@ public sealed record WeeksRemainingSlot
     public required IReadOnlyList<string> AppliesTo { get; init; }
 
     public required RectPt Erase { get; init; }
+
+    /// <summary>Ink bounds of the printed numbers and disc over every week run, measured on the PDF; <see cref="Erase"/> must contain them.</summary>
+    public required RectPt Printed { get; init; }
 
     public required double SizePt { get; init; }
 
@@ -420,6 +426,9 @@ public sealed record TimeBlocksSlot
     public required IReadOnlyList<string> AppliesTo { get; init; }
 
     public required RectPt Erase { get; init; }
+
+    /// <summary>Ink bounds of the printed hour and half-hour rules and hour labels, measured on the PDF; <see cref="Erase"/> must contain them.</summary>
+    public required RectPt Printed { get; init; }
 
     public required double ColumnX { get; init; }
 

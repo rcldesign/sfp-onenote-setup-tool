@@ -285,6 +285,96 @@ internal static class Pixels
         return (count, samples);
     }
 
+    /// <summary>
+    /// Printed art that survived a render: pixels inside <paramref name="region"/> (points) that are ink on the raw
+    /// rasterization of the PDF page (some channel more than <paramref name="tolerance"/> from the background), are
+    /// unchanged in the render (every channel within <paramref name="tolerance"/> of the raw pixel), and whose center
+    /// lies outside every allowed rectangle (the boxes the overlay drew in). Passing the raw page as both bitmaps counts
+    /// the printed ink outside the allowed boxes, which shows the check would see an erase that missed it. Only whole
+    /// pixels inside the region are checked. Returns how many there are and up to five of them (in points).
+    /// </summary>
+    public static (int Count, IReadOnlyList<(double XPt, double YPt)> Samples) SurvivingPrint(SKBitmap raw, SKBitmap rendered, RectPt region, IReadOnlyList<RectPt> allowed, int dpi, SKColor background, int tolerance = 3)
+    {
+        if (raw.Width != rendered.Width || raw.Height != rendered.Height)
+        {
+            throw new ArgumentException($"The raw page is {raw.Width}x{raw.Height} and the render {rendered.Width}x{rendered.Height}; compare them at the same DPI.", nameof(rendered));
+        }
+
+        double s = dpi / 72.0;
+        SKRectI r = WholePixels(region, dpi, raw);
+        int count = 0;
+        List<(double, double)> samples = new();
+        for (int y = r.Top; y < r.Bottom; y++)
+        {
+            for (int x = r.Left; x < r.Right; x++)
+            {
+                SKColor p = raw.GetPixel(x, y);
+                if (Near(p, background, tolerance) || !Near(rendered.GetPixel(x, y), p, tolerance))
+                {
+                    continue;
+                }
+
+                double xPt = (x + 0.5) / s;
+                double yPt = (y + 0.5) / s;
+                if (allowed.Any(a => xPt >= a.X && xPt <= a.Right && yPt >= a.Y && yPt <= a.Bottom))
+                {
+                    continue;
+                }
+
+                count++;
+                if (samples.Count < 5)
+                {
+                    samples.Add((xPt, yPt));
+                }
+            }
+        }
+
+        return (count, samples);
+    }
+
+    /// <summary>
+    /// Bounds in points (pixel edges) of the pixels inside <paramref name="region"/> whose color differs from the
+    /// background by more than <paramref name="tolerance"/> in some channel, or null when there are none. Only whole
+    /// pixels inside the region are checked.
+    /// </summary>
+    public static RectPt? InkBounds(SKBitmap bitmap, RectPt region, int dpi, SKColor background, int tolerance = 3)
+    {
+        double s = dpi / 72.0;
+        SKRectI r = WholePixels(region, dpi, bitmap);
+        int left = int.MaxValue, top = int.MaxValue, right = int.MinValue, bottom = int.MinValue;
+        for (int y = r.Top; y < r.Bottom; y++)
+        {
+            for (int x = r.Left; x < r.Right; x++)
+            {
+                if (Near(bitmap.GetPixel(x, y), background, tolerance))
+                {
+                    continue;
+                }
+
+                left = Math.Min(left, x);
+                top = Math.Min(top, y);
+                right = Math.Max(right, x + 1);
+                bottom = Math.Max(bottom, y + 1);
+            }
+        }
+
+        return left == int.MaxValue ? null : new RectPt(left / s, top / s, (right - left) / s, (bottom - top) / s);
+    }
+
+    /// <summary>The pixels lying wholly inside a region in points, clipped to the bitmap.</summary>
+    private static SKRectI WholePixels(RectPt region, int dpi, SKBitmap bitmap)
+    {
+        double s = dpi / 72.0;
+        return new SKRectI(
+            Math.Max(0, (int)Math.Ceiling(region.X * s)),
+            Math.Max(0, (int)Math.Ceiling(region.Y * s)),
+            Math.Min(bitmap.Width, (int)Math.Floor(region.Right * s)),
+            Math.Min(bitmap.Height, (int)Math.Floor(region.Bottom * s)));
+    }
+
+    private static bool Near(SKColor a, SKColor b, int tolerance) =>
+        Math.Abs(a.Red - b.Red) <= tolerance && Math.Abs(a.Green - b.Green) <= tolerance && Math.Abs(a.Blue - b.Blue) <= tolerance;
+
     /// <summary>The most frequent color, sampling every <paramref name="step"/> pixels in each direction.</summary>
     public static SKColor Dominant(SKBitmap bitmap, int step = 7)
     {

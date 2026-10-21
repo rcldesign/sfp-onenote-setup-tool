@@ -230,6 +230,9 @@ public class ManifestLoaderTests : IDisposable
     [InlineData("slots.habitLegend", "columns")]
     [InlineData("slots.habitLegend", "lineHeight")]
     [InlineData("onenote", "pageDateTimeHour")]
+    [InlineData("slots.date", "slashPrinted")]
+    [InlineData("slots.weeksRemaining", "printed")]
+    [InlineData("slots.timeBlocks", "printed")]
     public void Calibrated_geometry_has_no_code_default_so_a_missing_key_is_a_load_error(string parent, string key)
     {
         string path = WriteModified(root =>
@@ -262,6 +265,71 @@ public class ManifestLoaderTests : IDisposable
         m.Slots.HabitLegend.Columns.Should().Be(8);
         m.Slots.HabitLegend.LineHeight.Should().Be(11);
         m.OneNote.PageDateTimeHour.Should().Be(6);
+        m.Slots.Date.SlashPrinted.Should().Be(new RectPt(899.7, 16.5, 71.5, 24.9));
+        m.Slots.WeeksRemaining.Printed.Should().Be(new RectPt(536.6, 28.9, 189.7, 13.9));
+        m.Slots.TimeBlocks.Printed.Should().Be(new RectPt(886.3, 92.4, 196.5, 548.3));
+    }
+
+    /// <summary>
+    /// The adversarial review's mutations: each erase rectangle shrunk a few points so that a sliver of the printed art
+    /// it removes would survive (B: the slash erase starts at 903; E: the time-block erase ends at 1075; F: the strip
+    /// erase ends at 723; A and C: an erase starts too low). Each is a load error naming both keys before anything renders.
+    /// </summary>
+    [Theory]
+    [InlineData("slots.date", "slashErase", 903, 12, 73, 34, "slashPrinted", "its left edge 903 is right of 899.7")]
+    [InlineData("slots.timeBlocks", "erase", 870, 88, 205, 560, "printed", "its right edge 1075 is left of 1082.8")]
+    [InlineData("slots.weeksRemaining", "erase", 530, 28, 193, 16, "printed", "its right edge 723 is left of 726.3")]
+    [InlineData("slots.timeBlocks", "erase", 870, 99, 214, 549, "printed", "its top 99 is below 92.4")]
+    [InlineData("slots.weeksRemaining", "erase", 530, 33, 198, 11, "printed", "its top 33 is below 28.9")]
+    [InlineData("slots.date", "slashErase", 896, 12, 80, 29, "slashPrinted", "its bottom 41 is above 41.4")]
+    public void An_erase_that_does_not_contain_its_printed_extent_is_a_load_error_naming_both_keys(
+        string parent, string eraseKey, double x, double y, double w, double h, string printedKey, string side)
+    {
+        string path = WriteModified(root =>
+        {
+            JsonNode node = parent.Split('.').Aggregate(root, (n, part) => n[part]!);
+            node[eraseKey] = new JsonObject { ["x"] = x, ["y"] = y, ["w"] = w, ["h"] = h };
+        });
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>()
+            .WithMessage($"*{parent}.{eraseKey} (x {x}, y {y}, w {w}, h {h}) must contain {parent}.{printedKey} (*")
+            .WithMessage($"*{side}*");
+    }
+
+    [Fact]
+    public void A_user_manifest_whose_erase_misses_part_of_the_printed_art_fails_the_merge()
+    {
+        string userPath = Path.Combine(_tempDir, "user.json");
+        File.WriteAllText(userPath, "{ \"slots\": { \"weeksRemaining\": { \"erase\": { \"x\": 530, \"y\": 28, \"w\": 193, \"h\": 16 } } } }");
+
+        Action act = () => _loader.Merge(TestPaths.ManifestPath, userPath);
+
+        act.Should().Throw<ManifestException>().WithMessage("*slots.weeksRemaining.erase*must contain slots.weeksRemaining.printed*");
+    }
+
+    [Fact]
+    public void A_printed_extent_needs_a_positive_size()
+    {
+        string path = WriteModified(root => root["slots"]!["timeBlocks"]!["printed"] = new JsonObject { ["x"] = 886.3, ["y"] = 92.4, ["w"] = 0, ["h"] = 548.3 });
+
+        Action act = () => _loader.Load(path);
+
+        act.Should().Throw<ManifestException>().WithMessage("*slots.timeBlocks.printed*positive width and height*");
+    }
+
+    [Fact]
+    public void The_shipped_erase_rectangles_contain_their_printed_extents()
+    {
+        Manifest m = _loader.Load(TestPaths.ManifestPath);
+
+        Contains(m.Slots.Date.SlashErase, m.Slots.Date.SlashPrinted).Should().BeTrue();
+        Contains(m.Slots.WeeksRemaining.Erase, m.Slots.WeeksRemaining.Printed).Should().BeTrue();
+        Contains(m.Slots.TimeBlocks.Erase, m.Slots.TimeBlocks.Printed).Should().BeTrue();
+
+        static bool Contains(RectPt outer, RectPt inner) =>
+            outer.X <= inner.X && outer.Y <= inner.Y && outer.Right >= inner.Right && outer.Bottom >= inner.Bottom;
     }
 
     [Fact]

@@ -62,11 +62,15 @@
         { "x1": 900.2, "y1": 41.0, "x2": 918.8, "y2": 16.9 },
         { "x1": 952.1, "y1": 41.0, "x2": 970.7, "y2": 16.9 }
       ],
-      "slashErase": { "x": 896, "y": 12, "w": 80, "h": 34 }
+      "slashErase": { "x": 896, "y": 12, "w": 80, "h": 34 },
+      "$comment": "slashPrinted is the ink of the two printed slashes on every daily page (measured at 600 DPI). slashErase must contain it.",
+      "slashPrinted": { "x": 899.7, "y": 16.5, "w": 71.5, "h": 24.9 }
     },
     "weeksRemaining": {
       "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
       "erase": { "x": 530, "y": 28, "w": 198, "h": 16 },
+      "$comment": "printed is the ink of the printed numbers and disc over the daily pages of all 13 week runs (the disc sits on 13 in run 13 and on 1 in run 1; measured at 600 DPI). erase must contain it.",
+      "printed": { "x": 536.6, "y": 28.9, "w": 189.7, "h": 13.9 },
       "sizePt": 10,
       "baselineY": 39.4,
       "numberX": [537.3, 556.1, 574.9, 593.7, 615.7, 628.3, 640.9, 653.5, 666.1, 678.7, 691.3, 703.9, 716.5],
@@ -119,6 +123,8 @@
     "timeBlocks": {
       "appliesTo": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
       "erase": { "x": 870, "y": 88, "w": 214, "h": 560 },
+      "$comment": "printed is the ink of the printed hour and half-hour rules and the 7 pt hour labels on every daily page (measured at 600 DPI). erase must contain it.",
+      "printed": { "x": 886.3, "y": 92.4, "w": 196.5, "h": 548.3 },
       "columnX": 897.9,
       "columnRight": 1082.7,
       "top": 95.5,
