@@ -27,7 +27,7 @@ internal sealed class ProgIdActivator : IOneNoteActivator
         try
         {
             target = Activator.CreateInstance(type) ?? throw new OneNoteUnavailableException(
-                OneNoteHResults.ActivateCall, OneNoteHResults.ServerExecFailed, OneNoteUnavailableException.UserMessage + " CreateInstance returned nothing.", null);
+                OneNoteHResults.ActivateCall, OneNoteHResults.ServerExecFailed, OneNoteUnavailableException.NotStartedMessage + " CreateInstance returned nothing.", null);
         }
         catch (COMException ex)
         {

@@ -154,8 +154,10 @@ public sealed class GeneratePreflight : IGeneratePreflight
     }
 
     /// <summary>
-    /// OneNote installed and answering GetHierarchy; a failure is an error with exit 3. Returns true when OneNote answered
-    /// with no open notebook, which is recorded for the orchestrator rather than refused (see <see cref="PreflightResult.NoOpenNotebooks"/>).
+    /// OneNote installed and answering GetHierarchy; a failure is an error with exit 3. A refusal because a dialog holds
+    /// OneNote (busy twice, or hrAppInModalUI; OneNote's first-run sign-in dialog does this, and this is the run's first
+    /// call) says to close the dialog or sign in. Returns true when OneNote answered with no open notebook, which is
+    /// recorded for the orchestrator rather than refused (see <see cref="PreflightResult.NoOpenNotebooks"/>).
     /// </summary>
     private bool CheckOneNote(List<(string Message, int ExitCode)> errors)
     {
@@ -173,6 +175,10 @@ public sealed class GeneratePreflight : IGeneratePreflight
         catch (OneNoteUnavailableException ex)
         {
             errors.Add((ex.Message, OneNoteUnavailable));
+        }
+        catch (OneNoteException ex) when (ex is OneNoteBusyException || ex.HResult == OneNoteHResults.AppInModalUI)
+        {
+            errors.Add((GenerateText.DialogOrSignInMessage + " " + ex.Message, OneNoteUnavailable));
         }
         catch (OneNoteException ex)
         {

@@ -81,16 +81,19 @@ public class ContentsXmlBuilderTests
     {
         PageSpec contents = new(PageKey.Contents, PageType.Contents, "Contents", 1, null, new DateOnly(2027, 1, 1), new Dictionary<string, string>(StringComparer.Ordinal));
 
-        string xml = ContentsXmlBuilder.Page("{contents}", contents, Sections(), MonJan4.Options(M));
+        string xml = ContentsXmlBuilder.Page(MonJan4.ContentsPageId, contents, Sections(), MonJan4.Options(M));
 
         SchemaValidator.AssertValid(xml);
         XElement page = XElement.Parse(xml);
-        page.Attribute("ID")!.Value.Should().Be("{contents}");
+        page.Attribute("ID")!.Value.Should().Be(MonJan4.ContentsPageId);
         page.Element(One + "Meta")!.Attribute("content")!.Value.Should().Be("contents");
         page.Element(One + "Title")!.Value.Should().Be("Contents");
         page.Descendants(One + "Image").Should().BeEmpty();
         page.Elements(One + "Outline").Should().ContainSingle();
-        SchemaValidator.AssertValid(ContentsXmlBuilder.Outline(Sections(), MonJan4.Options(M)));
+
+        // The official schema declares no global Outline element, so the standalone outline is validated as page content.
+        string standalone = ContentsXmlBuilder.Outline(Sections(), MonJan4.Options(M));
+        SchemaValidator.AssertValid($"<one:Page xmlns:one=\"{OneNoteXml.Namespace2013}\" ID=\"{MonJan4.ContentsPageId}\">{standalone}</one:Page>");
     }
 
     [Fact]
@@ -117,7 +120,7 @@ public class ContentsXmlBuilderTests
         grouped[0].Element(One + "T")!.Value.Should().StartWith("<a href=\"onenote:Week%2001.one");
         grouped[0].Element(One + "OEChildren")!.Elements(One + "OE").Select(Text).Should().Equal("Weekly Overview");
         PageSpec contents = new(PageKey.Contents, PageType.Contents, "Contents", 1, null, new DateOnly(2027, 1, 1), new Dictionary<string, string>(StringComparer.Ordinal));
-        SchemaValidator.AssertValid(ContentsXmlBuilder.Page("{contents}", contents, sections, MonJan4.Options(M)));
+        SchemaValidator.AssertValid(ContentsXmlBuilder.Page(MonJan4.ContentsPageId, contents, sections, MonJan4.Options(M)));
     }
 
     [Fact]

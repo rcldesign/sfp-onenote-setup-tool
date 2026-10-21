@@ -264,7 +264,7 @@ public class GenerateOrchestratorTests
     }
 
     [Fact]
-    public void A_render_failure_maps_to_exit_4_names_the_page_and_writes_nothing_to_onenote()
+    public void A_render_failure_maps_to_exit_4_names_the_page_writes_nothing_to_onenote_and_deletes_the_partial_notebook()
     {
         Harness h = new();
         h.Renderer.Failure = page => page.Key == PageKey.Cover ? new InvalidOperationException("PDFium could not decode the page") : null;
@@ -276,13 +276,44 @@ public class GenerateOrchestratorTests
         result.Phase.Should().Be(GeneratePhase.Rendering);
         result.FailedPage.Should().Be("Cover");
         result.Error.Should().Contain("Rendering pages").And.Contain("Cover").And.Contain("PDF page 1").And.Contain("PDFium could not decode the page");
+        result.Error.Should().EndWith("PDFium could not decode the page. The partial notebook was closed and deleted, so the same command can be run again.");
         h.Writer.Written.Should().BeEmpty("nothing is written to OneNote");
         h.Writer.Calls.Should().NotContain(c => c.StartsWith("WritePage:", StringComparison.Ordinal));
         h.Writer.Calls.Should().NotContain("Sync");
-        result.OutputPath.Should().Be(Path.Combine(h.OutputFolder, "SFP Q1 2027"));
-        Directory.Exists(result.OutputPath).Should().BeTrue("the partial notebook is kept for inspection");
+        h.Writer.Calls.Last().Should().Be("CloseNotebook", "the shell is closed before its folder is deleted");
+        result.OutputPath.Should().BeNull("nothing is left in place, so no front end may say it was kept for inspection");
+        Directory.Exists(Path.Combine(h.OutputFolder, "SFP Q1 2027")).Should().BeFalse("a render failure leaves nothing to inspect");
+        result.Warnings.Should().NotContain(w => GenerateMessages.IsPartialNotebookNotDeleted(w));
         h.Progress.Reports.Last().Phase.Should().Be(GeneratePhase.Failed);
         h.Log.Messages.Should().Contain(m => m.Contains("Generate failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_cover_render_failure_over_the_in_memory_onenote_leaves_no_notebook_and_the_retry_passes_the_preflight()
+    {
+        Harness h = new();
+        using FakeOneNoteApp app = new() { CreateFoldersOnDisk = true };
+        h.PreflightOverride = new GeneratePreflight(new FakeManifestValidator(), new FakeOneNoteLocator(true, app), new PreflightFileSystem(), new SidecarStore(), new DateEngine());
+        PageXmlOptions xml = PageXmlOptions.From(M, h.Options(), "TeX Gyre Bonum", MonJan4.FixedZone);
+        h.WriterFactory = () => new ComNotebookWriter(app, xml, h.Log.CreateLogger());
+        h.Renderer.Failure = page => page.Key == PageKey.Cover ? new InvalidOperationException("PDFium could not decode the page") : null;
+        string notebook = Path.Combine(h.OutputFolder, "SFP Q1 2027");
+
+        GenerateResult failed = h.Run();
+
+        failed.ExitCode.Should().Be(4, failed.Error);
+        app.CallsOf("CreateNewPage").Should().NotBeEmpty("the shell was built before rendering began");
+        app.WrittenPages.Should().BeEmpty();
+        app.CallsOf("CloseNotebook").Should().ContainSingle("the partial notebook is closed in OneNote");
+        Directory.Exists(notebook).Should().BeFalse("the notebook folder and its section files are deleted");
+        failed.OutputPath.Should().BeNull();
+        h.PreflightOverride.Check(h.Request()).Errors.Should().BeEmpty("nothing blocks the same command now: no folder of that name is left");
+
+        h.Renderer.Failure = null;
+        GenerateResult retried = h.Run();
+
+        retried.Success.Should().BeTrue(retried.Error);
+        retried.OutputPath.Should().Be(notebook);
     }
 
     [Fact]
@@ -711,7 +742,7 @@ public class GenerateOrchestratorTests
     }
 
     private static readonly OneNoteException OpenHierarchyRefused =
-        new("OpenHierarchy", OneNoteHResults.NotebookDoesNotExist, "OneNote call OpenHierarchy failed: hrNotebookDoesNotExist (0x80042016)", null);
+        new("OpenHierarchy", OneNoteHResults.NotebookDoesNotExist, "OneNote call OpenHierarchy failed: hrNotebookDoesNotExist (0x80042015)", null);
 
     private static FakePreflight NoOpenNotebooks() =>
         new(new PreflightResult(Array.Empty<(string, int)>(), Array.Empty<string>()) { NoOpenNotebooks = true });
@@ -727,7 +758,7 @@ public class GenerateOrchestratorTests
         result.Success.Should().BeFalse();
         result.ExitCode.Should().Be(3);
         result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
-        result.Error.Should().Contain(GenerateText.SignInMessage).And.Contain("0x80042016");
+        result.Error.Should().Contain(GenerateText.SignInMessage).And.Contain("0x80042015");
         result.OutputPath.Should().BeNull("no notebook was created");
         h.Writer.Written.Should().BeEmpty();
         h.Renderer.Rendered.Should().BeEmpty();
@@ -744,7 +775,7 @@ public class GenerateOrchestratorTests
 
         result.ExitCode.Should().Be(5);
         result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
-        result.Error.Should().Contain("0x80042016").And.NotContain(GenerateText.SignInMessage);
+        result.Error.Should().Contain("0x80042015").And.NotContain(GenerateText.SignInMessage);
     }
 
     [Fact]
@@ -797,7 +828,7 @@ public class GenerateOrchestratorTests
         else
         {
             result.Phase.Should().Be(GeneratePhase.CreatingNotebook);
-            result.Error.Should().Contain("0x80042016");
+            result.Error.Should().Contain("0x80042015");
             (result.Error!.Contains(GenerateText.SignInMessage, StringComparison.Ordinal)).Should().Be(exitCode == 3);
             app.WrittenPages.Should().BeEmpty();
         }
@@ -882,8 +913,11 @@ public class GenerateOrchestratorTests
         result.ExitCode.Should().Be(4);
         result.Phase.Should().Be(GeneratePhase.Rendering);
         result.FailedPage.Should().Be("Cover");
-        result.Error.Should().Be("Rendering pages, page Cover: Not enough disk space in " + h.OutputFolder + ": about 4 MB is needed for 7 pages at 300 DPI.", "7 pages of 520 KB");
+        result.Error.Should().Be(
+            "Rendering pages, page Cover: Not enough disk space in " + h.OutputFolder + ": about 4 MB is needed for 7 pages at 300 DPI. The partial notebook was closed and deleted, so the same command can be run again.",
+            "7 pages of 520 KB, and the partial notebook goes like any render failure's");
         h.Writer.Written.Should().BeEmpty();
+        Directory.Exists(Path.Combine(h.OutputFolder, "SFP Q1 2027")).Should().BeFalse();
     }
 
     [Theory]

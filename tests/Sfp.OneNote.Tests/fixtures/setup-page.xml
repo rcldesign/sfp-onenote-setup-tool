@@ -60,10 +60,10 @@
     <one:Size width="148.6" height="18.9" />
     <one:OEChildren>
       <one:OE creationTime="2027-01-09T14:12:20.000Z" lastModifiedTime="2027-01-09T14:12:36.000Z" objectID="{3B1C5A77-9D2E-4F60-8A41-6C0E2B9D5F13}{31}{B0}" alignment="left" quickStyleIndex="1">
-        <one:InkWord objectID="{3B1C5A77-9D2E-4F60-8A41-6C0E2B9D5F13}{32}{B0}" lastModifiedTime="2027-01-09T14:12:36.000Z" recognizedText="Hire">
+        <one:InkWord recognizedText="Hire" x="0.0" y="0.0" width="38.4" height="18.9">
           <one:CallbackID callbackID="{3B1C5A77-9D2E-4F60-8A41-6C0E2B9D5F13}{33}{B0}" />
         </one:InkWord>
-        <one:InkWord objectID="{3B1C5A77-9D2E-4F60-8A41-6C0E2B9D5F13}{34}{B0}" lastModifiedTime="2027-01-09T14:12:36.000Z" recognizedText="two PMs">
+        <one:InkWord recognizedText="two PMs" x="44.2" y="0.0" width="104.4" height="18.9">
           <one:CallbackID callbackID="{3B1C5A77-9D2E-4F60-8A41-6C0E2B9D5F13}{35}{B0}" />
         </one:InkWord>
       </one:OE>

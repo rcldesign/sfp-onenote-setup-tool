@@ -11,6 +11,12 @@ public static class GenerateText
     /// <summary>PRD error table: OneNote not signed in.</summary>
     public const string SignInMessage = "Open OneNote and sign in once, then retry.";
 
+    /// <summary>
+    /// The preflight's first call was refused because a dialog holds OneNote (busy twice, or hrAppInModalUI), which is
+    /// what OneNote's first-run sign-in dialog does: the sign-in row with the dialog beside it.
+    /// </summary>
+    public const string DialogOrSignInMessage = "OneNote is showing a dialog or is not signed in. Close the dialog in OneNote, or open OneNote and sign in once, then retry.";
+
     /// <summary>PRD error table: the output folder sits under OneDrive sync (warn only). The text lives in Sfp.Core so the Generate form shows the same words.</summary>
     public const string OneDriveWarningReason = GenerateMessages.OneDriveWarningReason;
 

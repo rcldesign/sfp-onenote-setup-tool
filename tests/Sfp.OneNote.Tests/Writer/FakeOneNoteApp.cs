@@ -11,8 +11,9 @@ namespace Sfp.OneNote.Tests.Writer;
 /// reports them, and onenote: hyperlinks in the real shape. GetHierarchy lists a notebook's top-level sections before
 /// its section groups, the order the 2013 schema gives them. A closed notebook is not listed and its pages cannot be
 /// read or written until OpenHierarchy (cftNone) opens its folder again. UpdatePageContent refuses a page carrying an
-/// image with empty data (hrInsertingImage), as OneNote does. Every call is recorded so tests can assert the PRD call
-/// sequence without COM.
+/// image with empty data (hrInsertingImage), as OneNote does, and merges into a page that has content as OneNote does:
+/// an object named by an objectID the last read handed out is replaced, an object without one is added, and an object
+/// the XML does not mention stays. Every call is recorded so tests can assert the PRD call sequence without COM.
 /// </summary>
 public sealed class FakeOneNoteApp : IOneNoteApp
 {
@@ -32,6 +33,12 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
     /// <summary>Decides whether an UpdatePageContent call fails: given the XML, return the exception to throw or null.</summary>
     public Func<string, Exception?>? UpdatePageContentFailure { get; set; }
+
+    /// <summary>
+    /// Runs once, with the page ID, when the next UpdatePageContent arrives and before it is applied: a test edits the page
+    /// there (through this app) the way a user or a sync does between a writer's read and its write. Cleared before it runs.
+    /// </summary>
+    public Action<string>? BeforeNextPageWrite { get; set; }
 
     /// <summary>Decides whether a GetHierarchy call fails.</summary>
     public Func<Exception?>? GetHierarchyFailure { get; set; }
@@ -285,6 +292,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
     {
         Record("UpdatePageContent", LogSafeDetail(xml));
         LastExpectedLastModified = dateExpectedLastModified;
+        Action<string>? beforeWrite = BeforeNextPageWrite;
+        BeforeNextPageWrite = null;
+        beforeWrite?.Invoke((string?)XElement.Parse(xml).Attribute("ID") ?? "");
         Exception? failure = UpdatePageContentFailure?.Invoke(xml);
         if (failure is not null)
         {
@@ -310,7 +320,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
                 null);
         }
 
-        page.Xml = xml;
+        page.Xml = page.Xml is null ? xml : Merge(page.Id, page.Xml, root);
         string? title = root.Element(one + "Title")?.Descendants(one + "T").FirstOrDefault()?.Value;
         if (!string.IsNullOrEmpty(title))
         {
@@ -338,9 +348,9 @@ public sealed class FakeOneNoteApp : IOneNoteApp
         // OneNote assigns an objectID to every outline, paragraph and image; binary data becomes a CallbackID unless asked for.
         XElement root = XElement.Parse(page.Xml);
         int n = 0;
-        foreach (XElement element in root.Descendants().Where(e => e.Name.LocalName is "Outline" or "OE" or "Image").ToList())
+        foreach (XElement element in AssignObjectIds(root, pageId))
         {
-            element.SetAttributeValue("objectID", pageId.TrimEnd('}') + ":o" + (++n).ToString(CultureInfo.InvariantCulture) + "}");
+            n++;
             if (element.Name.LocalName == "Image" && pageInfo is PageInfo.Basic or PageInfo.Selection or PageInfo.FileType)
             {
                 XElement? data = element.Element(element.Name.Namespace + "Data");
@@ -350,6 +360,77 @@ public sealed class FakeOneNoteApp : IOneNoteApp
 
         root.SetAttributeValue("name", page.Name);
         return OneNoteXml.Serialize(root);
+    }
+
+    /// <summary>The objectIDs GetPageContent hands out: every outline, paragraph and image numbered in document order. Returns them in that order.</summary>
+    private static List<XElement> AssignObjectIds(XElement root, string pageId)
+    {
+        List<XElement> objects = root.Descendants().Where(e => e.Name.LocalName is "Outline" or "OE" or "Image").ToList();
+        for (int i = 0; i < objects.Count; i++)
+        {
+            objects[i].SetAttributeValue("objectID", pageId.TrimEnd('}') + ":o" + (i + 1).ToString(CultureInfo.InvariantCulture) + "}");
+        }
+
+        return objects;
+    }
+
+    /// <summary>
+    /// UpdatePageContent into a page that has content: the incoming page's attributes are set; a top-level object whose
+    /// objectID names one the last read handed out replaces it, any other is added; Meta (by name), PageSettings and Title
+    /// replace their counterparts. Objects the XML does not mention stay. Stored without objectIDs, which reads hand out.
+    /// </summary>
+    private static string Merge(string pageId, string storedXml, XElement incoming)
+    {
+        XElement stored = XElement.Parse(storedXml);
+        XNamespace one = stored.Name.Namespace;
+        AssignObjectIds(stored, pageId);
+        foreach (XAttribute attribute in incoming.Attributes().Where(a => !a.IsNamespaceDeclaration))
+        {
+            stored.SetAttributeValue(attribute.Name, attribute.Value);
+        }
+
+        foreach (XElement child in incoming.Elements())
+        {
+            XElement copy = new(child);
+            if (child.Name.LocalName is "Outline" or "Image" or "InkDrawing" or "InsertedFile" or "MediaFile")
+            {
+                string? id = (string?)child.Attribute("objectID");
+                XElement? existing = id is null ? null : stored.Elements().FirstOrDefault(e => (string?)e.Attribute("objectID") == id);
+                if (existing is not null)
+                {
+                    existing.ReplaceWith(copy);
+                }
+                else
+                {
+                    stored.Add(copy);
+                }
+
+                continue;
+            }
+
+            XElement? same = child.Name.LocalName == "Meta"
+                ? stored.Elements(one + "Meta").FirstOrDefault(m => (string?)m.Attribute("name") == (string?)child.Attribute("name"))
+                : stored.Element(child.Name);
+            if (same is not null)
+            {
+                same.ReplaceWith(copy);
+            }
+            else if (stored.Elements().FirstOrDefault(e => e.Name.LocalName is "Outline" or "Image" or "InkDrawing") is XElement firstContent)
+            {
+                firstContent.AddBeforeSelf(copy);
+            }
+            else
+            {
+                stored.Add(copy);
+            }
+        }
+
+        foreach (XAttribute id in stored.DescendantsAndSelf().Attributes("objectID").ToList())
+        {
+            id.Remove();
+        }
+
+        return OneNoteXml.Serialize(stored);
     }
 
     public string GetHyperlinkToObject(string id, string? pageObjectId)
@@ -370,7 +451,7 @@ public sealed class FakeOneNoteApp : IOneNoteApp
             return "onenote:#notebook-id=" + id + "&end";
         }
 
-        throw new OneNoteException("GetHyperlinkToObject", OneNoteHResults.NoHyperlinkToObject, "No object " + id, null);
+        throw new OneNoteException("GetHyperlinkToObject", OneNoteHResults.ObjectDoesNotExist, "No object " + id, null);
     }
 
     public void SyncHierarchy(string id) => Record("SyncHierarchy", id);

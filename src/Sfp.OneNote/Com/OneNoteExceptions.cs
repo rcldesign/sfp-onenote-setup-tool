@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace Sfp.OneNote.Com;
 
 /// <summary>A OneNote COM call failed. <see cref="Exception.HResult"/> holds the COM HRESULT; <see cref="Call"/> names the call.</summary>
@@ -34,8 +32,8 @@ public class OneNoteException : Exception
 }
 
 /// <summary>
-/// OneNote desktop is not installed, not registered, or its COM server could not be reached: at activation (the
-/// install message, <see cref="UserMessage"/>) or because it went away during the run (<see cref="DisconnectedMessage"/>).
+/// OneNote desktop is not installed or not registered (the install message, <see cref="UserMessage"/>), is installed but
+/// could not be started (<see cref="NotStartedMessage"/>), or went away during the run (<see cref="DisconnectedMessage"/>).
 /// </summary>
 public sealed class OneNoteUnavailableException : OneNoteException
 {
@@ -47,6 +45,12 @@ public sealed class OneNoteUnavailableException : OneNoteException
 
     /// <summary>OneNote was running when the run reached it, then its COM server went away (closed, crashed or hung).</summary>
     public const string DisconnectedMessage = "OneNote stopped responding or was closed during the run.";
+
+    /// <summary>
+    /// The OneNote.Application ProgID resolved, so OneNote is installed, but creating it failed: most often the tool and
+    /// OneNote run at different elevations, or OneNote hung while starting.
+    /// </summary>
+    public const string NotStartedMessage = "OneNote is installed but could not be started. Close OneNote, run this tool and OneNote at the same elevation (both as administrator or neither), then retry.";
 
     public OneNoteUnavailableException()
         : base(UserMessage)
@@ -96,7 +100,10 @@ public sealed class OneNoteXmlRejectedException : OneNoteException
     public string? Xml { get; }
 }
 
-/// <summary>OneNote reported RPC_E_CALL_REJECTED or RPC_E_SERVERCALL_RETRYLATER twice in a row for one call.</summary>
+/// <summary>
+/// OneNote refused one call twice in a row with a busy result (<see cref="OneNoteHResults.IsBusy"/>): RPC_E_CALL_REJECTED,
+/// RPC_E_SERVERCALL_RETRYLATER, or hrAppInModalUI, whose message asks for the dialog to be closed.
+/// </summary>
 public sealed class OneNoteBusyException : OneNoteException
 {
     public OneNoteBusyException()
@@ -114,7 +121,7 @@ public sealed class OneNoteBusyException : OneNoteException
     }
 
     public OneNoteBusyException(string call, int hresult, Exception? innerException)
-        : base(call, hresult, string.Format(CultureInfo.InvariantCulture, "OneNote is busy and rejected {0} twice ({1}).", call, OneNoteHResults.Describe(hresult)), innerException)
+        : base(call, hresult, OneNoteHResults.BusyMessage(call, hresult), innerException)
     {
     }
 }

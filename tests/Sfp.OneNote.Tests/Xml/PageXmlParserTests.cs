@@ -15,7 +15,7 @@ public class PageXmlParserTests
     private static PageXml Setup() => PageXmlParser.Parse(File.ReadAllText(FixturePath));
 
     [Fact]
-    public void Fixture_validates_against_the_schema_subset()
+    public void Fixture_validates_against_the_official_schema()
     {
         SchemaValidator.AssertValid(File.ReadAllText(FixturePath));
     }
@@ -80,8 +80,8 @@ public class PageXmlParserTests
         outline.InkWords.Should().HaveCount(2);
         outline.InkWords[0].RecognizedText.Should().Be("Hire");
         outline.InkWords[1].RecognizedText.Should().Be("two PMs");
-        outline.InkWords[0].ObjectId.Should().Be("{3B1C5A77-9D2E-4F60-8A41-6C0E2B9D5F13}{32}{B0}");
-        outline.InkWords[0].Bounds.Should().BeNull("an ink word carries no position of its own; the outline does");
+        outline.InkWords[0].ObjectId.Should().BeEmpty("the 2013 schema gives an ink word no objectID");
+        outline.InkWords[0].Bounds.Should().BeNull("an ink word has no Position or Size element; the outline does");
         outline.InkText.Should().Be("Hire two PMs");
         outline.Rect.Should().Be(new RectPt(61.2, 153.7, 148.6, 18.9));
         outline.ObjectId.Should().Be("{3B1C5A77-9D2E-4F60-8A41-6C0E2B9D5F13}{30}{B0}");

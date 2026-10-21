@@ -6,14 +6,107 @@ namespace Sfp.OneNote.Tests.Com;
 /// <summary>The HRESULT table and the mapping rule on their own.</summary>
 public class OneNoteHResultsTests
 {
+    /// <summary>
+    /// Microsoft's "Error codes (OneNote)" table (learn.microsoft.com/office/client-developer/onenote/error-codes-onenote),
+    /// every row: value and published name. There is no 0x80042021.
+    /// </summary>
+    private static readonly (uint Value, string Name)[] Published =
+    {
+        (0x80042000, "hrMalformedXML"),
+        (0x80042001, "hrInvalidXML"),
+        (0x80042002, "hrCreatingSection"),
+        (0x80042003, "hrOpeningSection"),
+        (0x80042004, "hrSectionDoesNotExist"),
+        (0x80042005, "hrPageDoesNotExist"),
+        (0x80042006, "hrFileDoesNotExist"),
+        (0x80042007, "hrInsertingImage"),
+        (0x80042008, "hrInsertingInk"),
+        (0x80042009, "hrInsertingHtml"),
+        (0x8004200A, "hrNavigatingToPage"),
+        (0x8004200B, "hrSectionReadOnly"),
+        (0x8004200C, "hrPageReadOnly"),
+        (0x8004200D, "hrInsertingOutlineText"),
+        (0x8004200E, "hrPageObjectDoesNotExist"),
+        (0x8004200F, "hrBinaryObjectDoesNotExist"),
+        (0x80042010, "hrLastModifiedDateDidNotMatch"),
+        (0x80042011, "hrGroupDoesNotExist"),
+        (0x80042012, "hrPageDoesNotExistInGroup"),
+        (0x80042013, "hrNoActiveSelection"),
+        (0x80042014, "hrObjectDoesNotExist"),
+        (0x80042015, "hrNotebookDoesNotExist"),
+        (0x80042016, "hrInsertingFile"),
+        (0x80042017, "hrInvalidName"),
+        (0x80042018, "hrFolderDoesNotExist"),
+        (0x80042019, "hrInvalidQuery"),
+        (0x8004201A, "hrFileAlreadyExists"),
+        (0x8004201B, "hrSectionEncryptedAndLocked"),
+        (0x8004201C, "hrDisabledByPolicy"),
+        (0x8004201D, "hrNotYetSynchronized"),
+        (0x8004201E, "hrLegacySection"),
+        (0x8004201F, "hrMergeFailed"),
+        (0x80042020, "hrInvalidXMLSchema"),
+        (0x80042022, "hrFutureContentLoss"),
+        (0x80042023, "hrTimeOut"),
+        (0x80042024, "hrRecordingInProgress"),
+        (0x80042025, "hrUnknownLinkedNoteState"),
+        (0x80042026, "hrNoShortNameForLinkedNote"),
+        (0x80042027, "hrNoFriendlyNameForLinkedNote"),
+        (0x80042028, "hrInvalidLinkedNoteUri"),
+        (0x80042029, "hrInvalidLinkedNoteThumbnail"),
+        (0x8004202A, "hrImportLNTThumbnailFailed"),
+        (0x8004202B, "hrUnreadDisabledForNotebook"),
+        (0x8004202C, "hrInvalidSelection"),
+        (0x8004202D, "hrConvertFailed"),
+        (0x8004202E, "hrRecycleBinEditFailed"),
+        (0x8004202F, "hrIMConversationTypeInvalid"),
+        (0x80042030, "hrAppInModalUI"),
+        (0x80042031, "hrPublishFormatUnsupportedForLabels"),
+    };
+
+    [Fact]
+    public void Every_onenote_error_code_is_pinned_to_microsofts_published_table()
+    {
+        foreach ((uint value, string name) in Published)
+        {
+            OneNoteHResults.Describe(unchecked((int)value)).Should().Be(name + " (0x" + value.ToString("X8", System.Globalization.CultureInfo.InvariantCulture) + ")");
+        }
+
+        // Every OneNote constant of the class is a published row, named as published without the "hr" prefix (any casing).
+        List<(uint Value, string Name)> constants = typeof(OneNoteHResults)
+            .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(int))
+            .Select(f => (Value: unchecked((uint)(int)f.GetRawConstantValue()!), Name: ("hr" + f.Name).ToUpperInvariant()))
+            .Where(c => c.Value is >= 0x80042000 and <= 0x800420FF)
+            .ToList();
+        constants.Should().BeEquivalentTo(Published.Select(p => (p.Value, Name: p.Name.ToUpperInvariant())));
+
+        OneNoteHResults.ObjectDoesNotExist.Should().Be(unchecked((int)0x80042014));
+        OneNoteHResults.NotebookDoesNotExist.Should().Be(unchecked((int)0x80042015));
+        OneNoteHResults.InsertingFile.Should().Be(unchecked((int)0x80042016));
+        OneNoteHResults.TimeOut.Should().Be(unchecked((int)0x80042023));
+        OneNoteHResults.AppInModalUI.Should().Be(unchecked((int)0x80042030));
+    }
+
     [Theory]
     [InlineData(unchecked((int)0x80010001), true)]
     [InlineData(unchecked((int)0x8001010A), true)]
+    [InlineData(unchecked((int)0x80042030), true)]
     [InlineData(unchecked((int)0x80042001), false)]
+    [InlineData(unchecked((int)0x80042023), false)]
     [InlineData(unchecked((int)0x80040154), false)]
-    public void Busy_results_are_exactly_call_rejected_and_retry_later(int hresult, bool busy)
+    public void Busy_results_are_call_rejected_retry_later_and_a_modal_dialog(int hresult, bool busy)
     {
         OneNoteHResults.IsBusy(hresult).Should().Be(busy);
+    }
+
+    [Fact]
+    public void A_modal_dialog_that_persists_asks_for_the_dialog_to_be_closed()
+    {
+        OneNoteBusyException ex = new("UpdatePageContent", OneNoteHResults.AppInModalUI, null);
+
+        ex.Message.Should().Be("OneNote is showing a dialog and refused UpdatePageContent twice (hrAppInModalUI (0x80042030)). Close the dialog OneNote is showing, then retry.");
+        ex.HResult.Should().Be(OneNoteHResults.AppInModalUI);
+        OneNoteHResults.IsUnavailable(OneNoteHResults.AppInModalUI).Should().BeFalse("OneNote is running; it is waiting for the user");
     }
 
     [Theory]
@@ -63,20 +156,34 @@ public class OneNoteHResultsTests
     }
 
     [Theory]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x800706BA))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x80010108))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x800706BE))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x80040154))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x80080005))]
-    [InlineData(OneNoteHResults.ActivateCall, unchecked((int)0x800401E3))]
-    [InlineData("GetHierarchy", unchecked((int)0x80040154))]
-    [InlineData("GetHierarchy", unchecked((int)0x80080005))]
-    public void Activation_and_registration_failures_carry_the_install_message(string call, int hresult)
+    [InlineData(unchecked((int)0x80080005))]
+    [InlineData(unchecked((int)0x800706BA))]
+    [InlineData(unchecked((int)0x80010108))]
+    [InlineData(unchecked((int)0x800706BE))]
+    [InlineData(unchecked((int)0x80040154))]
+    [InlineData(unchecked((int)0x800401E3))]
+    [InlineData(unchecked((int)0x80070005))]
+    [InlineData(unchecked((int)0x80004005))]
+    public void An_activation_failure_says_onenote_is_installed_but_could_not_be_started_with_the_hresult(int hresult)
     {
-        OneNoteException mapped = OneNoteHResults.Map(call, new COMException("boom", hresult), null);
+        OneNoteException mapped = OneNoteHResults.Map(OneNoteHResults.ActivateCall, new COMException("boom", hresult), null);
+
+        mapped.Should().BeOfType<OneNoteUnavailableException>("an OneNote that does not start still exits with 3");
+        mapped.HResult.Should().Be(hresult);
+        mapped.Message.Should().StartWith(OneNoteUnavailableException.NotStartedMessage + " activate failed with " + OneNoteHResults.Describe(hresult));
+        mapped.Message.Should().NotContain(OneNoteUnavailableException.InstallUrl, "the ProgID resolved, so OneNote is installed");
+        mapped.Message.Should().NotContain(OneNoteUnavailableException.DisconnectedMessage);
+    }
+
+    [Theory]
+    [InlineData(unchecked((int)0x80040154))]
+    [InlineData(unchecked((int)0x80080005))]
+    public void Registration_failures_of_a_later_call_carry_the_install_message(int hresult)
+    {
+        OneNoteException mapped = OneNoteHResults.Map("GetHierarchy", new COMException("boom", hresult), null);
 
         mapped.Should().BeOfType<OneNoteUnavailableException>();
-        mapped.Message.Should().StartWith(OneNoteUnavailableException.UserMessage + " " + call + " failed with " + OneNoteHResults.Describe(hresult));
+        mapped.Message.Should().StartWith(OneNoteUnavailableException.UserMessage + " GetHierarchy failed with " + OneNoteHResults.Describe(hresult));
         mapped.Message.Should().NotContain(OneNoteUnavailableException.DisconnectedMessage);
     }
 
@@ -88,6 +195,8 @@ public class OneNoteHResultsTests
         OneNoteUnavailableException.InstallUrl.Should().Be("https://www.onenote.com/download");
         new OneNoteUnavailableException().Message.Should().Be(OneNoteUnavailableException.UserMessage);
         OneNoteUnavailableException.DisconnectedMessage.Should().Be("OneNote stopped responding or was closed during the run.");
+        OneNoteUnavailableException.NotStartedMessage.Should().Be(
+            "OneNote is installed but could not be started. Close OneNote, run this tool and OneNote at the same elevation (both as administrator or neither), then retry.");
         OneNoteHResults.IsDisconnected(OneNoteHResults.ClassNotRegistered).Should().BeFalse();
         OneNoteHResults.IsDisconnected(OneNoteHResults.ServerExecFailed).Should().BeFalse();
         OneNoteHResults.IsDisconnected(OneNoteHResults.InvalidXml).Should().BeFalse();

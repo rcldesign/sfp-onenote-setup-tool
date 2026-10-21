@@ -16,6 +16,9 @@ public static class OneNoteXml
     /// <summary>The page-level one:Meta name that carries the page key.</summary>
     public const string PageKeyMetaName = "sfp.key";
 
+    /// <summary>The one:Meta name on each tool-owned anchor outline that carries its anchor ID (the 2013 schema allows Meta on any page object).</summary>
+    public const string AnchorMetaName = "sfp.anchor";
+
     private static readonly XmlWriterSettings WriterSettings = new()
     {
         Indent = true,
@@ -37,13 +40,6 @@ public static class OneNoteXml
 
         return rounded.ToString("0.###", CultureInfo.InvariantCulture);
     }
-
-    /// <summary>
-    /// A length in points as the inches one:Dimensions takes: points / 72, two decimals, invariant culture
-    /// (1112 pt gives "15.44").
-    /// </summary>
-    public static string Inches(double pt) =>
-        Math.Round(pt / 72.0, 2, MidpointRounding.AwayFromZero).ToString("0.00", CultureInfo.InvariantCulture);
 
     /// <summary>A font size for a style attribute: "10.0pt".</summary>
     public static string FontSize(double pt) => pt.ToString("0.0", CultureInfo.InvariantCulture) + "pt";

@@ -59,8 +59,9 @@ public sealed record GenerateOrchestratorOptions
 /// embeds them), then write each page as its render arrives from the parallel pipeline on this one thread, the
 /// Contents page, the sidecar, the previous notebook's Next quarter link (with --previous; a warning, never a
 /// failure), SyncHierarchy and NavigateTo the cover.
-/// Cancellation is checked between pages; on cancel the partial notebook is closed and its folder deleted. Expected
-/// failures never throw: the result names the phase, the page and the HRESULT or message with the PRD exit code.
+/// Cancellation is checked between pages; on cancel, and after a page fails to render, the partial notebook is closed
+/// and its folder deleted, so the same command can run again. Expected failures never throw: the result names the
+/// phase, the page and the HRESULT or message with the PRD exit code.
 /// </summary>
 public sealed class GenerateOrchestrator : IGenerateOrchestrator
 {
@@ -466,7 +467,11 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         };
     }
 
-    private void DeletePartialNotebook(RunState state)
+    /// <summary>
+    /// Closes the partial notebook and deletes its folder and state file (on cancel, and after a render failure). True
+    /// when nothing is left; false when the folder could not be deleted, which the run's warnings then say.
+    /// </summary>
+    private bool DeletePartialNotebook(RunState state)
     {
         NotebookHandle nb = state.Notebook!;
         try
@@ -475,7 +480,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
         }
         catch (OneNoteException ex)
         {
-            _log.Warning("CloseNotebook failed while cancelling ({HResult}); deleting the folder anyway", ex.HResultHex);
+            _log.Warning("CloseNotebook failed while removing the partial notebook ({HResult}); deleting the folder anyway", ex.HResultHex);
         }
 
         try
@@ -491,12 +496,14 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             }
 
             _log.Information("Partial notebook {Path} deleted", nb.Path);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             string note = GenerateMessages.PartialNotebookNotDeleted(nb.Path, ex.Message);
             _log.Warning(ex, "Partial notebook {Path} could not be deleted", nb.Path);
             state.Warnings.Add(note);
+            return false;
         }
     }
 
@@ -561,6 +568,17 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
                 break;
         }
 
+        // A render failure leaves nothing to inspect: the partial notebook is removed as on cancel, so the same command
+        // can be run again (the PRD's render error row: exit 4, nothing written to OneNote).
+        bool partialDeleted = false;
+        if (ex is RenderFailedException && !state.Request.RenderOnly && state.Notebook is not null && state.Writer is not null)
+        {
+            partialDeleted = DeletePartialNotebook(state);
+            message = message.TrimEnd().TrimEnd('.') + (partialDeleted
+                ? ". The partial notebook was closed and deleted, so the same command can be run again."
+                : ". The partial notebook could not be deleted; the warnings say why.");
+        }
+
         string error = string.Format(CultureInfo.InvariantCulture, "{0}{1}: {2}", PhaseLabel(phase), page is null ? "" : ", page " + page.Title, message);
         _log.Error(ex, "Generate failed during {Phase} on page {Page}: {Message}", phase, page?.Title, message);
         state.Report(GeneratePhase.Failed, 0, 0, error);
@@ -569,7 +587,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             Success = false,
             ExitCode = exitCode,
             Phase = phase,
-            OutputPath = state.Notebook?.Path ?? (state.Request.RenderOnly ? state.Request.RenderOutputDir : null),
+            OutputPath = partialDeleted ? null : state.Notebook?.Path ?? (state.Request.RenderOnly ? state.Request.RenderOutputDir : null),
             NotebookName = state.Notebook?.Name,
             PagesRendered = 0,
             Error = error,
@@ -577,7 +595,7 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
             Elapsed = state.Clock.Elapsed,
             LogPath = _options.LogPath,
             Warnings = state.Warnings,
-            SidecarPath = state.SidecarPath,
+            SidecarPath = partialDeleted ? null : state.SidecarPath,
         };
     }
 

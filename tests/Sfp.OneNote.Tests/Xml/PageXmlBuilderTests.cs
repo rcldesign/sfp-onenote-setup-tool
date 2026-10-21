@@ -15,6 +15,9 @@ public class PageXmlBuilderTests
     private static readonly Manifest M = TestManifest.Load();
     private static readonly XNamespace One = OneNoteXml.Namespace2013;
 
+    /// <summary>The page ID CreateNewPage returned for the Objective Details page, in the shape OneNote writes.</summary>
+    private const string ObjectivesId = "{2C4E6A8B-1D3F-4A5B-9C7D-0E2F4A6B8C1D}{1}{E19581234567890123456789012345678901234567}";
+
     /// <summary>The blank Objective Details parent page, as the plan builder makes it.</summary>
     private static PageSpec ObjectiveDetails() =>
         new(PageKey.ObjectiveDetails, PageType.Blank, "Objective Details", 1, null, new DateOnly(2027, 1, 1), new Dictionary<string, string>(StringComparer.Ordinal));
@@ -78,7 +81,7 @@ public class PageXmlBuilderTests
     [Fact]
     public void A_page_without_an_image_is_written_as_the_frame_alone_with_no_image_and_validates()
     {
-        string xml = PageXmlBuilder.Build("{objectives}", ObjectiveDetails(), NoImage(), Array.Empty<ResolvedAnchor>(), MonJan4.Options(M));
+        string xml = PageXmlBuilder.Build(ObjectivesId, ObjectiveDetails(), NoImage(), Array.Empty<ResolvedAnchor>(), MonJan4.Options(M));
 
         SchemaValidator.AssertValid(xml);
         XElement page = XElement.Parse(xml);
@@ -97,7 +100,7 @@ public class PageXmlBuilderTests
         IReadOnlyList<ResolvedAnchor> anchors = new[] { MonJan4.DateAnchor(M) };
         RenderedPage art = NoImage() with { Anchors = anchors.Select(a => a.Placement).ToList() };
 
-        XElement frameOnly = XElement.Parse(PageXmlBuilder.Build("{objectives}", ObjectiveDetails(), art, anchors, MonJan4.Options(M)));
+        XElement frameOnly = XElement.Parse(PageXmlBuilder.Build(ObjectivesId, ObjectiveDetails(), art, anchors, MonJan4.Options(M)));
         XElement withSheet = XElement.Parse(MonJan4.Build(M));
 
         frameOnly.Descendants(One + "Image").Should().BeEmpty();
@@ -111,7 +114,7 @@ public class PageXmlBuilderTests
     {
         PageXmlOptions hidden = MonJan4.Options(M, MonJan4.Generate() with { HideTitle = true });
 
-        string xml = PageXmlBuilder.Build("{objectives}", ObjectiveDetails(), NoImage(), Array.Empty<ResolvedAnchor>(), hidden);
+        string xml = PageXmlBuilder.Build(ObjectivesId, ObjectiveDetails(), NoImage(), Array.Empty<ResolvedAnchor>(), hidden);
 
         XElement.Parse(xml).Elements().Select(e => e.Name.LocalName).Should().Equal("Meta", "PageSettings");
         SchemaValidator.AssertValid(xml);
@@ -233,20 +236,23 @@ public class PageXmlBuilderTests
     }
 
     [Fact]
-    public void Custom_page_size_writes_a_landscape_orientation_then_the_manifest_page_size_in_inches()
+    public void Custom_page_size_writes_a_landscape_orientation_the_manifest_page_size_in_points_and_zero_margins()
     {
         PageXmlOptions options = MonJan4.Options(M, MonJan4.Generate() with { PageSize = PageSizeMode.Custom });
         string xml = MonJan4.Build(M, options);
         XElement page = XElement.Parse(xml);
 
         XElement size = page.Element(One + "PageSettings")!.Element(One + "PageSize")!;
-        size.Elements().Select(e => e.Name.LocalName).Should().Equal("Orientation", "Dimensions");
+        size.Elements().Select(e => e.Name.LocalName).Should().Equal(new[] { "Orientation", "Dimensions", "Margins" }, "the official schema's custom page size is that sequence, all three required");
         size.Element(One + "Orientation")!.Attribute("landscape")!.Value.Should().Be("true", "the 1112 x 770 pt sheet is wider than tall");
         XElement dimensions = size.Element(One + "Dimensions")!;
-        dimensions.Attribute("width")!.Value.Should().Be("15.44", "1112 pt / 72");
-        dimensions.Attribute("height")!.Value.Should().Be("10.69", "770 pt / 72");
+        dimensions.Attribute("width")!.Value.Should().Be(OneNoteXml.Pt(M.PageWidthPt)).And.Be("1112", "Dimensions is in points, like the schema's Letter default of 612 x 792");
+        dimensions.Attribute("height")!.Value.Should().Be(OneNoteXml.Pt(M.PageHeightPt)).And.Be("770");
         dimensions.HasElements.Should().BeFalse("Dimensions is an empty element with width and height attributes");
-        size.ToString(SaveOptions.DisableFormatting).Should().Contain("<one:Orientation landscape=\"true\" /><one:Dimensions width=\"15.44\" height=\"10.69\" />");
+        XElement margins = size.Element(One + "Margins")!;
+        margins.Attributes().Select(a => (a.Name.LocalName, a.Value)).Should().Equal(("top", "0"), ("bottom", "0"), ("left", "0"), ("right", "0"));
+        size.ToString(SaveOptions.DisableFormatting).Should().Contain(
+            "<one:Orientation landscape=\"true\" /><one:Dimensions width=\"1112\" height=\"770\" /><one:Margins top=\"0\" bottom=\"0\" left=\"0\" right=\"0\" />");
         SchemaValidator.AssertValid(xml);
     }
 
@@ -256,24 +262,31 @@ public class PageXmlBuilderTests
         Manifest portrait = M with { PageSizePt = new[] { 612.0, 792.0 } };
         PageXmlOptions options = MonJan4.Options(portrait, MonJan4.Generate() with { PageSize = PageSizeMode.Custom, PageScale = 0.5 });
 
-        XElement size = XElement.Parse(MonJan4.Build(portrait, options)).Element(One + "PageSettings")!.Element(One + "PageSize")!;
+        string xml = MonJan4.Build(portrait, options);
+        XElement size = XElement.Parse(xml).Element(One + "PageSettings")!.Element(One + "PageSize")!;
 
         size.Element(One + "Orientation")!.Attribute("landscape")!.Value.Should().Be("false");
-        size.Element(One + "Dimensions")!.Attribute("width")!.Value.Should().Be("8.50", "Letter is 8.5 in wide, written with two decimals");
-        size.Element(One + "Dimensions")!.Attribute("height")!.Value.Should().Be("11.00");
+        size.Element(One + "Dimensions")!.Attribute("width")!.Value.Should().Be("612", "Letter is 612 pt wide, unscaled");
+        size.Element(One + "Dimensions")!.Attribute("height")!.Value.Should().Be("792");
+        SchemaValidator.AssertValid(xml);
     }
 
     [Fact]
-    public void Inches_are_points_over_72_with_two_decimals_whatever_the_culture()
+    public void Custom_page_dimensions_are_written_with_a_period_whatever_the_culture()
     {
         CultureInfo original = CultureInfo.CurrentCulture;
         try
         {
             CultureInfo.CurrentCulture = new CultureInfo("de-DE");
-            OneNoteXml.Inches(1112).Should().Be("15.44");
-            OneNoteXml.Inches(770).Should().Be("10.69");
-            OneNoteXml.Inches(612).Should().Be("8.50");
-            OneNoteXml.Inches(800.64).Should().Be("11.12");
+            Manifest fractional = M with { PageSizePt = new[] { 1112.5, 770.25 } };
+            PageXmlOptions options = MonJan4.Options(fractional, MonJan4.Generate() with { PageSize = PageSizeMode.Custom });
+
+            string xml = MonJan4.Build(fractional, options);
+            XElement dimensions = XElement.Parse(xml).Element(One + "PageSettings")!.Element(One + "PageSize")!.Element(One + "Dimensions")!;
+
+            dimensions.Attribute("width")!.Value.Should().Be("1112.5");
+            dimensions.Attribute("height")!.Value.Should().Be("770.25");
+            SchemaValidator.AssertValid(xml);
         }
         finally
         {
