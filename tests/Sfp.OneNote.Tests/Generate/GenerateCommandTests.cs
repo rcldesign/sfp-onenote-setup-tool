@@ -88,6 +88,34 @@ public class GenerateCommandTests
         return (code, stdout.ToString(), stderr.ToString(), canned, seen, logPath);
     }
 
+    /// <summary>
+    /// Runs a command line through <see cref="Program.Run"/> as the executable does. The verbs and the run log's console
+    /// sink write to the console, so both console streams are captured; the run log goes to <paramref name="logDir"/>
+    /// through SFP2ONENOTE_LOGDIR, as a user's override would send it.
+    /// </summary>
+    private static (int Code, string Out, string Err) RunCli(string logDir, params string[] args)
+    {
+        StringWriter stdout = new();
+        StringWriter stderr = new();
+        TextWriter originalOut = Console.Out;
+        TextWriter originalError = Console.Error;
+        string? originalLogDir = Environment.GetEnvironmentVariable(RunLog.LogDirEnvVar);
+        Console.SetOut(stdout);
+        Console.SetError(stderr);
+        Environment.SetEnvironmentVariable(RunLog.LogDirEnvVar, logDir);
+        try
+        {
+            int code = Program.Run(args, stdout, stderr);
+            return (code, stdout.ToString(), stderr.ToString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(RunLog.LogDirEnvVar, originalLogDir);
+            Console.SetOut(originalOut);
+            Console.SetError(originalError);
+        }
+    }
+
     [Fact]
     public void Build_defines_the_prd_command_line()
     {
@@ -163,6 +191,31 @@ public class GenerateCommandTests
         helpCode.Should().Be(0, "help is not an error");
         help.Should().Contain("--pdf");
         helpErr.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_value_starting_with_an_at_sign_is_taken_as_it_is_not_as_a_response_file()
+    {
+        // GTD-style names such as "@Work Q1 2027" are allowed, and the daily refresh task passes the name as it is. Read
+        // as a response file, the value failed every run before the verb started (or spliced a file's contents in).
+        string logs = Path.Combine(Root, "logs-at-sign");
+
+        (int refreshCode, _, string refreshErr) = RunCli(logs, "refresh", "--notebook", "@Work Q1 2027", "--calendar", "--horizon", "14", "--today", "2027-01-04", "--templates", TestPaths.TemplatesDir);
+        (int generateCode, _, string generateErr) = RunCli(logs, "generate", "--pdf", Pdf, "--start", "2027-01", "--name", "@Home", "--out", Path.Combine(Root, "out"), "--templates", TestPaths.TemplatesDir, "--quiet");
+
+        foreach (string stderr in new[] { refreshErr, generateErr })
+        {
+            stderr.Should().NotContain("Response file").And.NotContain("for usage.", "the command line parses; only a parse error prints the usage hint");
+        }
+
+        string refreshLog = File.ReadAllText(Directory.GetFiles(logs, "*-refresh.log").Should().ContainSingle().Which);
+        refreshLog.Should().Contain("refresh --notebook @Work Q1 2027 calendar true horizon 14", "the verb received the name as typed");
+        if (!OperatingSystem.IsWindows())
+        {
+            // Off Windows both verbs get as far as OneNote, which is unavailable here: exit 3, after the arguments were accepted.
+            refreshCode.Should().Be(ExitCodes.OneNoteUnavailable, refreshErr);
+            generateCode.Should().Be(ExitCodes.OneNoteUnavailable, generateErr);
+        }
     }
 
     [Fact]
