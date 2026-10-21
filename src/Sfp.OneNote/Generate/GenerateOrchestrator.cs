@@ -566,6 +566,12 @@ public sealed class GenerateOrchestrator : IGenerateOrchestrator
                 exitCode = ValidationError;
                 message = ex.Message;
                 break;
+            case RenderFolderInUseException inUse:
+                // Another render holds the output folder (render-only mode): refused before anything was deleted or
+                // written, so it is a usage error like a bad option, as the render-only verb reports it.
+                exitCode = ValidationError;
+                message = inUse.Message;
+                break;
             default:
                 exitCode = phase switch
                 {
