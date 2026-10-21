@@ -87,17 +87,28 @@ public static class CalendarDiff
     /// A text as the page gives it back once written, for comparing the desired text with the page's: PlainText reads a
     /// no-break space as a space, the write turns a lone surrogate into U+FFFD, and OneNote may collapse runs of spaces,
     /// so every run of white space (line breaks and no-break spaces included) becomes one space, a lone surrogate
-    /// becomes U+FFFD and the ends are trimmed. Texts equal in this form are not written again.
+    /// becomes U+FFFD and the ends are trimmed. Any other character XML 1.0 does not allow (a C0 control other than tab,
+    /// line feed and carriage return, U+FFFE, U+FFFF) becomes a space, as it does where events enter the tool
+    /// (<see cref="XmlSafe"/>), so a title already on the page compares equal to one that still holds such a character.
+    /// Texts equal in this form are not written again.
     /// </summary>
     public static string Comparable(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
-        return string.Join(' ', ReplaceLoneSurrogates(text).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return string.Join(' ', ReplaceNonXml(text, '�').Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }
 
-    private static string ReplaceLoneSurrogates(string text)
+    /// <summary>
+    /// The text with every character XML 1.0 does not allow (a C0 control other than tab, line feed and carriage return,
+    /// a lone surrogate, U+FFFE or U+FFFF) replaced by a space, so a page can carry it: what an event title becomes where
+    /// it enters the tool (<see cref="CalendarEvent.Title"/>). Surrogate pairs and runs of spaces are kept.
+    /// </summary>
+    public static string XmlSafe(string text) => string.IsNullOrEmpty(text) ? text : ReplaceNonXml(text, ' ');
+
+    /// <summary>The text with a lone surrogate replaced by <paramref name="lone"/> and any other character XML 1.0 does not allow by a space.</summary>
+    private static string ReplaceNonXml(string text, char lone)
     {
-        if (!text.Any(char.IsSurrogate))
+        if (text.All(IsXmlChar))
         {
             return text;
         }
@@ -113,12 +124,15 @@ public static class CalendarDiff
             }
             else
             {
-                sb.Append(char.IsSurrogate(c) ? '�' : c);
+                sb.Append(IsXmlChar(c) ? c : char.IsSurrogate(c) ? lone : ' ');
             }
         }
 
         return sb.ToString();
     }
+
+    /// <summary>True for a char XML 1.0 allows on its own: tab, line feed, carriage return, U+0020 to U+D7FF and U+E000 to U+FFFD (surrogates only as a pair).</summary>
+    private static bool IsXmlChar(char c) => c is '\t' or '\n' or '\r' or (>= ' ' and <= '퟿') or (>= '' and <= '�');
 
     /// <summary>The slot texts after the (unblocked) changes are written, for the next run's <c>previous</c> map.</summary>
     public static IReadOnlyDictionary<SlotRef, string> Apply(IReadOnlyDictionary<SlotRef, string> previous, IEnumerable<PlannedChange> changes)

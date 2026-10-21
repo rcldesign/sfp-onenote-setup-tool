@@ -108,7 +108,7 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
         CalendarCollection calendars = CalendarCollection.Load(icsText) ?? new CalendarCollection();
         _ = ResolverHook.Value;
         IReadOnlyDictionary<string, DateTimeZone>? outer = FileZones.Value;
-        FileZones.Value = DefinedZones(calendars);
+        FileZones.Value = DefinedZones(calendars, from, to);
         try
         {
             return ParseEvents(calendars, from, to);
@@ -131,10 +131,14 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
 
     /// <summary>
     /// The zones of the file's VTIMEZONE blocks whose TZID is neither an IANA nor a Windows id (a legacy display name,
-    /// say). Ical.Net alone would guess such a zone from part of its name, or read the times as UTC.
+    /// say). Ical.Net alone would guess such a zone from part of its name, or read the times as UTC. Each block is
+    /// expanded over the fetch window plus a year on each side, which covers every time the parse converts; a block that
+    /// changes its offset too often fails the source, naming its TZID (<see cref="VTimeZoneZone.MaxOnsets"/>).
     /// </summary>
-    private static Dictionary<string, DateTimeZone> DefinedZones(CalendarCollection calendars)
+    private static Dictionary<string, DateTimeZone> DefinedZones(CalendarCollection calendars, DateOnly from, DateOnly to)
     {
+        DateTime expandFrom = (from.Year > 1 ? from.AddYears(-1) : DateOnly.MinValue).ToDateTime(TimeOnly.MinValue);
+        DateTime expandTo = (to.Year < 9999 ? to.AddYears(1) : DateOnly.MaxValue).ToDateTime(TimeOnly.MinValue);
         Dictionary<string, DateTimeZone> zones = new(StringComparer.Ordinal);
         foreach (Ical.Net.CalendarComponents.VTimeZone definition in calendars.SelectMany(c => c.TimeZones))
         {
@@ -144,7 +148,7 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
                 continue;
             }
 
-            if (VTimeZoneZone.From(id, definition) is VTimeZoneZone zone)
+            if (VTimeZoneZone.From(id, definition, expandFrom, expandTo) is VTimeZoneZone zone)
             {
                 zones[id] = zone;
             }

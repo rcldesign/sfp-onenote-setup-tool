@@ -33,6 +33,19 @@ public sealed record CalendarEvent(
     string SourceLabel,
     string? ColorTag)
 {
+    private readonly string title = Sfp.Refresh.Calendar.CalendarDiff.XmlSafe(Title);
+
+    /// <summary>
+    /// The event's title as a page can carry it: every character XML 1.0 does not allow (a C0 control other than tab,
+    /// line feed and carriage return, a lone surrogate, U+FFFE or U+FFFF) is a space, whichever source (.ics, Outlook,
+    /// the holiday list) the event came from, so a title never fails a page write.
+    /// </summary>
+    public string Title
+    {
+        get => title;
+        init => title = Sfp.Refresh.Calendar.CalendarDiff.XmlSafe(value);
+    }
+
     /// <summary>The local date the event starts on.</summary>
     public DateOnly Date => DateOnly.FromDateTime(Start);
 }

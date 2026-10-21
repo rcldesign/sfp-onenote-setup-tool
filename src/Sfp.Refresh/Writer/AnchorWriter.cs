@@ -32,6 +32,29 @@ public sealed record AnchorWriteResult(
         new Dictionary<string, string>(StringComparer.Ordinal), Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
 }
 
+/// <summary>
+/// A page write refused because a text holds a character a OneNote page cannot carry (XML 1.0 does not allow it): the
+/// page is not written, and the message names the slot and the character. A <see cref="OneNoteException"/>
+/// (hrInvalidXML), so the run handles it as a failure of that page.
+/// </summary>
+public sealed class UnwritableTextException : OneNoteException
+{
+    public UnwritableTextException()
+        : this("A text holds a character a OneNote page cannot carry.")
+    {
+    }
+
+    public UnwritableTextException(string message)
+        : this(message, null)
+    {
+    }
+
+    public UnwritableTextException(string message, Exception? innerException)
+        : base("UpdatePageContent", OneNoteHResults.InvalidXml, message, innerException)
+    {
+    }
+}
+
 /// <summary>Writes, updates or deletes tool-owned outlines on a page by object ID, through the page's existing XML plus the changed outlines only.</summary>
 public interface IAnchorWriter
 {
@@ -43,7 +66,9 @@ public interface IAnchorWriter
     /// The Creates and Updates then go in one UpdatePageContent call: the page's current XML (as read with
     /// piBasic, so the background image travels as a callback ID and its bytes are not resent) with each Update's one:T
     /// content replaced and each Create's outline appended. Nothing else on the page is touched. After a Create the page
-    /// is re-read to learn the new outline's object ID. Throws <see cref="OneNoteException"/> when OneNote rejects a call.
+    /// is re-read to learn the new outline's object ID. Throws <see cref="OneNoteException"/> when OneNote rejects a call,
+    /// and <see cref="UnwritableTextException"/> before any call when a Create or Update text holds a character a page
+    /// cannot carry (or when the page XML cannot be written for that reason).
     /// </summary>
     AnchorWriteResult Write(string pageId, PageXml current, IReadOnlyList<AnchorWrite> writes);
 }
@@ -59,6 +84,12 @@ public sealed class AnchorWriter : IAnchorWriter
 {
     /// <summary>How far (points, each axis) a created outline may sit from where it was written and still be recognized on re-read.</summary>
     public const double MatchTolerancePt = 4.0;
+
+    /// <summary>Message of a page refused for a text it cannot carry ({0}: the slot id, {1}: the character's code point).</summary>
+    public const string UnwritableTextFormat = "The text for {0} holds the character U+{1:X4}, which a OneNote page cannot carry, so nothing was written to the page.";
+
+    /// <summary>Message of a page whose XML the serializer refused ({0}: the serializer's message).</summary>
+    public const string UnwritablePageFormat = "The page holds a character a OneNote page cannot carry ({0}), so its texts were not written.";
 
     private readonly IOneNoteApp app;
     private readonly PageXmlOptions options;
@@ -92,6 +123,16 @@ public sealed class AnchorWriter : IAnchorWriter
         if (active.Count == 0)
         {
             return AnchorWriteResult.Empty;
+        }
+
+        // A text the page XML cannot carry would fail the serializer after the removals were made, and fail the run with
+        // a message naming neither the slot nor the character: the page is refused first, before any call to OneNote.
+        foreach (AnchorWrite write in active.Where(w => w.Change.Kind != ChangeKind.Remove))
+        {
+            if (Unwritable(write.Change.NewText) is char bad)
+            {
+                throw new UnwritableTextException(string.Format(CultureInfo.InvariantCulture, UnwritableTextFormat, write.Change.SlotId, (int)bad));
+            }
         }
 
         // Removes first, one DeletePageContent each, so the UpdatePageContent below is built from the page as it is
@@ -172,7 +213,18 @@ public sealed class AnchorWriter : IAnchorWriter
             created.Add((change.SlotId, expected));
         }
 
-        app.UpdatePageContent(OneNoteXml.Serialize(root), ExpectedLastModified(latest));
+        string xml;
+        try
+        {
+            xml = OneNoteXml.Serialize(root);
+        }
+        catch (ArgumentException ex)
+        {
+            // The serializer refuses a character XML 1.0 does not allow: a failure of this page, never a crash of the run.
+            throw new UnwritableTextException(string.Format(CultureInfo.InvariantCulture, UnwritablePageFormat, ex.Message), ex);
+        }
+
+        app.UpdatePageContent(xml, ExpectedLastModified(latest));
         log.Information("Page {PageId}: {Created} created, {Updated} updated, {Removed} removed", pageId, created.Count, updated.Count, removed.Count);
 
         Dictionary<string, string> createdIds = new(StringComparer.Ordinal);
@@ -217,6 +269,23 @@ public sealed class AnchorWriter : IAnchorWriter
         }
 
         return TimeZoneInfo.ConvertTime(modified, options.TimeZone).DateTime;
+    }
+
+    /// <summary>
+    /// The first character of <paramref name="text"/> a page cannot carry at all (a C0 control other than tab, line feed
+    /// and carriage return, U+FFFE or U+FFFF), or null. A lone surrogate is not one: the write turns it into U+FFFD.
+    /// </summary>
+    private static char? Unwritable(string text)
+    {
+        foreach (char c in text)
+        {
+            if ((c < ' ' && c is not '\t' and not '\n' and not '\r') || c is '￾' or '￿')
+            {
+                return c;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>True for the results OneNote gives when the object to delete is no longer on the page.</summary>
