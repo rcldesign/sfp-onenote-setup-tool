@@ -53,6 +53,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// <summary>Reason recorded on a change not written because the page changed under the write twice in a row.</summary>
     public const string ConflictReason = "The page changed while Refresh was writing it (twice in a row); nothing was written to it and it will be tried again on the next run.";
 
+    /// <summary>
+    /// Error of a run in which at least one page write was made and OneNote refused every one as a conflict ({0}: how
+    /// many pages); such a run fails (exit 5) and counts toward the failure streak.
+    /// </summary>
+    public const string AllWritesConflictedFormat = "OneNote refused every page write of this run ({0} page(s)): each page was reported as changed since Refresh read it (hrLastModifiedDateDidNotMatch). If nobody was editing those pages, the page time stamp check (dateExpectedLastModified) may be rejecting unchanged pages; see the log.";
+
     private readonly RefreshServices services;
 
     public RefreshOrchestrator(RefreshServices services)
@@ -317,7 +323,9 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
     /// <summary>
     /// Writes the unblocked changes page by page (<see cref="WritePage"/>); inked values are skipped unless confirmed; the
     /// first OneNote failure stops the run with the page named. What each page write did is recorded in
-    /// <paramref name="state"/> as soon as it is done, so a run that stops part way still saves it.
+    /// <paramref name="state"/> as soon as it is done, so a run that stops part way still saves it. When page writes were
+    /// made and OneNote refused every one of them as a conflict, the run fails (<see cref="AllWritesConflictedFormat"/>):
+    /// a run that only some conflicts held back still succeeds.
     /// </summary>
     private WriteOutcome WriteAll(
         List<PlannedChange> changes,
@@ -335,6 +343,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         int touched = 0;
         int valuesWritten = 0;
         int eventsWritten = 0;
+        int attempted = 0;
+        int conflicted = 0;
         string? error = null;
 
         foreach (IGrouping<PageKey, PlannedChange> group in changes.GroupBy(c => c.Page))
@@ -398,6 +408,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             outcome.AddRange(page.Changes);
             warnings.AddRange(page.Warnings);
             touched += page.Touched ? 1 : 0;
+            attempted += page.Attempted ? 1 : 0;
+            conflicted += page.Conflicted ? 1 : 0;
             foreach ((PlannedChange planned, PlannedChange written) in page.Written.Where(w => w.Written.Kind != ChangeKind.Remove))
             {
                 if (calendarChanges.Contains(planned))
@@ -409,6 +421,12 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                     valuesWritten++;
                 }
             }
+        }
+
+        if (error is null && attempted > 0 && conflicted == attempted)
+        {
+            error = string.Format(CultureInfo.InvariantCulture, AllWritesConflictedFormat, conflicted);
+            services.Log.Error("Every page write was refused as a conflict ({Count} pages); check how OneNote compares the dateExpectedLastModified stamp", conflicted);
         }
 
         return new WriteOutcome(outcome, touched, valuesWritten, eventsWritten, warnings, error);
@@ -433,14 +451,14 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             PageXml? fresh = pages.Read(spec.Key);
             if (fresh is null)
             {
-                return new PageWrite(pending.Select(c => c with { Blocked = true, Reason = Propagator.UnreadablePageReason }).ToList(), new(), false, new());
+                return new PageWrite(pending.Select(c => c with { Blocked = true, Reason = Propagator.UnreadablePageReason }).ToList(), new(), false, new()) { Attempted = attempt > 1 };
             }
 
             (List<(PlannedChange Planned, AnchorWrite Write)> writes, List<PlannedChange> settled, List<string> gone) = Recheck(spec, pending, fresh, catalog, state);
             if (writes.Count == 0)
             {
                 state.Forget(spec.Key, gone);
-                return new PageWrite(settled, new(), false, new());
+                return new PageWrite(settled, new(), false, new()) { Attempted = attempt > 1 };
             }
 
             AnchorWriteResult result;
@@ -470,7 +488,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                 List<PlannedChange> conflicted = settled
                     .Concat(writes.Select(w => removed.Contains(w.Write) ? w.Write.Change : w.Write.Change with { Blocked = true, Reason = ConflictReason }))
                     .ToList();
-                return new PageWrite(conflicted, new(), false, new() { $"Page {spec.Title} changed while Refresh was writing it; its changes were not written and will be tried again on the next run." });
+                return new PageWrite(conflicted, new(), false, new() { $"Page {spec.Title} changed while Refresh was writing it; its changes were not written and will be tried again on the next run." }) { Attempted = true, Conflicted = true };
             }
 
             pages.Invalidate(spec.Key);
@@ -483,7 +501,7 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
                 settled.Concat(writes.Select(w => w.Write.Change)).ToList(),
                 writes.Select(w => (w.Planned, w.Write.Change)).ToList(),
                 true,
-                warnings);
+                warnings) { Attempted = true };
         }
     }
 
@@ -814,7 +832,14 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
         List<PlannedChange> Changes,
         List<(PlannedChange Planned, PlannedChange Written)> Written,
         bool Touched,
-        List<string> Warnings);
+        List<string> Warnings)
+    {
+        /// <summary>True when the page was written to OneNote at least once (whether or not OneNote took it).</summary>
+        public bool Attempted { get; init; }
+
+        /// <summary>True when OneNote refused the page's write as a conflict on every attempt, so nothing of it was written.</summary>
+        public bool Conflicted { get; init; }
+    }
 
     /// <summary>
     /// The sidecar's ownership records (slot to object ID, slot to the text the tool wrote) as the write phase changes
