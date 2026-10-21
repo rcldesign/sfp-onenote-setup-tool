@@ -1,5 +1,8 @@
+using System.Globalization;
 using Sfp.Core.Plan;
+using Sfp.OneNote;
 using Sfp.Refresh.Calendar;
+using Sfp.Refresh.Orchestration;
 using Sfp.Refresh.Tests.Support;
 using Sfp.Refresh.Writer;
 
@@ -9,7 +12,7 @@ namespace Sfp.Refresh.Tests.Orchestration;
 /// Round 3 refresh-7: an event title holding a character XML 1.0 does not allow (a vertical tab left by copy and paste)
 /// is written with a space where the character was instead of failing the run every day, a title already on the page
 /// compares equal, and a text that still holds such a character refuses its page before any call, naming the slot and
-/// the character.
+/// the character. The run skips that page, reports why, and writes the other pages.
 /// </summary>
 public class InvalidXmlCharacterTests
 {
@@ -63,5 +66,68 @@ public class InvalidXmlCharacterTests
         act.Should().Throw<UnwritableTextException>().Which.Message.Should().Contain("standingGoal:1").And.Contain("U+0001");
         nb.App.UpdateCount(pageId).Should().Be(updates, "nothing is written to the page");
         nb.App.CallCount("DeletePageContent").Should().Be(0);
+    }
+
+    [Fact]
+    public void A_page_whose_text_still_holds_such_a_character_is_skipped_and_reported_and_the_other_pages_are_written()
+    {
+        RunHarness h = new();
+        h.Type(h.Setup.Objectives[0], "Ship the connector");
+        h.Type(h.Setup.StandingGoals[0], "Walk 30 min");
+        PropagatorFactory real = h.Services.Propagators;
+        h.Services = h.Services with { Propagators = (catalog, reader) => new OneSlotText(real(catalog, reader), RunHarness.MonJan4, "standingGoal:1", "Walk\u000B30 min") };
+        string mondayId = h.Notebook.PageIds[RunHarness.MonJan4];
+        int mondayUpdates = h.App.UpdateCount(mondayId);
+        string reason = string.Format(CultureInfo.InvariantCulture, AnchorWriter.UnwritableTextFormat, "standingGoal:1", 0x0B);
+
+        RefreshResult result = h.Run();
+
+        result.ExitCode.Should().Be(0, result.Error);
+        result.Success.Should().BeTrue();
+        RefreshSummary summary = result.Summary!;
+        summary.Changes.Where(c => c.Page == RunHarness.MonJan4).Should().HaveCount(2, "the objective legend and the standing goal")
+            .And.OnlyContain(c => c.Blocked && c.Reason == reason, "the whole page is skipped, its clean change too, with the writer's reason");
+        summary.Warnings.Should().Contain("Page Mon Jan 4 was not written: " + reason);
+        h.App.UpdateCount(mondayId).Should().Be(mondayUpdates, "nothing is written to the skipped page");
+        h.Saved().Pages[RunHarness.MonJan4.Value].Anchors.Should().NotContainKeys("objectiveLegend", "standingGoal:1");
+
+        List<PlannedChange> others = summary.Changes.Where(c => c.Page != RunHarness.MonJan4).ToList();
+        others.Should().NotBeEmpty().And.OnlyContain(c => !c.Blocked, "the run goes on with the other pages");
+        summary.ValuesWritten.Should().Be(others.Count);
+        h.Notebook.Read(PageKey.Day(RunHarness.Jan4.AddDays(1))).Outlines.Select(o => o.PlainText).Should().Contain(new[] { "O1 Ship the connector", "Walk 30 min" });
+
+        h.Services = h.Services with { Propagators = real };
+        RefreshResult next = h.Run();
+
+        next.ExitCode.Should().Be(0, next.Error);
+        next.Summary!.Changes.Should().HaveCount(2).And.OnlyContain(c => c.Page == RunHarness.MonJan4 && !c.Blocked, "the next run writes the skipped page and nothing else");
+        h.Notebook.Read(RunHarness.MonJan4).Outlines.Select(o => o.PlainText).Should().Contain(new[] { "O1 Ship the connector", "Walk 30 min" });
+    }
+
+    /// <summary>
+    /// Plans with the real propagator, then gives one slot's change another text: a text no normalization saw, as a value
+    /// that reached the writer some other way would be.
+    /// </summary>
+    private sealed class OneSlotText : IPropagator
+    {
+        private readonly IPropagator inner;
+        private readonly PageKey page;
+        private readonly string slotId;
+        private readonly string text;
+
+        public OneSlotText(IPropagator inner, PageKey page, string slotId, string text)
+        {
+            this.inner = inner;
+            this.page = page;
+            this.slotId = slotId;
+            this.text = text;
+        }
+
+        public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s) => Swap(inner.Plan(plan, v, s));
+
+        public IReadOnlyList<PlannedChange> Plan(NotebookPlan plan, SetupValues v, Sidecar s, bool writeInkedValues) => Swap(inner.Plan(plan, v, s, writeInkedValues));
+
+        private IReadOnlyList<PlannedChange> Swap(IReadOnlyList<PlannedChange> changes) =>
+            changes.Select(c => c.Page == page && c.SlotId == slotId ? c with { NewText = text } : c).ToList();
     }
 }
