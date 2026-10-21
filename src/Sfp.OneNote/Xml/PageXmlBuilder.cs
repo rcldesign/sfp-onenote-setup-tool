@@ -118,7 +118,8 @@ public static class PageXmlBuilder
 
     /// <summary>
     /// One anchor as its own outline above the sheet: position offset by the title and the manifest padding, explicit
-    /// size so the text never wraps, paragraph alignment, and the styled link (or plain styled text for a propagated slot).
+    /// size so the text never wraps, the sfp.anchor meta naming the anchor (where the schema's PageObject sequence puts
+    /// Meta, after Size), paragraph alignment, and the styled link (or plain styled text for a propagated slot).
     /// </summary>
     public static XElement AnchorOutline(ResolvedAnchor anchor, PageXmlOptions options)
     {
@@ -131,6 +132,7 @@ public static class PageXmlBuilder
             one + "Outline",
             OneNoteXml.Position(one, x, y, 1),
             OneNoteXml.Size(one, p.W * s, p.H * s, true),
+            new XElement(one + "Meta", new XAttribute("name", OneNoteXml.AnchorMetaName), new XAttribute("content", p.AnchorId)),
             new XElement(
                 one + "OEChildren",
                 new XElement(

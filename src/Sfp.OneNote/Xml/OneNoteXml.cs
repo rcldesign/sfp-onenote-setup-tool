@@ -16,6 +16,9 @@ public static class OneNoteXml
     /// <summary>The page-level one:Meta name that carries the page key.</summary>
     public const string PageKeyMetaName = "sfp.key";
 
+    /// <summary>The one:Meta name on each tool-owned anchor outline that carries its anchor ID (the 2013 schema allows Meta on any page object).</summary>
+    public const string AnchorMetaName = "sfp.anchor";
+
     private static readonly XmlWriterSettings WriterSettings = new()
     {
         Indent = true,

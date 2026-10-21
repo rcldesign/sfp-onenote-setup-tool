@@ -11,12 +11,24 @@ public sealed record AnchorMatchResult(IReadOnlyDictionary<string, string> Objec
 
 /// <summary>
 /// Joins the anchors a page was written with to the outlines OneNote reports back, so the sidecar can record each
-/// anchor's object ID. The 2013 schema allows one:Meta only at page level, so there is no per-outline marker: outlines
-/// are matched by position (the builder's outline position, within a tolerance), with the outline text as a tie breaker
-/// and as the fallback when OneNote moved the outline further than the tolerance.
+/// anchor's object ID. An outline carrying the anchor's sfp.anchor meta (the builder writes one on every anchor outline;
+/// the 2013 schema allows Meta on page objects) is that anchor's, wherever it sits. Outlines without the marker (a
+/// notebook generated before it existed) are matched by position (the builder's outline position, within a tolerance),
+/// with the outline text as a tie breaker and as the fallback when OneNote moved the outline further than the tolerance.
 /// </summary>
 public static class AnchorIdMatcher
 {
+    /// <summary>The anchor ID an outline's sfp.anchor meta names, or null when it carries none.</summary>
+    public static string? MarkedAnchorId(OutlineInfo outline)
+    {
+        ArgumentNullException.ThrowIfNull(outline);
+        XNamespace one = outline.Element.Name.Namespace;
+        return outline.Element.Elements(one + "Meta")
+            .Where(m => string.Equals((string?)m.Attribute("name"), OneNoteXml.AnchorMetaName, StringComparison.Ordinal))
+            .Select(m => (string?)m.Attribute("content"))
+            .FirstOrDefault(content => !string.IsNullOrEmpty(content));
+    }
+
     /// <summary>How far (in points, each axis) an outline may sit from where it was written and still count as the same object.</summary>
     public const double DefaultTolerancePt = 3.0;
 
@@ -34,7 +46,13 @@ public static class AnchorIdMatcher
         {
             RectPt expected = PageXmlParser.Bounds(PageXmlBuilder.AnchorOutline(anchor, options), one)
                 ?? throw new InvalidOperationException("The anchor outline builder produced no position.");
-            OutlineInfo? match = ByPosition(candidates, expected, anchor.Placement.Text, tolerancePt) ?? ByText(candidates, anchor.Placement.Text);
+            OutlineInfo? match = ByMarker(candidates, anchor.Placement.AnchorId, expected);
+            if (match is null)
+            {
+                // The fallback for outlines without the marker; an outline another anchor's marker claims is never taken.
+                List<OutlineInfo> unmarked = candidates.Where(o => MarkedAnchorId(o) is null).ToList();
+                match = ByPosition(unmarked, expected, anchor.Placement.Text, tolerancePt) ?? ByText(unmarked, anchor.Placement.Text);
+            }
             if (match is null)
             {
                 unmatched.Add(anchor.Placement.AnchorId);
@@ -47,6 +65,13 @@ public static class AnchorIdMatcher
 
         return new AnchorMatchResult(ids, unmatched);
     }
+
+    /// <summary>The outline carrying this anchor's marker; of several (a copied outline keeps the marker), the nearest to where the anchor was written.</summary>
+    private static OutlineInfo? ByMarker(List<OutlineInfo> candidates, string anchorId, RectPt expected) =>
+        candidates
+            .Where(o => string.Equals(MarkedAnchorId(o), anchorId, StringComparison.Ordinal))
+            .OrderBy(o => Math.Max(Math.Abs(o.X - expected.X), Math.Abs(o.Y - expected.Y)))
+            .FirstOrDefault();
 
     private static OutlineInfo? ByPosition(List<OutlineInfo> candidates, RectPt expected, string text, double tolerancePt)
     {

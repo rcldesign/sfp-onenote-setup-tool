@@ -26,6 +26,7 @@
   <one:Outline>
     <one:Position x="900" y="58" z="1" />
     <one:Size width="110" height="20" isSetByUser="true" />
+    <one:Meta name="sfp.anchor" content="dailyDate" />
     <one:OEChildren>
       <one:OE alignment="right">
         <one:T><![CDATA[<a href="onenote:#Weekly%20Overview&amp;section-id={7A0B1C2D-3E4F-4A5B-8C6D-9E0F1A2B3C4D}{1}{B0}&amp;page-id={8B1C2D3E-4F5A-4B6C-9D7E-0F1A2B3C4D5E}{1}{B0}&amp;end"><span style='font-family:Bookman Old Style;font-size:15.0pt;color:#1E1E20;text-decoration:none'>01 / 04 / 27</span></a>]]></one:T>
@@ -35,6 +36,7 @@
   <one:Outline>
     <one:Position x="23" y="84" z="1" />
     <one:Size width="95" height="14" isSetByUser="true" />
+    <one:Meta name="sfp.anchor" content="prev" />
     <one:OEChildren>
       <one:OE alignment="left">
         <one:T><![CDATA[<a href="onenote:#Sun%20Jan%203&amp;section-id={6A9B0C1D-2E3F-4A4B-8C5D-9E0F1A2B3C4C}{1}{B0}&amp;page-id={9C2D3E4F-5A6B-4C7D-8E8F-1A2B3C4D5E6F}{1}{B0}&amp;end"><span style='font-family:Bookman Old Style;font-size:10.0pt;color:#1E1E20;text-decoration:none'>‹ Sun Jan 3</span></a>]]></one:T>
@@ -44,6 +46,7 @@
   <one:Outline>
     <one:Position x="122" y="84" z="1" />
     <one:Size width="95" height="14" isSetByUser="true" />
+    <one:Meta name="sfp.anchor" content="next" />
     <one:OEChildren>
       <one:OE alignment="left">
         <one:T><![CDATA[<a href="onenote:#Tue%20Jan%205&amp;section-id={7A0B1C2D-3E4F-4A5B-8C6D-9E0F1A2B3C4D}{1}{B0}&amp;page-id={0D3E4F5A-6B7C-4D8E-9F9A-2B3C4D5E6F7A}{1}{B0}&amp;end"><span style='font-family:Bookman Old Style;font-size:10.0pt;color:#1E1E20;text-decoration:none'>Tue Jan 5 ›</span></a>]]></one:T>
@@ -53,6 +56,7 @@
   <one:Outline>
     <one:Position x="230" y="85" z="1" />
     <one:Size width="470" height="13" isSetByUser="true" />
+    <one:Meta name="sfp.anchor" content="objectiveLegend" />
     <one:OEChildren>
       <one:OE alignment="left">
         <one:T><![CDATA[<span style='font-family:Bookman Old Style;font-size:8.0pt;color:#1E1E20'>O1 Ship the connector  O2 Hire two PMs</span>]]></one:T>
@@ -62,6 +66,7 @@
   <one:Outline>
     <one:Position x="111" y="128" z="1" />
     <one:Size width="234" height="16" isSetByUser="true" />
+    <one:Meta name="sfp.anchor" content="standingGoal:1" />
     <one:OEChildren>
       <one:OE alignment="left">
         <one:T><![CDATA[<span style='font-family:Bookman Old Style;font-size:10.0pt;color:#6B6763'>Walk 30 min</span>]]></one:T>

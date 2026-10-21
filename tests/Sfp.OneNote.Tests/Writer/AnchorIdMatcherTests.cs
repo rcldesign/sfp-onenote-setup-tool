@@ -7,14 +7,20 @@ using Sfp.OneNote.Xml;
 
 namespace Sfp.OneNote.Tests.Writer;
 
-/// <summary>Joining anchors to the outlines OneNote reports: by position within a tolerance, by text as the fallback.</summary>
+/// <summary>
+/// Joining anchors to the outlines OneNote reports: by the sfp.anchor marker first, and for outlines without one (a
+/// notebook generated before the marker) by position within a tolerance, by text as the fallback.
+/// </summary>
 public class AnchorIdMatcherTests
 {
     private static readonly Manifest M = TestManifest.Load();
     private static readonly XNamespace One = OneNoteXml.Namespace2013;
 
-    /// <summary>The Mon Jan 4 page as OneNote would report it: objectIDs on every outline, the sheet image as a callback.</summary>
-    private static PageXml ReadBack(IReadOnlyList<ResolvedAnchor> anchors, Func<XElement, int, XElement>? mutate = null)
+    /// <summary>
+    /// The Mon Jan 4 page as OneNote would report it: objectIDs on every outline, the sheet image as a callback. Unmarked,
+    /// the anchor outlines carry no sfp.anchor meta, as in a notebook generated before the marker existed.
+    /// </summary>
+    private static PageXml ReadBack(IReadOnlyList<ResolvedAnchor> anchors, Func<XElement, int, XElement>? mutate = null, bool marked = true)
     {
         XElement root = XElement.Parse(PageXmlBuilder.Build(MonJan4.PageId, MonJan4.Page(), MonJan4.Art(anchors), anchors, MonJan4.Options(M)));
         int n = 0;
@@ -22,6 +28,11 @@ public class AnchorIdMatcherTests
         {
             n++;
             outline.SetAttributeValue("objectID", "{o" + n + "}");
+            if (!marked)
+            {
+                outline.Elements(One + "Meta").Remove();
+            }
+
             mutate?.Invoke(outline, n);
         }
 
@@ -29,11 +40,21 @@ public class AnchorIdMatcherTests
     }
 
     [Fact]
-    public void Every_anchor_is_matched_to_the_outline_at_its_position()
+    public void Every_anchor_outline_carries_its_marker_and_the_sheet_carries_none()
+    {
+        PageXml page = ReadBack(MonJan4.Anchors(M));
+
+        page.Outlines.Select(AnchorIdMatcher.MarkedAnchorId).Should().Equal(new string?[] { null, "dailyDate", "prev", "next", "objectiveLegend", "standingGoal:1" });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Every_anchor_is_matched_to_the_outline_at_its_position(bool marked)
     {
         IReadOnlyList<ResolvedAnchor> anchors = MonJan4.Anchors(M);
 
-        AnchorMatchResult result = AnchorIdMatcher.Match(ReadBack(anchors), anchors, MonJan4.Options(M));
+        AnchorMatchResult result = AnchorIdMatcher.Match(ReadBack(anchors, marked: marked), anchors, MonJan4.Options(M));
 
         result.Unmatched.Should().BeEmpty();
         result.ObjectIds.Should().HaveCount(5);
@@ -45,16 +66,41 @@ public class AnchorIdMatcherTests
     }
 
     [Fact]
+    public void The_marker_wins_over_a_closer_outline_with_the_same_text()
+    {
+        IReadOnlyList<ResolvedAnchor> anchors = new[] { MonJan4.DateAnchor(M) };
+        XElement root = XElement.Parse(PageXmlBuilder.Build(MonJan4.PageId, MonJan4.Page(), MonJan4.Art(anchors), anchors, MonJan4.Options(M)));
+        List<XElement> outlines = root.Elements(One + "Outline").ToList();
+        outlines[0].SetAttributeValue("objectID", "{sheet}");
+        XElement marked = outlines[1];
+        XElement copy = new(marked);
+        copy.Elements(One + "Meta").Remove();
+        copy.SetAttributeValue("objectID", "{copy}");
+        root.Add(copy);
+        marked.SetAttributeValue("objectID", "{marked}");
+        XElement position = marked.Element(One + "Position")!;
+        position.SetAttributeValue("y", OneNoteXml.Pt(double.Parse(position.Attribute("y")!.Value, System.Globalization.CultureInfo.InvariantCulture) + 40));
+
+        AnchorMatchResult result = AnchorIdMatcher.Match(PageXmlParser.Parse(root.ToString()), anchors, MonJan4.Options(M));
+
+        result.ObjectIds["dailyDate"].Should().Be("{marked}", "the marker names the anchor wherever the outline sits; an unmarked outline with the same text right where the anchor was written is not it");
+        result.Unmatched.Should().BeEmpty();
+    }
+
+    [Fact]
     public void An_outline_shifted_within_the_tolerance_still_matches_and_one_shifted_further_matches_by_text()
     {
         IReadOnlyList<ResolvedAnchor> anchors = new[] { MonJan4.DateAnchor(M), MonJan4.NextAnchor(M) };
-        PageXml page = ReadBack(anchors, (outline, n) =>
-        {
-            XElement position = outline.Element(One + "Position")!;
-            double y = double.Parse(position.Attribute("y")!.Value, System.Globalization.CultureInfo.InvariantCulture);
-            position.SetAttributeValue("y", OneNoteXml.Pt(y + (n == 2 ? 2.5 : 40)));
-            return outline;
-        });
+        PageXml page = ReadBack(
+            anchors,
+            (outline, n) =>
+            {
+                XElement position = outline.Element(One + "Position")!;
+                double y = double.Parse(position.Attribute("y")!.Value, System.Globalization.CultureInfo.InvariantCulture);
+                position.SetAttributeValue("y", OneNoteXml.Pt(y + (n == 2 ? 2.5 : 40)));
+                return outline;
+            },
+            marked: false);
 
         AnchorMatchResult result = AnchorIdMatcher.Match(page, anchors, MonJan4.Options(M));
 
@@ -70,7 +116,7 @@ public class AnchorIdMatcherTests
         ResolvedAnchor b = a with { Placement = a.Placement with { AnchorId = "prev2", X = a.Placement.X + 1, Text = "‹ Sat Jan 2" } };
         IReadOnlyList<ResolvedAnchor> anchors = new[] { a, b };
 
-        AnchorMatchResult result = AnchorIdMatcher.Match(ReadBack(anchors), anchors, MonJan4.Options(M));
+        AnchorMatchResult result = AnchorIdMatcher.Match(ReadBack(anchors, marked: false), anchors, MonJan4.Options(M));
 
         result.ObjectIds["prev"].Should().Be("{o2}");
         result.ObjectIds["prev2"].Should().Be("{o3}");
