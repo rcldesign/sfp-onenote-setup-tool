@@ -1,3 +1,4 @@
+using System.Text;
 using Sfp.Core.Plan;
 
 namespace Sfp.Refresh.Calendar;
@@ -73,13 +74,50 @@ public static class CalendarDiff
             {
                 changes.Add(new PlannedChange(slot.Page, slot.SlotId, null, slot.Text, ChangeKind.Create, false, null));
             }
-            else if (hadText && !string.Equals(old, slot.Text, StringComparison.Ordinal))
+            else if (hadText && !string.Equals(Comparable(old ?? ""), Comparable(slot.Text), StringComparison.Ordinal))
             {
                 changes.Add(new PlannedChange(slot.Page, slot.SlotId, old, slot.Text, ChangeKind.Update, false, null));
             }
         }
 
         return new CalendarDiffResult(changes, frozen, first, last);
+    }
+
+    /// <summary>
+    /// A text as the page gives it back once written, for comparing the desired text with the page's: PlainText reads a
+    /// no-break space as a space, the write turns a lone surrogate into U+FFFD, and OneNote may collapse runs of spaces,
+    /// so every run of white space (line breaks and no-break spaces included) becomes one space, a lone surrogate
+    /// becomes U+FFFD and the ends are trimmed. Texts equal in this form are not written again.
+    /// </summary>
+    public static string Comparable(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return string.Join(' ', ReplaceLoneSurrogates(text).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static string ReplaceLoneSurrogates(string text)
+    {
+        if (!text.Any(char.IsSurrogate))
+        {
+            return text;
+        }
+
+        StringBuilder sb = new(text.Length);
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                sb.Append(c).Append(text[i + 1]);
+                i++;
+            }
+            else
+            {
+                sb.Append(char.IsSurrogate(c) ? '�' : c);
+            }
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>The slot texts after the (unblocked) changes are written, for the next run's <c>previous</c> map.</summary>

@@ -713,11 +713,18 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             }
         }
 
+        if (fetched.AnyFailed)
+        {
+            // A failed source's events are unknown this run, so every line a slot holds stays and the slot only gains
+            // the new lines it has room for (M4.6): an Update never drops the dead source's lines.
+            desired = engine.Place(from, to, fetched.Events, PlacementTargets.FromPlan(plan), previous);
+        }
+
         CalendarDiffResult diff = CalendarDiff.Diff(today, horizon, sidecar.FrozenThrough, previous, desired);
         List<PlannedChange> changes = new();
         foreach (PlannedChange change in diff.Changes)
         {
-            if (fetched.AnyFailed && OnlyDropsLines(change))
+            if (fetched.AnyFailed && DropsLines(change))
             {
                 continue;
             }
@@ -727,15 +734,22 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
 
         if (fetched.AnyFailed)
         {
-            warnings.Add("Some calendar sources failed; their events were kept on the pages and no event lines were removed this run.");
+            warnings.Add(PartialSourceFailureWarning);
         }
 
         services.Log.Information("Calendar: {Events} events from {From} to {To}, {Changes} slot changes ({Creates} create, {Updates} update, {Removes} remove)", fetched.Events.Count, from, to, changes.Count, diff.Creates, diff.Updates, diff.Removes);
         return new CalendarOutcome(changes, diff.FrozenThrough, failedSources, false);
     }
 
-    /// <summary>A Remove, or an Update whose new lines are all among the old ones (only lines dropped), which a failed source must not cause.</summary>
-    private static bool OnlyDropsLines(PlannedChange change)
+    /// <summary>The summary warning of a run in which some calendar sources failed and others answered.</summary>
+    private const string PartialSourceFailureWarning =
+        "Some calendar sources failed; every event line already on the pages was kept, and new events were added only where a slot had room beside them.";
+
+    /// <summary>
+    /// A Remove, or an Update that loses one of the old lines (compared as the page reads them back): what a failed
+    /// source must never cause. The placement keeps every old line during a partial failure, so this only guards that rule.
+    /// </summary>
+    private static bool DropsLines(PlannedChange change)
     {
         if (change.Kind == ChangeKind.Remove)
         {
@@ -747,8 +761,8 @@ public sealed class RefreshOrchestrator : IRefreshOrchestrator
             return false;
         }
 
-        HashSet<string> old = change.OldText.Split('\n').ToHashSet(StringComparer.Ordinal);
-        return change.NewText.Split('\n').All(old.Contains);
+        List<string> remaining = change.NewText.Split('\n').Select(CalendarDiff.Comparable).ToList();
+        return !change.OldText.Split('\n').Select(CalendarDiff.Comparable).All(remaining.Remove);
     }
 
     /// <summary>

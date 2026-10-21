@@ -851,7 +851,7 @@ public class RefreshOrchestratorTests
         partial.Success.Should().BeTrue(partial.Error);
         partial.ExitCode.Should().Be(0, "one source answered");
         partial.Summary!.FailedSources.Should().Equal("Work: timeout");
-        partial.Summary.Warnings.Should().Contain("Some calendar sources failed; their events were kept on the pages and no event lines were removed this run.")
+        partial.Summary.Warnings.Should().Contain("Some calendar sources failed; every event line already on the pages was kept, and new events were added only where a slot had room beside them.")
             .And.NotContain(w => w.Contains("Every calendar source failed", StringComparison.Ordinal));
         partial.Summary.Changes.Should().NotContain(c => c.Kind == ChangeKind.Remove, "a dead feed never erases its events");
         partial.Summary.EventsWritten.Should().Be(2, "Thursday's 7 row and column from the source that answered");

@@ -88,7 +88,10 @@ public static class LegendText
         return string.Join("\n", lines);
     }
 
-    /// <summary>Prefix plus text, or prefix plus the longest prefix of the text plus the ellipsis that fits; the prefix always survives.</summary>
+    /// <summary>
+    /// Prefix plus text, or prefix plus the longest prefix of the text plus the ellipsis that fits; the prefix always
+    /// survives, and the text is cut only between text elements (<see cref="TextCut"/>).
+    /// </summary>
     public static string Fit(string prefix, string text, double widthPt, double sizePt, TextWidthMeasure measure)
     {
         ArgumentNullException.ThrowIfNull(prefix);
@@ -100,7 +103,7 @@ public static class LegendText
             return full;
         }
 
-        for (int length = text.Length - 1; length > 0; length--)
+        foreach (int length in TextCut.PrefixLengths(text))
         {
             string candidate = prefix + text[..length].TrimEnd() + Ellipsis;
             if (measure(candidate, sizePt) <= widthPt)

@@ -1,6 +1,9 @@
 using System.Globalization;
 using Ical.Net;
 using Ical.Net.DataTypes;
+using NodaTime.TimeZones;
+using DateTimeZone = NodaTime.DateTimeZone;
+using DateTimeZoneProviders = NodaTime.DateTimeZoneProviders;
 
 namespace Sfp.Refresh.Calendar;
 
@@ -14,7 +17,8 @@ namespace Sfp.Refresh.Calendar;
 /// the title is masked unless <see cref="CalendarImportOptions.MaskPrivate"/> is off; Cancelled comes from
 /// STATUS:CANCELLED (an EXDATE instance simply never appears); the Uid is the UID plus the RECURRENCE-ID when the
 /// instance is an override, otherwise the occurrence start, so an override and the instance it replaces share one Uid.
-/// Floating times (no TZID, not UTC) are taken as already local.
+/// Floating times (no TZID, not UTC) are taken as already local. A TZID that is neither an IANA nor a Windows zone id is
+/// read from the file's own VTIMEZONE block; without one the source fails, naming the TZID, rather than be read as UTC.
 /// </remarks>
 public sealed class IcsCalendarSource : ICalendarSource, IDisposable
 {
@@ -23,6 +27,16 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
 
     private const string CalendarNameProperty = "X-WR-CALNAME";
     private static readonly string[] UrlSchemes = { "http", "https", "webcal" };
+
+    /// <summary>The zones the file being parsed on this flow defines for TZIDs no zone database knows; null when no file is being parsed.</summary>
+    private static readonly AsyncLocal<IReadOnlyDictionary<string, DateTimeZone>?> FileZones = new();
+
+    /// <summary>Wraps Ical.Net's TZID resolver once (see <see cref="Resolver"/>).</summary>
+    private static readonly Lazy<bool> ResolverHook = new(() =>
+    {
+        TimeZoneResolvers.TimeZoneResolver = Resolver(TimeZoneResolvers.TimeZoneResolver);
+        return true;
+    });
 
     private readonly CalendarSource source;
     private readonly CalendarImportOptions options;
@@ -78,11 +92,100 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
         return ParseEvents(text, from, to);
     }
 
-    /// <summary>Parses iCalendar text already in hand (no I/O) into the events that touch [<paramref name="from"/>, <paramref name="to"/>].</summary>
+    /// <summary>
+    /// Parses iCalendar text already in hand (no I/O) into the events that touch [<paramref name="from"/>, <paramref name="to"/>].
+    /// Text without a BEGIN:VCALENDAR line (an empty file or response, a file caught mid-rewrite, an error page) throws
+    /// <see cref="InvalidDataException"/>: it is a failed fetch, never an empty calendar whose events would all be removed.
+    /// </summary>
     public IReadOnlyList<CalendarEvent> ParseEvents(string icsText, DateOnly from, DateOnly to)
     {
         ArgumentNullException.ThrowIfNull(icsText);
+        if (icsText.IndexOf("BEGIN:VCALENDAR", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            throw new InvalidDataException("The source returned no calendar data: the text is empty or has no BEGIN:VCALENDAR line.");
+        }
+
         CalendarCollection calendars = CalendarCollection.Load(icsText) ?? new CalendarCollection();
+        _ = ResolverHook.Value;
+        IReadOnlyDictionary<string, DateTimeZone>? outer = FileZones.Value;
+        FileZones.Value = DefinedZones(calendars);
+        try
+        {
+            return ParseEvents(calendars, from, to);
+        }
+        finally
+        {
+            FileZones.Value = outer;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (ownsHttp)
+        {
+            http?.Dispose();
+            http = null;
+            ownsHttp = false;
+        }
+    }
+
+    /// <summary>
+    /// The zones of the file's VTIMEZONE blocks whose TZID is neither an IANA nor a Windows id (a legacy display name,
+    /// say). Ical.Net alone would guess such a zone from part of its name, or read the times as UTC.
+    /// </summary>
+    private static Dictionary<string, DateTimeZone> DefinedZones(CalendarCollection calendars)
+    {
+        Dictionary<string, DateTimeZone> zones = new(StringComparer.Ordinal);
+        foreach (Ical.Net.CalendarComponents.VTimeZone definition in calendars.SelectMany(c => c.TimeZones))
+        {
+            string? id = definition.TzId;
+            if (string.IsNullOrWhiteSpace(id) || IsKnownZone(id) || zones.ContainsKey(id))
+            {
+                continue;
+            }
+
+            if (VTimeZoneZone.From(id, definition) is VTimeZoneZone zone)
+            {
+                zones[id] = zone;
+            }
+        }
+
+        return zones;
+    }
+
+    /// <summary>True for an IANA zone id (with or without the leading "/" Ical.Net also accepts) or a Windows zone id.</summary>
+    private static bool IsKnownZone(string id)
+    {
+        string name = id.StartsWith('/') ? id[1..] : id;
+        return DateTimeZoneProviders.Tzdb.GetZoneOrNull(name) is not null
+            || TzdbDateTimeZoneSource.Default.WindowsMapping.PrimaryMapping.ContainsKey(name);
+    }
+
+    /// <summary>
+    /// Ical.Net resolves every TZID through one process-wide function; it is wrapped once. While a file is parsed on this
+    /// flow, a TZID the file defines in a VTIMEZONE block is answered from that block, an IANA or Windows id goes to the
+    /// resolver that was there before, and any other TZID fails the source with its name instead of being guessed.
+    /// </summary>
+    private static Func<string, DateTimeZone> Resolver(Func<string, DateTimeZone> inner) => id =>
+    {
+        IReadOnlyDictionary<string, DateTimeZone>? zones = FileZones.Value;
+        if (zones is null || string.IsNullOrWhiteSpace(id))
+        {
+            return inner(id);
+        }
+
+        if (zones.TryGetValue(id, out DateTimeZone? zone))
+        {
+            return zone;
+        }
+
+        return IsKnownZone(id)
+            ? inner(id)
+            : throw new InvalidDataException($"The calendar's time zone '{id}' is neither an IANA nor a Windows zone id, and the file has no VTIMEZONE block for it that the tool can read, so its times cannot be placed.");
+    };
+
+    private IReadOnlyList<CalendarEvent> ParseEvents(CalendarCollection calendars, DateOnly from, DateOnly to)
+    {
         IEnumerable<Ical.Net.Calendar> selected = calendars;
         if (!string.IsNullOrWhiteSpace(source.CalendarName))
         {
@@ -119,16 +222,6 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
             .OrderBy(e => e.Start)
             .ThenBy(e => e.Title, StringComparer.Ordinal)
             .ToList();
-    }
-
-    public void Dispose()
-    {
-        if (ownsHttp)
-        {
-            http?.Dispose();
-            http = null;
-            ownsHttp = false;
-        }
     }
 
     private static string? CalendarNameOf(Ical.Net.Calendar calendar)
@@ -170,6 +263,12 @@ public sealed class IcsCalendarSource : ICalendarSource, IDisposable
             }
 
             return http.GetStringAsync(NormalizeUrl(location)).GetAwaiter().GetResult();
+        }
+
+        string? problem = LocalPath.Problem(location);
+        if (problem is not null)
+        {
+            throw new IOException(problem);
         }
 
         return File.ReadAllText(location);
