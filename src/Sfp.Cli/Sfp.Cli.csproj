@@ -17,6 +17,11 @@
     <ProjectReference Include="../Sfp.Refresh/Sfp.Refresh.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The generate verb's tests live in Sfp.OneNote.Tests (the CLI has no test project); they reach the refresh
+         composition's resource seam (RefreshCommand.Compose). -->
+    <InternalsVisibleTo Include="Sfp.OneNote.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="Serilog" />
     <PackageReference Include="Serilog.Sinks.File" />

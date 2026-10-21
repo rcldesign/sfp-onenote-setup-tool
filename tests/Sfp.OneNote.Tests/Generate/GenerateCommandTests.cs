@@ -4,7 +4,11 @@ using Sfp.Cli;
 using Sfp.Cli.Logging;
 using Sfp.Cli.Verbs;
 using Sfp.Core.Options;
+using Sfp.OneNote.Com;
 using Sfp.OneNote.Generate;
+using Sfp.OneNote.Tests.Writer;
+using Sfp.Refresh;
+using Sfp.Render.Fonts;
 using Sfp.TestSupport;
 
 namespace Sfp.OneNote.Tests.Generate;
@@ -610,6 +614,44 @@ public class GenerateCommandTests
 
         result.ExitCode.Should().Be(ExitCodes.ValidationError, "the placeholder PDF is not the planner");
         result.LogPath.Should().Be(logPath);
+    }
+
+    [Fact]
+    public void The_refresh_composition_loads_fonts_before_it_opens_onenote()
+    {
+        // RefreshCommand.Compose (the CLI's tests live in this file): a missing fallback font must fail before a COM
+        // session, with its STA thread inside OneNote, exists; on success the orchestrator owns the session.
+        RefreshRequest request = new("SFP Q1 2027", null, false, 14, true, false, new DateOnly(2027, 1, 4));
+        FakeOneNoteApp app = new();
+        int opened = 0;
+        IOneNoteApp Open()
+        {
+            opened++;
+            return app;
+        }
+
+        Action fontsMissing = () => RefreshCommand.Compose(
+            request, TestManifest.Shipped, TestPaths.TemplatesDir, Serilog.Core.Logger.None, "run.log",
+            () => throw new FileNotFoundException("Fallback font file not found: TeXGyreBonum-Regular.otf"),
+            Open);
+
+        fontsMissing.Should().Throw<FileNotFoundException>();
+        opened.Should().Be(0, "the fonts load first, so a font failure never opens a COM session");
+
+        IRefreshOrchestrator orchestrator = RefreshCommand.Compose(
+            request, TestManifest.Shipped, TestPaths.TemplatesDir, Serilog.Core.Logger.None, "run.log",
+            () => FontService.Load(TestManifest.Shipped.Font, TestPaths.TemplatesDir),
+            Open);
+        opened.Should().Be(1);
+        app.Disposed.Should().BeFalse();
+        ((IDisposable)orchestrator).Dispose();
+        app.Disposed.Should().BeTrue("the orchestrator owns the session it was composed with");
+
+        Action sessionFails = () => RefreshCommand.Compose(
+            request, TestManifest.Shipped, TestPaths.TemplatesDir, Serilog.Core.Logger.None, "run.log",
+            () => FontService.Load(TestManifest.Shipped.Font, TestPaths.TemplatesDir),
+            () => throw new InvalidOperationException("OneNote could not be started"));
+        sessionFails.Should().Throw<InvalidOperationException>("the fonts are released and the failure reaches the verb");
     }
 
     [Fact]
