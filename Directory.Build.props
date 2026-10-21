@@ -22,8 +22,10 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <InvariantGlobalization>false</InvariantGlobalization>
     <NeutralLanguage>en-US</NeutralLanguage>
-    <RootNamespace>$(MSBuildProjectName)</RootNamespace>
-    <AssemblyName>$(MSBuildProjectName)</AssemblyName>
+    <!-- RootNamespace and AssemblyName are left to MSBuild's defaults (the project name). Setting them here broke the
+         WPF app under the .NET 9 SDK: the markup compiler's temporary assembly project re-imports this file after its
+         own properties, so the explicit AssemblyName renamed the temporary assembly and every local XAML type went
+         missing (MC3074). -->
     <Version>1.0.0</Version>
     <Authors>Topher Williams</Authors>
     <Company>TEW Group, LLC</Company>
