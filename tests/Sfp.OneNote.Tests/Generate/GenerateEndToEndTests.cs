@@ -81,7 +81,15 @@ public class GenerateEndToEndTests
 
             result.Success.Should().BeTrue(result.Error);
             result.Warnings.Should().Equal(fonts.Warnings, "a default run ends with no warning but the font fallback this machine needs");
-            fonts.Warnings.Should().OnlyContain(w => w.Contains(manifest.Font.Family, StringComparison.Ordinal));
+            if (fonts.IsFallback)
+            {
+                fonts.Warnings.Should().ContainSingle().Which.Should().Contain(manifest.Font.Family, "a machine without Bookman is told about the fallback face");
+            }
+            else
+            {
+                fonts.Warnings.Should().BeEmpty("a machine with Bookman Old Style installed (the owner's PC) renders with it and warns about nothing");
+            }
+
             log.Events.Where(e => e.Level >= LogEventLevel.Warning).Select(e => e.RenderMessage(null)).Should().BeEmpty();
             result.PagesWritten.Should().Be(144);
             app.WrittenPages.Should().HaveCount(144);

@@ -53,7 +53,15 @@ public sealed class RenderOnlyCommandTests
             err.Should().BeEmpty();
             code.Should().Be(ExitCodes.Success);
             output.Should().Contain("Rendered 144 pages of SFP Q1 2027: 142 PNG files and pages.json written to ");
-            output.Should().Contain("Warning: Font 'Bookman Old Style' is not installed", "the build box has no Bookman");
+            if (SKFontManager.Default.FontFamilies.Contains(TestManifest.Shipped.Font.Family, StringComparer.OrdinalIgnoreCase))
+            {
+                output.Should().NotContain("Warning: Font", "a machine with Bookman Old Style installed renders with it and warns about nothing");
+            }
+            else
+            {
+                output.Should().Contain("Warning: Font 'Bookman Old Style' is not installed", "a machine without Bookman is told about the fallback face");
+            }
+
             output.Should().Contain("Log: ");
             Directory.GetFiles(dir, "*.png").Should().HaveCount(142);
             RenderIndex index = RenderIndex.Parse(File.ReadAllText(Path.Combine(dir, "pages.json")));
