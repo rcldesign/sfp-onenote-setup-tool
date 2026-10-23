@@ -158,12 +158,13 @@ public sealed class GeneratePreflight : IGeneratePreflight
     /// OneNote installed, its type library registration usable, and OneNote answering GetHierarchy; a failure is an error
     /// with exit 3. The type library check (<see cref="IOneNoteLocator.TypeLibrary"/>) runs after the install check and
     /// before OneNote is started: its error (registered entries whose files are all missing) is the only error and OneNote
-    /// is not opened; its warning (nothing registered in the registry this process sees, or a stale entry beside a sound
-    /// one) joins <paramref name="warnings"/> and the run goes on. A refusal because a dialog holds OneNote (busy twice, or
-    /// hrAppInModalUI; OneNote's first-run sign-in dialog does this, and this is the run's first call) says to close the
-    /// dialog or sign in. E_FAIL, TYPE_E_LIBNOTREGISTERED or TYPE_E_CANTLOADLIBRARY from that first call, after OneNote
-    /// started, gives the type library and elevation remedy (<see cref="GenerateText.FirstCallFailedMessage"/>) ahead of
-    /// the call's message, which names the HRESULT. A OneNote.Application object without the automation members
+    /// is not opened; its warning (nothing registered in the registry this process sees, a usable entry only for clients
+    /// of the other bitness than OneNote's, or a stale entry beside a sound one) joins <paramref name="warnings"/> and the
+    /// run goes on. A refusal because a dialog holds OneNote (busy twice, or hrAppInModalUI; OneNote's first-run sign-in
+    /// dialog does this, and this is the run's first call) says to close the dialog or sign in. E_FAIL,
+    /// TYPE_E_LIBNOTREGISTERED or TYPE_E_CANTLOADLIBRARY from that first call, after OneNote started, gives the type
+    /// library and elevation remedy (<see cref="GenerateText.FirstCallFailedMessage"/>) ahead of the call's message,
+    /// which names the HRESULT. A OneNote.Application object without the automation members
     /// (DISP_E_UNKNOWNNAME, DISP_E_MEMBERNOTFOUND, or the runtime binder finding no such member) arrives as
     /// <see cref="OneNoteUnavailableException"/> opening with <see cref="OneNoteUnavailableException.NoAutomationMessage"/>
     /// and is shown as it is. Returns true when OneNote answered with no open notebook, which is recorded for the

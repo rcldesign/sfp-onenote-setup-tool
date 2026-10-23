@@ -10,13 +10,18 @@ namespace Sfp.OneNote.Tests.Com;
 /// which the Generate preflight checks before it starts OneNote. On the owner's PC OneNote started, then refused its
 /// first call with a bare E_FAIL; a registration pointing at a file that no longer exists does that (the documented case
 /// pointed at Office16\ONENOTE.EXE\3 without the root folder). Only registered entries whose files are all missing are an
-/// error; nothing registered, or a stale entry beside a sound one, is a warning. The file checks run against a fake file
-/// system.
+/// error; nothing registered, or a stale entry beside a sound one, is a warning. Fix round 5d: the check knows OneNote's
+/// bitness, and a 64-bit OneNote whose type library only win32 names usably (the owner's PC: win64 absent, win32 at the
+/// installed ONENOTE.EXE\3) is a warning with the reg add command for win64, as is the 32-bit mirror. The file checks run
+/// against a fake file system.
 /// </summary>
 public class OneNoteTypeLibraryTests
 {
     private const string Installed = @"C:\Program Files\Microsoft Office\root\Office16\ONENOTE.EXE";
     private const string WithoutRoot = @"C:\Program Files\Microsoft Office\Office16\ONENOTE.EXE\3";
+
+    /// <summary>The executable the owner's PC registers as OneNote's server and as the win32 type library file.</summary>
+    private const string OwnersOneNote = @"C:\Program Files\Microsoft Office\Root\Office16\ONENOTE.EXE";
 
     private const string NotRegisteredWarning =
         @"OneNote's type library is not registered in this computer's registry (HKEY_CLASSES_ROOT\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0 has no win64 or win32 entry). A virtualized Office may still carry it; if OneNote refuses the next call, run an Online Repair of Office (Settings, Apps, Microsoft Office, Modify).";
@@ -119,6 +124,141 @@ public class OneNoteTypeLibraryTests
         check.Should().Be(TypeLibraryCheck.None);
     }
 
+    /// <summary>
+    /// Fix round 5d, the owner's PC: OneNote is 64-bit (it runs from Program Files) and its type library has a win32 entry
+    /// whose file exists and no win64 entry. Round 5b found nothing to report; a 64-bit OneNote may not fall back to win32,
+    /// so this is now a warning (not an error) naming the win32 value as registered and the reg add command that registers
+    /// the same value for win64. Each file is asked about once.
+    /// </summary>
+    [Fact]
+    public void A_64_bit_onenote_whose_type_library_has_only_a_win32_entry_is_warned_with_the_reg_add_command_for_win64()
+    {
+        OneNoteTypeLibrary.Registration owners = new(null, OwnersOneNote + @"\3");
+        List<string> asked = new();
+
+        TypeLibraryCheck check = OneNoteTypeLibrary.Check(owners, Exists(asked, OwnersOneNote), Bitness.X64);
+
+        check.Error.Should().BeNull();
+        check.Warning.Should().Be(
+            @"OneNote is 64-bit but its type library is registered only for 32-bit clients: HKEY_CLASSES_ROOT\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0 has a win32 entry (C:\Program Files\Microsoft Office\Root\Office16\ONENOTE.EXE\3) and no usable win64 entry. A 64-bit OneNote may not load it, which fails every automation call with E_FAIL. Add the entry from an administrator command prompt: reg add ""HKCR\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0\win64"" /ve /d ""C:\Program Files\Microsoft Office\Root\Office16\ONENOTE.EXE\3"" /f  (the same file; remove the entry again with reg delete if it does not help), or run an Online Repair of Office.");
+        asked.Should().Equal(OwnersOneNote);
+        OneNoteTypeLibrary.Check(owners, Exists(new List<string>(), OwnersOneNote), Bitness.Unknown).Should().Be(TypeLibraryCheck.None, "without the bitness round 5b's rule stays");
+        OneNoteTypeLibrary.Check(owners, Exists(new List<string>(), OwnersOneNote)).Should().Be(TypeLibraryCheck.None, "the overload without the bitness is the unknown bitness");
+    }
+
+    /// <summary>The mirror: a 32-bit OneNote whose type library only win64 names usably gets the same warning for win32.</summary>
+    [Fact]
+    public void A_32_bit_onenote_whose_type_library_has_only_a_win64_entry_is_warned_with_the_reg_add_command_for_win32()
+    {
+        const string x86 = @"C:\Program Files (x86)\Microsoft Office\root\Office16\ONENOTE.EXE";
+
+        TypeLibraryCheck check = OneNoteTypeLibrary.Check(new OneNoteTypeLibrary.Registration(x86 + @"\3", null), Exists(new List<string>(), x86), Bitness.X86);
+
+        check.Error.Should().BeNull();
+        check.Warning.Should().Be(
+            @"OneNote is 32-bit but its type library is registered only for 64-bit clients: HKEY_CLASSES_ROOT\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0 has a win64 entry (C:\Program Files (x86)\Microsoft Office\root\Office16\ONENOTE.EXE\3) and no usable win32 entry. A 32-bit OneNote may not load it, which fails every automation call with E_FAIL. Add the entry from an administrator command prompt: reg add ""HKCR\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0\win32"" /ve /d ""C:\Program Files (x86)\Microsoft Office\root\Office16\ONENOTE.EXE\3"" /f  (the same file; remove the entry again with reg delete if it does not help), or run an Online Repair of Office.");
+    }
+
+    /// <summary>
+    /// A stale win64 entry beside a sound win32 one, with OneNote 64-bit: one warning, the bitness one (its reg add /f
+    /// overwrites the stale value), not round 5b's stale entry warning and not both.
+    /// </summary>
+    [Fact]
+    public void A_64_bit_onenote_with_a_stale_win64_entry_beside_a_sound_win32_entry_gets_the_bitness_warning_not_the_stale_one()
+    {
+        OneNoteTypeLibrary.Registration registration = new(WithoutRoot, Installed + @"\3");
+
+        TypeLibraryCheck check = OneNoteTypeLibrary.Check(registration, Exists(new List<string>(), Installed), Bitness.X64);
+
+        check.Error.Should().BeNull();
+        check.Warning.Should().Be(
+            @"OneNote is 64-bit but its type library is registered only for 32-bit clients: HKEY_CLASSES_ROOT\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0 has a win32 entry (C:\Program Files\Microsoft Office\root\Office16\ONENOTE.EXE\3) and no usable win64 entry. A 64-bit OneNote may not load it, which fails every automation call with E_FAIL. Add the entry from an administrator command prompt: reg add ""HKCR\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0\win64"" /ve /d ""C:\Program Files\Microsoft Office\root\Office16\ONENOTE.EXE\3"" /f  (the same file; remove the entry again with reg delete if it does not help), or run an Online Repair of Office.");
+        check.Warning.Should().NotContain("points at a file that does not exist");
+        OneNoteTypeLibrary.Check(registration, Exists(new List<string>(), Installed)).Warning.Should().StartWith(
+            @"OneNote's type library entry HKEY_CLASSES_ROOT\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0\win64 = " + WithoutRoot + " points at a file that does not exist;",
+            "without the bitness the stale entry warning stays");
+    }
+
+    /// <summary>A usable entry for OneNote's own bitness leaves nothing to report when every registered file exists.</summary>
+    [Theory]
+    [InlineData(Bitness.X64)]
+    [InlineData(Bitness.X86)]
+    public void Onenote_of_either_bitness_with_both_entries_sound_gives_nothing_to_report(Bitness bitness)
+    {
+        TypeLibraryCheck check = OneNoteTypeLibrary.Check(new OneNoteTypeLibrary.Registration(Installed + @"\3", Installed + @"\3"), Exists(new List<string>(), Installed), bitness);
+
+        check.Should().Be(TypeLibraryCheck.None);
+    }
+
+    /// <summary>How each type library entry is registered in <see cref="Every_registration_against_every_bitness"/>.</summary>
+    public enum Entry
+    {
+        /// <summary>No value.</summary>
+        Absent,
+
+        /// <summary>A value whose file does not exist.</summary>
+        Stale,
+
+        /// <summary>A value whose file exists.</summary>
+        Sound,
+    }
+
+    public static TheoryData<Entry, Entry, Bitness> EveryRegistrationAndBitness()
+    {
+        TheoryData<Entry, Entry, Bitness> rows = new();
+        foreach (Entry win64 in Enum.GetValues<Entry>())
+        {
+            foreach (Entry win32 in Enum.GetValues<Entry>())
+            {
+                foreach (Bitness bitness in Enum.GetValues<Bitness>())
+                {
+                    rows.Add(win64, win32, bitness);
+                }
+            }
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// Fix round 5d over every registration (each entry absent, stale or sound) and every bitness: the error never depends
+    /// on the bitness, so what blocks is round 5b's rule; the bitness warning replaces round 5b's answer exactly when
+    /// OneNote is X64 and only win32 is sound, or X86 and only win64 is sound; every other case, the unknown bitness
+    /// included, answers as round 5b did.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(EveryRegistrationAndBitness))]
+    public void Every_registration_against_every_bitness(Entry win64, Entry win32, Bitness bitness)
+    {
+        OneNoteTypeLibrary.Registration registration = new(Value(win64), Value(win32));
+        TypeLibraryCheck roundFiveB = OneNoteTypeLibrary.Check(registration, Exists(new List<string>(), Installed));
+
+        TypeLibraryCheck check = OneNoteTypeLibrary.Check(registration, Exists(new List<string>(), Installed), bitness);
+
+        check.Error.Should().Be(roundFiveB.Error, "which cases block does not depend on the bitness");
+        bool onlyTheOtherBitnessIsUsable = (bitness == Bitness.X64 && win32 == Entry.Sound && win64 != Entry.Sound)
+            || (bitness == Bitness.X86 && win64 == Entry.Sound && win32 != Entry.Sound);
+        if (onlyTheOtherBitnessIsUsable)
+        {
+            string bits = bitness == Bitness.X64 ? "64" : "32";
+            check.Error.Should().BeNull();
+            check.Warning.Should().StartWith("OneNote is " + bits + "-bit but its type library is registered only for ")
+                .And.Contain(" and no usable win" + bits + " entry. ")
+                .And.Contain(@"reg add ""HKCR\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0\win" + bits + @""" /ve /d """ + Installed + @"\3"" /f  (the same file;");
+        }
+        else
+        {
+            check.Should().Be(roundFiveB);
+        }
+
+        static string? Value(Entry entry) => entry switch
+        {
+            Entry.Stale => WithoutRoot,
+            Entry.Sound => Installed + @"\3",
+            _ => null,
+        };
+    }
+
     [Theory]
     [InlineData(@"C:\Program Files\Microsoft Office\root\Office16\ONENOTE.EXE\3", @"C:\Program Files\Microsoft Office\root\Office16\ONENOTE.EXE")]
     [InlineData(@"C:\Office\ONENOTE.EXE\12", @"C:\Office\ONENOTE.EXE")]
@@ -163,6 +303,10 @@ public class OneNoteTypeLibraryTests
         }
     }
 
+    /// <summary>
+    /// On Windows the locator logs one line with the registration and, since fix round 5d, OneNote's server with its
+    /// bitness ("OneNote server = {path or absent} ({bitness})"), and checks the registration against that bitness.
+    /// </summary>
     [Fact]
     public void The_production_locator_logs_what_it_read_on_windows_and_reports_nothing_elsewhere()
     {
@@ -173,10 +317,13 @@ public class OneNoteTypeLibraryTests
 
         if (OperatingSystem.IsWindows())
         {
+            OneNoteServer server = OneNoteServer.Read();
             LogEvent line = log.Events.Should().ContainSingle(e => e.Level == LogEventLevel.Information).Subject;
             line.RenderMessage(System.Globalization.CultureInfo.InvariantCulture).Should().StartWith(@"OneNote type library HKEY_CLASSES_ROOT\")
-                .And.Contain("win64 = ").And.Contain("win32 = ").And.Contain("file exists: ");
-            check.Should().Be(OneNoteTypeLibrary.Check(OneNoteTypeLibrary.Read(), File.Exists));
+                .And.Contain("win64 = ").And.Contain("win32 = ").And.Contain("file exists: ").And.Contain("), OneNote server = ");
+            line.Properties["ServerPath"].Should().Be(new ScalarValue(server.Path ?? "absent"));
+            line.Properties["ServerBitness"].Should().Be(new ScalarValue(server.Bitness.ToString()), "the name, so the run log shows it without quotes");
+            check.Should().Be(OneNoteTypeLibrary.Check(OneNoteTypeLibrary.Read(), File.Exists, server.Bitness));
             log.Events.Count(e => e.Level == LogEventLevel.Warning).Should().Be(check.Warning is null ? 0 : 1, "a warning is logged as well as reported");
         }
         else

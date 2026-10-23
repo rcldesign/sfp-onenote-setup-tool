@@ -15,9 +15,11 @@ public interface IOneNoteLocator
     bool IsInstalled { get; }
 
     /// <summary>
-    /// The type library check, read without starting OneNote (<see cref="OneNoteTypeLibrary.Check"/>): an error stops the
-    /// run before OneNote is started, a warning is reported and the run goes on. Both are null for a sound registration,
-    /// and off Windows (<see cref="TypeLibraryCheck.None"/>).
+    /// The type library check, read without starting OneNote: the registration against the bitness of the executable
+    /// registered as OneNote's server
+    /// (<see cref="OneNoteTypeLibrary.Check(OneNoteTypeLibrary.Registration, Func{string, bool}, Bitness)"/>). An error
+    /// stops the run before OneNote is started, a warning is reported and the run goes on. Both are null for a sound
+    /// registration, and off Windows (<see cref="TypeLibraryCheck.None"/>).
     /// </summary>
     TypeLibraryCheck TypeLibrary { get; }
 
@@ -39,9 +41,10 @@ public sealed class OneNoteLocator : IOneNoteLocator, IDisposable
     public bool IsInstalled => OperatingSystem.IsWindows() && ProgIdResolves();
 
     /// <summary>
-    /// Reads the registration on each access and logs it as one line (both values, or "absent", and whether each file
-    /// exists), so the run's log shows what the type library check saw; a warning is logged as well, since it reaches the
-    /// user only with the run's warnings.
+    /// Reads the registration and OneNote's server (<see cref="OneNoteServer.Read"/>) on each access and logs them as one
+    /// line (both values, or "absent", whether each file exists, and the server's path, or "absent", with its bitness), so
+    /// the run's log shows what the type library check saw; a warning is logged as well, since it reaches the user only
+    /// with the run's warnings.
     /// </summary>
     public TypeLibraryCheck TypeLibrary
     {
@@ -53,14 +56,19 @@ public sealed class OneNoteLocator : IOneNoteLocator, IDisposable
             }
 
             OneNoteTypeLibrary.Registration registration = OneNoteTypeLibrary.Read();
+            OneNoteServer server = OneNoteServer.Read();
+
+            // The bitness goes in as its name: the run log's {Message:lj} renders a string as it is, an enum as a JSON string in quotes.
             _log.Information(
-                @"OneNote type library HKEY_CLASSES_ROOT\{Key}: win64 = {Win64} (file exists: {Win64Exists}), win32 = {Win32} (file exists: {Win32Exists})",
+                @"OneNote type library HKEY_CLASSES_ROOT\{Key}: win64 = {Win64} (file exists: {Win64Exists}), win32 = {Win32} (file exists: {Win32Exists}), OneNote server = {ServerPath} ({ServerBitness})",
                 OneNoteTypeLibrary.KeyPath,
                 registration.Win64 ?? "absent",
                 FileExists(registration.Win64),
                 registration.Win32 ?? "absent",
-                FileExists(registration.Win32));
-            TypeLibraryCheck check = OneNoteTypeLibrary.Check(registration, File.Exists);
+                FileExists(registration.Win32),
+                server.Path ?? "absent",
+                server.Bitness.ToString());
+            TypeLibraryCheck check = OneNoteTypeLibrary.Check(registration, File.Exists, server.Bitness);
             if (check.Warning is not null)
             {
                 _log.Warning("OneNote type library (reported with the run's warnings): {Warning}", check.Warning);

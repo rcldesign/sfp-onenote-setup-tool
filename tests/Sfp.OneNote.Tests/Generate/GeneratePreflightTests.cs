@@ -150,6 +150,40 @@ public class GeneratePreflightTests
         failed.Warnings.Should().Equal(warning);
     }
 
+    /// <summary>
+    /// Fix round 5d, the owner's PC: OneNote is 64-bit and its type library has only a win32 entry, whose file exists.
+    /// The check's bitness warning (with the reg add remedy) joins the preflight's warnings, OneNote is opened and a
+    /// OneNote that answers passes. When OneNote refuses the first call with E_FAIL, as it did there, the first-call
+    /// message is the error and the bitness warning is reported beside it.
+    /// </summary>
+    [Fact]
+    public void A_64_bit_onenote_with_only_a_win32_type_library_entry_warns_and_the_run_goes_on()
+    {
+        const string server = @"C:\Program Files\Microsoft Office\Root\Office16\ONENOTE.EXE";
+        TypeLibraryCheck bitness = OneNoteTypeLibrary.Check(new OneNoteTypeLibrary.Registration(null, server + @"\3"), path => path == server, Bitness.X64);
+        string warning = bitness.Warning!;
+        Harness answering = new();
+        answering.Locator.TypeLibrary = bitness;
+        Harness refusing = new();
+        refusing.Locator.TypeLibrary = bitness;
+        refusing.App.GetHierarchyFailure = () => OneNoteHResults.Map("GetHierarchy", new System.Runtime.InteropServices.COMException("refused", OneNoteHResults.Fail), null);
+
+        PreflightResult passed = answering.Build().Check(Harness.Request());
+        PreflightResult failed = refusing.Build().Check(Harness.Request());
+
+        bitness.Error.Should().BeNull();
+        warning.Should().StartWith("OneNote is 64-bit but its type library is registered only for 32-bit clients: ")
+            .And.Contain(@"reg add ""HKCR\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0\win64"" /ve /d """ + server + @"\3"" /f");
+        passed.Ok.Should().BeTrue(string.Join("; ", passed.Errors.Select(e => e.Message)));
+        passed.Warnings.Should().Equal(warning);
+        passed.NoOpenNotebooks.Should().BeFalse();
+        answering.Locator.OpenCalls.Should().Be(1, "the bitness warning does not stop the run");
+        answering.App.CallsOf("GetHierarchy").Should().Equal(":Notebooks");
+        failed.Errors.Should().Equal((GenerateText.FirstCallFailedMessage + " OneNote call GetHierarchy failed: E_FAIL (0x80004005): refused", 3));
+        failed.Warnings.Should().Equal(warning);
+        refusing.Locator.OpenCalls.Should().Be(1);
+    }
+
     [Fact]
     public void No_open_notebook_is_recorded_but_does_not_block_on_its_own()
     {
@@ -240,7 +274,7 @@ public class GeneratePreflightTests
     /// text and not the install link, since OneNote is installed and running. Fix round 5b: the message names OneNote
     /// failing to load its own type library as the first suspect (pointing at the log's type library line), the
     /// elevation second, and an Online Repair of Office as the last remedy; it names no code, since the call's own
-    /// message that follows carries it.
+    /// message that follows carries it. Fix round 5d: it points at the type library warning as well.
     /// </summary>
     [Fact]
     public void A_bare_e_fail_at_the_first_call_gives_the_restart_and_elevation_remedy_with_exit_3()
@@ -257,7 +291,7 @@ public class GeneratePreflightTests
             .And.NotContain(GenerateText.DialogOrSignInMessage)
             .And.NotContain(OneNoteUnavailableException.InstallUrl, "OneNote answered activation, so it is installed");
         GenerateText.FirstCallFailedMessage.Should().Be(
-            "OneNote started but refused the first request. This is what OneNote answers when it cannot load its own type library (see the type library line in the log) or when this tool and OneNote run at different elevations. Close OneNote completely (also the OneNote icon in the notification area), run both at the same elevation, then retry. If it keeps failing, run an Online Repair of Office from Settings, Apps.");
+            "OneNote started but refused the first request. This is what OneNote answers when it cannot load its own type library (see the type library warning, when one is shown, and the type library line in the log) or when this tool and OneNote run at different elevations. Close OneNote completely (also the OneNote icon in the notification area), run both at the same elevation, then retry. If it keeps failing, run an Online Repair of Office from Settings, Apps.");
     }
 
     /// <summary>
