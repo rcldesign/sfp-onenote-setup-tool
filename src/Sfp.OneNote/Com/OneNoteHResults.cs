@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace Sfp.OneNote.Com;
 
@@ -8,7 +9,7 @@ namespace Sfp.OneNote.Com;
 /// (learn.microsoft.com/office/client-developer/onenote/error-codes-onenote), every row with its published name; the
 /// others are standard COM.
 /// </summary>
-public static class OneNoteHResults
+public static partial class OneNoteHResults
 {
     // Standard COM: the two "try again" results and the "no server" family.
     public const int RpcCallRejected = unchecked((int)0x80010001);
@@ -23,6 +24,28 @@ public static class OneNoteHResults
 
     /// <summary>E_OUTOFMEMORY, which the runtime raises as OutOfMemoryException; from activation it is the server's (<see cref="IsActivationFailure"/>).</summary>
     public const int OutOfMemory = unchecked((int)0x8007000E);
+
+    /// <summary>
+    /// E_FAIL, an unspecified failure. The owner's OneNote answered its first call with it; a type library it cannot load
+    /// is the suspected cause (<see cref="OneNoteTypeLibrary"/>). <see cref="Map"/> leaves it a plain
+    /// <see cref="OneNoteException"/>; the Generate preflight words it for the run's first call, after OneNote started.
+    /// </summary>
+    public const int Fail = unchecked((int)0x80004005);
+
+    /// <summary>IDispatch: the object does not know the name (from GetIDsOfNames). See <see cref="IsNoAutomation"/>.</summary>
+    public const int DispUnknownName = unchecked((int)0x80020006);
+
+    /// <summary>IDispatch: the member does not exist (from Invoke). See <see cref="IsNoAutomation"/>.</summary>
+    public const int DispMemberNotFound = unchecked((int)0x80020003);
+
+    /// <summary>TYPE_E_LIBNOTREGISTERED: the type library is not registered (<see cref="IsTypeLibraryFailure"/>). Raised as a COMException.</summary>
+    public const int TypeLibNotRegistered = unchecked((int)0x8002801D);
+
+    /// <summary>
+    /// TYPE_E_CANTLOADLIBRARY: the type library, or the file said to hold it, could not be loaded
+    /// (<see cref="IsTypeLibraryFailure"/>). Raised as a COMException.
+    /// </summary>
+    public const int CantLoadTypeLibrary = unchecked((int)0x80029C4A);
 
     // OneNote: Microsoft's "Error codes (OneNote)" table, in its order (there is no 0x80042021).
     public const int MalformedXml = unchecked((int)0x80042000);
@@ -89,6 +112,11 @@ public static class OneNoteHResults
         [ObjectNotConnected] = "CO_E_OBJNOTCONNECTED",
         [MonikerUnavailable] = "MK_E_UNAVAILABLE",
         [OutOfMemory] = "E_OUTOFMEMORY",
+        [Fail] = "E_FAIL",
+        [DispUnknownName] = "DISP_E_UNKNOWNNAME",
+        [DispMemberNotFound] = "DISP_E_MEMBERNOTFOUND",
+        [TypeLibNotRegistered] = "TYPE_E_LIBNOTREGISTERED",
+        [CantLoadTypeLibrary] = "TYPE_E_CANTLOADLIBRARY",
         [MalformedXml] = "hrMalformedXML",
         [InvalidXml] = "hrInvalidXML",
         [CreatingSection] = "hrCreatingSection",
@@ -168,6 +196,21 @@ public static class OneNoteHResults
     /// </summary>
     public static bool IsDisconnected(int hresult) => hresult is RpcServerUnavailable or RpcCallFailed or RpcDisconnected or ObjectNotConnected;
 
+    /// <summary>
+    /// True when the IDispatch server has no such member: DISP_E_UNKNOWNNAME (the name is unknown) or
+    /// DISP_E_MEMBERNOTFOUND (the member does not exist). OneNote desktop's OneNote.Application object has every member
+    /// the wrapper calls, so the object is not OneNote desktop's or its installation is damaged
+    /// (<see cref="OneNoteUnavailableException.NoAutomationMessage"/>).
+    /// </summary>
+    public static bool IsNoAutomation(int hresult) => hresult is DispUnknownName or DispMemberNotFound;
+
+    /// <summary>
+    /// True when the type library could not be found or loaded: TYPE_E_LIBNOTREGISTERED or TYPE_E_CANTLOADLIBRARY.
+    /// <see cref="Map"/> leaves them plain <see cref="OneNoteException"/>s; the Generate preflight words them, as it words
+    /// E_FAIL, when the run's first call fails after OneNote started (<see cref="OneNoteTypeLibrary"/>).
+    /// </summary>
+    public static bool IsTypeLibraryFailure(int hresult) => hresult is TypeLibNotRegistered or CantLoadTypeLibrary;
+
     /// <summary>True when OneNote rejected the XML or could not insert the content it described.</summary>
     public static bool IsXmlRejected(int hresult) =>
         hresult is MalformedXml or InvalidXml or InsertingImage or InsertingInk or InsertingHtml or InsertingOutlineText;
@@ -218,23 +261,72 @@ public static class OneNoteHResults
     /// are not mapped here (the caller retries them and raises <see cref="OneNoteBusyException"/> itself). Any failure of
     /// activation (<see cref="ActivateCall"/>) opens with <see cref="OneNoteUnavailableException.NotStartedMessage"/>: the
     /// activator resolves the ProgID first and keeps the install message for that lookup, so OneNote is installed here.
-    /// A later unavailable result opens with <see cref="OneNoteUnavailableException.DisconnectedMessage"/> when OneNote
-    /// went away (<see cref="IsDisconnected"/>), else with the install message (a missing registration).
+    /// A later DISP_E_UNKNOWNNAME or DISP_E_MEMBERNOTFOUND (<see cref="IsNoAutomation"/>) opens with
+    /// <see cref="OneNoteUnavailableException.NoAutomationMessage"/>. A later unavailable result opens with
+    /// <see cref="OneNoteUnavailableException.DisconnectedMessage"/> when OneNote went away (<see cref="IsDisconnected"/>),
+    /// else with the install message (a missing registration).
     /// </summary>
     public static OneNoteException Map(string call, Exception error, string? xml)
     {
         ArgumentNullException.ThrowIfNull(error);
-        int hr = error.HResult;
-        string detail = string.IsNullOrWhiteSpace(error.Message) ? "" : ": " + error.Message.Trim();
+        return MapResult(call, error.HResult, error, xml);
+    }
+
+    /// <summary>
+    /// Maps the binder's refusal of the late-bound call <paramref name="call"/>, which reaches the session as a binder
+    /// exception instead of a COMException, keeping <paramref name="error"/> as the inner exception. The runtime binder's
+    /// RuntimeBinderException, raised when IDispatch's GetIDsOfNames answers DISP_E_UNKNOWNNAME ("'System.__ComObject'
+    /// does not contain a definition for ..."), is the no-automation exception under DISP_E_UNKNOWNNAME. The COM binder's
+    /// MissingMemberException is read by its message: "Could not get dispatch ID for {name} (error: 0x80004005)." names
+    /// the HRESULT GetIDsOfNames answered (<see cref="DispatchIdResult"/>), which is mapped as <see cref="Map"/> maps that
+    /// HRESULT from the call itself (E_FAIL stays a plain <see cref="OneNoteException"/>, a disconnect reads as one, and
+    /// <paramref name="xml"/> is carried as there); "Error while invoking {name}." (DISP_E_MEMBERNOTFOUND from Invoke)
+    /// names none and is the no-automation exception under DISP_E_MEMBERNOTFOUND. The busy results are the caller's to
+    /// retry, as for <see cref="Map"/>.
+    /// </summary>
+    public static OneNoteException MapMissingMember(string call, Exception error, string? xml = null)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        if (error is MissingMemberException)
+        {
+            return DispatchIdResult(error) is int hresult
+                ? MapResult(call, hresult, error, xml)
+                : NoAutomation(call, DispMemberNotFound, error);
+        }
+
+        return NoAutomation(call, DispUnknownName, error);
+    }
+
+    /// <summary>
+    /// The HRESULT the COM binder names in its MissingMemberException for a failed GetIDsOfNames ("Could not get dispatch
+    /// ID for {name} (error: 0x80004005)."): the last "(error: 0x" plus eight hex digits plus ")" in the message, read
+    /// without regard to case or culture. Null when the message has none, as "Error while invoking {name}." has not.
+    /// </summary>
+    public static int? DispatchIdResult(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        Match? last = DispatchIdError().Matches(error.Message).LastOrDefault();
+        return last is null ? null : int.Parse(last.Groups["hr"].Value, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary><see cref="Map"/> for <paramref name="hr"/>, which a binder exception names instead of carrying it as its HResult.</summary>
+    private static OneNoteException MapResult(string call, int hr, Exception error, string? xml)
+    {
         if (string.Equals(call, ActivateCall, StringComparison.Ordinal))
         {
             return new OneNoteUnavailableException(
                 call,
                 hr,
-                string.Format(CultureInfo.InvariantCulture, "{0} {1} failed with {2}{3}", OneNoteUnavailableException.NotStartedMessage, call, Describe(hr), detail),
+                string.Format(CultureInfo.InvariantCulture, "{0} {1} failed with {2}{3}", OneNoteUnavailableException.NotStartedMessage, call, Describe(hr), Detail(error)),
                 error);
         }
 
+        if (IsNoAutomation(hr))
+        {
+            return NoAutomation(call, hr, error);
+        }
+
+        string detail = Detail(error);
         if (IsUnavailable(hr))
         {
             string lead = IsDisconnected(hr) ? OneNoteUnavailableException.DisconnectedMessage : OneNoteUnavailableException.UserMessage;
@@ -262,7 +354,22 @@ public static class OneNoteHResults
             error);
     }
 
+    /// <summary>The no-automation exception for <paramref name="call"/>, with the HRESULT and the failure's own message.</summary>
+    private static OneNoteUnavailableException NoAutomation(string call, int hresult, Exception error) =>
+        new(
+            call,
+            hresult,
+            string.Format(CultureInfo.InvariantCulture, "{0} {1} failed with {2}{3}", OneNoteUnavailableException.NoAutomationMessage, call, Describe(hresult), Detail(error)),
+            error);
+
+    /// <summary>": " and the exception's trimmed message, or nothing when it has none.</summary>
+    private static string Detail(Exception error) =>
+        string.IsNullOrWhiteSpace(error.Message) ? "" : ": " + error.Message.Trim();
+
     /// <summary>The exception a reflection wrapper (TargetInvocationException) carries, else the exception itself.</summary>
     private static Exception Unwrap(Exception error) =>
         error is System.Reflection.TargetInvocationException { InnerException: Exception inner } ? inner : error;
+
+    [GeneratedRegex(@"\(error: 0x(?<hr>[0-9A-F]{8})\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex DispatchIdError();
 }

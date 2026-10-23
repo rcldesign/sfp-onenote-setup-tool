@@ -59,7 +59,7 @@ public class ManifestNullChecksTests : IDisposable
 
         act.Should().Throw<ManifestException>()
             .WithMessage("*does not match the manifest schema at *fields[0]*")
-            .WithMessage("*missing required properties, including the following: name*");
+            .Which.Message.Should().MatchRegex(MissingRequiredMember.Pattern("name"));
     }
 
     [Theory]

@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
+using Microsoft.CSharp.RuntimeBinder;
 using Serilog.Events;
 using Sfp.OneNote.Com;
 using Sfp.OneNote.Tests.Support;
@@ -226,6 +228,135 @@ public class OneNoteSessionTests
             activator.Failure = null;
             session.Version.Should().Be("16.0.fake");
             activator.ActivationCount.Should().Be(2);
+        }
+    }
+
+    /// <summary>
+    /// Fix round 5: an object without the member called (a target with no OneNote methods, so the late-bound call finds no
+    /// GetHierarchy and the runtime binder throws RuntimeBinderException, as for a COM object whose IDispatch does not know
+    /// the name) maps to the no-automation exception under DISP_E_UNKNOWNNAME, keeping the binder's exception, and the
+    /// failure is logged as one error naming the call, the HRESULT, the mapped type and the binder's text.
+    /// </summary>
+    [Fact]
+    public void An_object_without_the_called_member_maps_to_the_no_automation_exception_and_logs_the_failure()
+    {
+        CapturingSink log = new();
+        FakeActivator activator = new(new NoAutomationTarget());
+        using OneNoteSession session = new(activator, log.CreateLogger(), FastRetry);
+
+        Action act = () => session.GetHierarchy(null, HierarchyScope.Notebooks);
+
+        OneNoteUnavailableException ex = act.Should().Throw<OneNoteUnavailableException>().Which;
+        ex.HResult.Should().Be(OneNoteHResults.DispUnknownName);
+        ex.Call.Should().Be("GetHierarchy");
+        ex.Message.Should().StartWith(OneNoteUnavailableException.NoAutomationMessage + " GetHierarchy failed with DISP_E_UNKNOWNNAME (0x80020006): ")
+            .And.Contain("does not contain a definition for 'GetHierarchy'");
+        ex.InnerException.Should().BeOfType<RuntimeBinderException>();
+        activator.ActivationCount.Should().Be(1);
+        LogEvent error = log.Events.Should().ContainSingle(e => e.Level == LogEventLevel.Error).Subject;
+        error.Properties["Call"].ToString().Should().Contain("GetHierarchy");
+        error.RenderMessage(CultureInfo.InvariantCulture).Should().Contain("DISP_E_UNKNOWNNAME (0x80020006)")
+            .And.Contain(nameof(OneNoteUnavailableException))
+            .And.Contain("does not contain a definition for 'GetHierarchy'");
+    }
+
+    /// <summary>
+    /// Fix round 5b: the Windows COM binder raises MissingMemberException, not a COMException, for DISP_E_MEMBERNOTFOUND
+    /// from Invoke ("Error while invoking {name}."). Review F1: that text names no HRESULT, so the session maps it to the
+    /// no-automation exception under DISP_E_MEMBERNOTFOUND, keeping the binder's exception and text, not retried, and
+    /// logged as one error naming the call, the HRESULT, the mapped type and the binder's text.
+    /// </summary>
+    [Fact]
+    public void A_missing_member_exception_from_the_com_binder_maps_to_the_no_automation_exception_without_a_retry()
+    {
+        (OneNoteSession session, FakeOneNoteTarget fake, FakeActivator activator, CapturingSink log) = Create();
+        using (session)
+        {
+            MissingMemberException binder = new("Error while invoking GetHierarchy.");
+            fake.FailNextWith(binder);
+
+            Action act = () => session.GetHierarchy(null, HierarchyScope.Notebooks);
+
+            OneNoteUnavailableException ex = act.Should().Throw<OneNoteUnavailableException>().Which;
+            ex.HResult.Should().Be(OneNoteHResults.DispMemberNotFound);
+            ex.Call.Should().Be("GetHierarchy");
+            ex.Message.Should().Be(OneNoteUnavailableException.NoAutomationMessage + " GetHierarchy failed with DISP_E_MEMBERNOTFOUND (0x80020003): Error while invoking GetHierarchy.");
+            ex.InnerException.Should().BeSameAs(binder);
+            fake.CallCount("GetHierarchy").Should().Be(1, "a missing member is not retried");
+            activator.ActivationCount.Should().Be(1);
+            LogEvent error = log.Events.Should().ContainSingle(e => e.Level == LogEventLevel.Error).Subject;
+            error.Properties["Call"].ToString().Should().Contain("GetHierarchy");
+            error.RenderMessage(CultureInfo.InvariantCulture).Should().Contain("DISP_E_MEMBERNOTFOUND (0x80020003)")
+                .And.Contain(nameof(OneNoteUnavailableException))
+                .And.Contain("Error while invoking GetHierarchy.");
+        }
+    }
+
+    /// <summary>
+    /// Review F1: the COM binder's MissingMemberException for a failed GetIDsOfNames names the HRESULT ("Could not get
+    /// dispatch ID for {name} (error: 0x80004005)."), and the session maps it as if the call had failed with it: E_FAIL
+    /// (as from a type library OneNote cannot load) stays a plain OneNoteException, which the preflight words as the
+    /// first-call failure, and RPC_S_SERVER_UNAVAILABLE reads as OneNote gone. The binder's exception is kept and neither
+    /// is retried.
+    /// </summary>
+    [Fact]
+    public void A_dispatch_id_failure_from_the_com_binder_is_mapped_by_the_hresult_it_names()
+    {
+        (OneNoteSession session, FakeOneNoteTarget fake, _, _) = Create();
+        using (session)
+        {
+            MissingMemberException eFail = new("Could not get dispatch ID for GetHierarchy (error: 0x80004005).");
+            MissingMemberException gone = new("Could not get dispatch ID for GetHierarchy (error: 0x800706BA).");
+            fake.FailNextWith(eFail);
+
+            Action first = () => session.GetHierarchy(null, HierarchyScope.Notebooks);
+
+            OneNoteException failed = first.Should().Throw<OneNoteException>().Which;
+            failed.Should().BeOfType<OneNoteException>();
+            failed.HResult.Should().Be(OneNoteHResults.Fail);
+            failed.Call.Should().Be("GetHierarchy");
+            failed.Message.Should().Be("OneNote call GetHierarchy failed: E_FAIL (0x80004005): Could not get dispatch ID for GetHierarchy (error: 0x80004005).");
+            failed.InnerException.Should().BeSameAs(eFail);
+
+            fake.FailNextWith(gone);
+            Action second = () => session.GetHierarchy(null, HierarchyScope.Notebooks);
+
+            OneNoteUnavailableException unavailable = second.Should().Throw<OneNoteUnavailableException>().Which;
+            unavailable.HResult.Should().Be(OneNoteHResults.RpcServerUnavailable);
+            unavailable.Message.Should().StartWith(OneNoteUnavailableException.DisconnectedMessage + " GetHierarchy failed with RPC_S_SERVER_UNAVAILABLE (0x800706BA): Could not get dispatch ID");
+            unavailable.InnerException.Should().BeSameAs(gone);
+            fake.CallCount("GetHierarchy").Should().Be(2, "neither failure is retried");
+        }
+    }
+
+    /// <summary>
+    /// GetIDsOfNames refused as busy (the COM binder's "(error: 0x80010001)") follows the busy rule of a refused call:
+    /// retried once after the delay, and reported as busy when refused again.
+    /// </summary>
+    [Fact]
+    public void A_dispatch_id_failure_naming_a_busy_result_is_retried_once_like_a_busy_call()
+    {
+        (OneNoteSession session, FakeOneNoteTarget fake, _, CapturingSink log) = Create();
+        using (session)
+        {
+            fake.FailNextWith(new MissingMemberException("Could not get dispatch ID for GetHierarchy (error: 0x80010001)."));
+
+            string xml = session.GetHierarchy(null, HierarchyScope.Notebooks);
+
+            xml.Should().Contain("SFP Q1 2027");
+            fake.CallCount("GetHierarchy").Should().Be(2, "the first attempt was refused as busy and the second succeeded");
+            log.Events.Should().Contain(e => e.Level == LogEventLevel.Warning && e.RenderMessage(null).Contains("retrying once", StringComparison.Ordinal));
+
+            MissingMemberException again = new("Could not get dispatch ID for SyncHierarchy (error: 0x80010001).");
+            fake.FailNextWith(new MissingMemberException("Could not get dispatch ID for SyncHierarchy (error: 0x80010001)."));
+            fake.FailNextWith(again);
+            Action act = () => session.SyncHierarchy("{nb}");
+
+            OneNoteBusyException busy = act.Should().Throw<OneNoteBusyException>().Which;
+            busy.HResult.Should().Be(OneNoteHResults.RpcCallRejected);
+            busy.Call.Should().Be("SyncHierarchy");
+            busy.InnerException.Should().BeSameAs(again);
+            fake.CallCount("SyncHierarchy").Should().Be(2, "exactly one retry is made");
         }
     }
 

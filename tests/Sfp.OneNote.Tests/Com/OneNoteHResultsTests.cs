@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using Microsoft.CSharp.RuntimeBinder;
 using Sfp.OneNote.Com;
 using Sfp.TestSupport;
 
@@ -287,6 +288,8 @@ public class OneNoteHResultsTests
         OneNoteUnavailableException.DisconnectedMessage.Should().Be("OneNote stopped responding or was closed during the run.");
         OneNoteUnavailableException.NotStartedMessage.Should().Be(
             "OneNote is installed but could not be started. Close OneNote, run this tool and OneNote at the same elevation (both as administrator or neither), then retry.");
+        OneNoteUnavailableException.NoAutomationMessage.Should().Be(
+            "The OneNote installed here has no automation interface, so it is not OneNote desktop (Office 2016 or later), or its installation is damaged. OneNote for Windows 10 and the Store app cannot be automated. Install or repair OneNote desktop from https://www.onenote.com/download.");
         OneNoteHResults.IsDisconnected(OneNoteHResults.ClassNotRegistered).Should().BeFalse();
         OneNoteHResults.IsDisconnected(OneNoteHResults.ServerExecFailed).Should().BeFalse();
         OneNoteHResults.IsDisconnected(OneNoteHResults.InvalidXml).Should().BeFalse();
@@ -310,7 +313,137 @@ public class OneNoteHResultsTests
     {
         OneNoteHResults.Describe(OneNoteHResults.InvalidXml).Should().Be("hrInvalidXML (0x80042001)");
         OneNoteHResults.Describe(OneNoteHResults.RpcCallRejected).Should().Be("RPC_E_CALL_REJECTED (0x80010001)");
-        OneNoteHResults.Describe(unchecked((int)0x80004005)).Should().Be("0x80004005");
+        OneNoteHResults.Describe(unchecked((int)0x80004005)).Should().Be("E_FAIL (0x80004005)");
+        OneNoteHResults.Describe(unchecked((int)0x8000FFFF)).Should().Be("0x8000FFFF", "E_UNEXPECTED is not in the table");
+    }
+
+    /// <summary>
+    /// Fix round 5: E_FAIL is named, and Map keeps it a plain OneNoteException (the Generate preflight words it for its
+    /// first call); it is neither an unavailable OneNote nor a missing member, it is not retried, and REGDB_E_CLASSNOTREG
+    /// is not a missing member either.
+    /// </summary>
+    [Fact]
+    public void E_fail_is_named_and_stays_a_plain_onenote_exception_that_is_not_a_missing_member()
+    {
+        OneNoteHResults.Fail.Should().Be(unchecked((int)0x80004005));
+        OneNoteHResults.DispUnknownName.Should().Be(unchecked((int)0x80020006));
+        OneNoteHResults.DispMemberNotFound.Should().Be(unchecked((int)0x80020003));
+
+        OneNoteException mapped = OneNoteHResults.Map("GetHierarchy", new COMException("Error HRESULT E_FAIL has been returned from a call to a COM component.", OneNoteHResults.Fail), null);
+
+        mapped.Should().BeOfType<OneNoteException>();
+        mapped.HResult.Should().Be(OneNoteHResults.Fail);
+        mapped.Call.Should().Be("GetHierarchy");
+        mapped.Message.Should().Be("OneNote call GetHierarchy failed: E_FAIL (0x80004005): Error HRESULT E_FAIL has been returned from a call to a COM component.");
+        OneNoteHResults.IsNoAutomation(OneNoteHResults.Fail).Should().BeFalse();
+        OneNoteHResults.IsNoAutomation(OneNoteHResults.ClassNotRegistered).Should().BeFalse();
+        OneNoteHResults.IsUnavailable(OneNoteHResults.Fail).Should().BeFalse();
+        OneNoteHResults.IsBusy(OneNoteHResults.Fail).Should().BeFalse("E_FAIL is not retried");
+    }
+
+    /// <summary>
+    /// Fix round 5: DISP_E_UNKNOWNNAME and DISP_E_MEMBERNOTFOUND from a call after activation mean the OneNote.Application
+    /// object has no such member, so it is not OneNote desktop's or the install is damaged: the no-automation message
+    /// with the call and the HRESULT, as an unavailable OneNote (exit 3). Activation keeps its not-started message.
+    /// </summary>
+    [Theory]
+    [InlineData(unchecked((int)0x80020006), "DISP_E_UNKNOWNNAME (0x80020006)")]
+    [InlineData(unchecked((int)0x80020003), "DISP_E_MEMBERNOTFOUND (0x80020003)")]
+    public void A_member_the_onenote_object_does_not_have_says_it_is_not_onenote_desktop_with_the_hresult(int hresult, string described)
+    {
+        OneNoteException mapped = OneNoteHResults.Map("GetHierarchy", new COMException("Unknown name.", hresult), null);
+
+        mapped.Should().BeOfType<OneNoteUnavailableException>("an OneNote without the automation members exits with 3");
+        mapped.HResult.Should().Be(hresult);
+        mapped.Call.Should().Be("GetHierarchy");
+        mapped.InnerException.Should().BeOfType<COMException>();
+        mapped.Message.Should().Be(OneNoteUnavailableException.NoAutomationMessage + " GetHierarchy failed with " + described + ": Unknown name.");
+        OneNoteHResults.Describe(hresult).Should().Be(described);
+        OneNoteHResults.IsNoAutomation(hresult).Should().BeTrue();
+        OneNoteHResults.IsUnavailable(hresult).Should().BeFalse("the no-automation branch handles them, not the install or disconnect one");
+        OneNoteHResults.IsBusy(hresult).Should().BeFalse("a missing member is not retried");
+        OneNoteHResults.IsXmlRejected(hresult).Should().BeFalse();
+
+        OneNoteException atActivation = OneNoteHResults.Map(OneNoteHResults.ActivateCall, new COMException("Unknown name.", hresult), null);
+        atActivation.Message.Should().StartWith(OneNoteUnavailableException.NotStartedMessage + " activate failed with " + described, "activation keeps its own message");
+    }
+
+    /// <summary>
+    /// Fix round 5: the runtime binder finding no such member on the object (the RuntimeBinderException the late-bound
+    /// call raises when IDispatch does not know the name) maps to the no-automation exception under DISP_E_UNKNOWNNAME,
+    /// keeping the binder's exception and its text.
+    /// </summary>
+    [Fact]
+    public void The_runtime_binder_finding_no_such_member_maps_to_the_no_automation_message_as_disp_e_unknownname()
+    {
+        RuntimeBinderException binder = new("'System.__ComObject' does not contain a definition for 'GetHierarchy'");
+
+        OneNoteException mapped = OneNoteHResults.MapMissingMember("GetHierarchy", binder);
+
+        mapped.Should().BeOfType<OneNoteUnavailableException>();
+        mapped.HResult.Should().Be(OneNoteHResults.DispUnknownName);
+        mapped.Call.Should().Be("GetHierarchy");
+        mapped.InnerException.Should().BeSameAs(binder);
+        mapped.Message.Should().Be(OneNoteUnavailableException.NoAutomationMessage + " GetHierarchy failed with DISP_E_UNKNOWNNAME (0x80020006): 'System.__ComObject' does not contain a definition for 'GetHierarchy'");
+    }
+
+    /// <summary>
+    /// Review F1: the COM binder's MissingMemberException is mapped by the HRESULT its text names. "Could not get dispatch
+    /// ID for {name} (error: 0x........)" (read without regard to case, and with the binder's doubled closing parenthesis)
+    /// maps as the call failing with that HRESULT, keeping the binder's exception; "Error while invoking {name}." names
+    /// none and is the no-automation exception under DISP_E_MEMBERNOTFOUND.
+    /// </summary>
+    [Theory]
+    [InlineData("Could not get dispatch ID for GetHierarchy (error: 0x80004005).", typeof(OneNoteException), unchecked((int)0x80004005), "OneNote call GetHierarchy failed: E_FAIL (0x80004005): ")]
+    [InlineData("Could not get dispatch ID for GetHierarchy (error: 0x80004005)).", typeof(OneNoteException), unchecked((int)0x80004005), "OneNote call GetHierarchy failed: E_FAIL (0x80004005): ")]
+    [InlineData("could not get dispatch id for GetHierarchy (ERROR: 0x8002801d).", typeof(OneNoteException), unchecked((int)0x8002801D), "OneNote call GetHierarchy failed: TYPE_E_LIBNOTREGISTERED (0x8002801D): ")]
+    [InlineData("Could not get dispatch ID for GetHierarchy (error: 0x800706BA).", typeof(OneNoteUnavailableException), unchecked((int)0x800706BA), "OneNote stopped responding or was closed during the run. GetHierarchy failed with RPC_S_SERVER_UNAVAILABLE (0x800706BA): ")]
+    [InlineData("Error while invoking GetHierarchy.", typeof(OneNoteUnavailableException), unchecked((int)0x80020003), "The OneNote installed here has no automation interface, so it is not OneNote desktop (Office 2016 or later), or its installation is damaged. OneNote for Windows 10 and the Store app cannot be automated. Install or repair OneNote desktop from https://www.onenote.com/download. GetHierarchy failed with DISP_E_MEMBERNOTFOUND (0x80020003): ")]
+    public void The_com_binders_missing_member_exception_is_mapped_by_the_hresult_its_text_names(string text, Type expectedType, int expectedHResult, string expectedLead)
+    {
+        MissingMemberException binder = new(text);
+
+        OneNoteException mapped = OneNoteHResults.MapMissingMember("GetHierarchy", binder);
+
+        mapped.Should().BeOfType(expectedType);
+        mapped.HResult.Should().Be(expectedHResult);
+        mapped.Call.Should().Be("GetHierarchy");
+        mapped.InnerException.Should().BeSameAs(binder);
+        mapped.Message.Should().Be(expectedLead + text);
+    }
+
+    [Theory]
+    [InlineData("Could not get dispatch ID for GetHierarchy (error: 0x80004005).", unchecked((int)0x80004005))]
+    [InlineData("Could not get dispatch ID for GetHierarchy (error: 0x80029c4a)).", unchecked((int)0x80029C4A))]
+    [InlineData("(error: 0x80004005) then (error: 0x800706BE).", unchecked((int)0x800706BE))]
+    [InlineData("Error while invoking GetHierarchy.", null)]
+    [InlineData("Could not get dispatch ID for GetHierarchy (error: 0x1).", null)]
+    [InlineData("Could not get dispatch ID for GetHierarchy (error: 80004005).", null)]
+    public void Dispatch_id_result_reads_the_last_error_tail_with_eight_hex_digits(string text, int? expected)
+    {
+        OneNoteHResults.DispatchIdResult(new MissingMemberException(text)).Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Review F4: TYPE_E_LIBNOTREGISTERED and TYPE_E_CANTLOADLIBRARY are named and are type library failures; Map leaves
+    /// them plain OneNoteExceptions (the preflight words them for its first call, like E_FAIL), not unavailable, not busy.
+    /// </summary>
+    [Theory]
+    [InlineData(unchecked((int)0x8002801D), "TYPE_E_LIBNOTREGISTERED (0x8002801D)")]
+    [InlineData(unchecked((int)0x80029C4A), "TYPE_E_CANTLOADLIBRARY (0x80029C4A)")]
+    public void Type_library_failures_are_named_and_stay_plain_onenote_exceptions(int hresult, string described)
+    {
+        OneNoteException mapped = OneNoteHResults.Map("GetHierarchy", new COMException("Library not registered.", hresult), null);
+
+        OneNoteHResults.Describe(hresult).Should().Be(described);
+        OneNoteHResults.IsTypeLibraryFailure(hresult).Should().BeTrue();
+        mapped.Should().BeOfType<OneNoteException>();
+        mapped.Message.Should().Be("OneNote call GetHierarchy failed: " + described + ": Library not registered.");
+        OneNoteHResults.IsUnavailable(hresult).Should().BeFalse();
+        OneNoteHResults.IsBusy(hresult).Should().BeFalse();
+        OneNoteHResults.IsTypeLibraryFailure(OneNoteHResults.Fail).Should().BeFalse("E_FAIL takes the same preflight branch but is not a type library code");
+        OneNoteHResults.TypeLibNotRegistered.Should().Be(unchecked((int)0x8002801D));
+        OneNoteHResults.CantLoadTypeLibrary.Should().Be(unchecked((int)0x80029C4A));
     }
 
     [Fact]

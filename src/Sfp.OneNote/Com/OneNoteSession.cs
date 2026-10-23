@@ -1,13 +1,15 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.CSharp.RuntimeBinder;
 using Serilog;
 
 namespace Sfp.OneNote.Com;
 
 /// <summary>
 /// The platform-neutral heart of the COM wrapper: owns the single worker thread, activates the target lazily on it,
-/// makes every call through dynamic, times and logs each one, retries once when OneNote is busy and maps COM failures
-/// to typed exceptions. <see cref="OneNoteApp"/> is the Windows production shell around it; tests drive it with a fake target.
+/// makes every call through dynamic, times and logs each one, retries once when OneNote is busy and maps COM failures,
+/// and a member the object does not have, to typed exceptions. <see cref="OneNoteApp"/> is the Windows production shell
+/// around it; tests drive it with a fake target.
 /// </summary>
 internal sealed class OneNoteSession : IOneNoteApp
 {
@@ -167,14 +169,13 @@ internal sealed class OneNoteSession : IOneNoteApp
                 }
                 catch (COMException ex) when (OneNoteHResults.IsBusy(ex.HResult))
                 {
-                    if (attempt >= 2)
-                    {
-                        _log.Error("OneNote {Call} rejected twice as busy after {ElapsedMs} ms: {HResult}", name, clock.ElapsedMilliseconds, OneNoteHResults.Describe(ex.HResult));
-                        throw new OneNoteBusyException(name, ex.HResult, ex);
-                    }
-
-                    _log.Warning("OneNote {Call} was rejected as busy ({HResult}); retrying once after {DelayMs} ms", name, OneNoteHResults.Describe(ex.HResult), _retryDelay.TotalMilliseconds);
-                    Thread.Sleep(_retryDelay);
+                    RetryOnceWhenBusy(name, attempt, ex.HResult, ex, clock);
+                }
+                catch (MissingMemberException ex) when (OneNoteHResults.DispatchIdResult(ex) is int busy && OneNoteHResults.IsBusy(busy))
+                {
+                    // OneNote refused GetIDsOfNames itself as busy, which the COM binder reports as "Could not get dispatch
+                    // ID for {name} (error: 0x80010001).": retried like a busy call.
+                    RetryOnceWhenBusy(name, attempt, busy, ex, clock);
                 }
                 catch (COMException ex)
                 {
@@ -182,8 +183,44 @@ internal sealed class OneNoteSession : IOneNoteApp
                     _log.Error("OneNote {Call} failed after {ElapsedMs} ms: {HResult} {ExceptionType}", name, clock.ElapsedMilliseconds, OneNoteHResults.Describe(ex.HResult), mapped.GetType().Name);
                     throw mapped;
                 }
+                catch (RuntimeBinderException ex)
+                {
+                    // The object has no member of that name: the late-bound lookup got DISP_E_UNKNOWNNAME, which the
+                    // runtime binder reports as "'System.__ComObject' does not contain a definition for ...". OneNote
+                    // desktop's object has every member called here, so this one is not it, or it is damaged.
+                    OneNoteException mapped = OneNoteHResults.MapMissingMember(name, ex);
+                    _log.Error("OneNote {Call} failed after {ElapsedMs} ms: {HResult} {ExceptionType} (the runtime binder found no such member: {BinderMessage})", name, clock.ElapsedMilliseconds, OneNoteHResults.Describe(mapped.HResult), mapped.GetType().Name, ex.Message.Trim());
+                    throw mapped;
+                }
+                catch (MissingMemberException ex)
+                {
+                    // The COM binder raises this, not a COMException, for a GetIDsOfNames failure other than
+                    // DISP_E_UNKNOWNNAME ("Could not get dispatch ID for {name} (error: 0x80004005)."), mapped by the
+                    // HRESULT it names as if the call had failed with it (an E_FAIL from a type library OneNote cannot
+                    // load stays E_FAIL), and for DISP_E_MEMBERNOTFOUND from Invoke ("Error while invoking {name}."),
+                    // the no-automation case.
+                    OneNoteException mapped = OneNoteHResults.MapMissingMember(name, ex, xml);
+                    _log.Error("OneNote {Call} failed after {ElapsedMs} ms: {HResult} {ExceptionType} (the COM binder raised MissingMemberException: {BinderMessage})", name, clock.ElapsedMilliseconds, OneNoteHResults.Describe(mapped.HResult), mapped.GetType().Name, ex.Message.Trim());
+                    throw mapped;
+                }
             }
         });
+    }
+
+    /// <summary>
+    /// The busy rule (<see cref="OneNoteHResults.IsBusy"/>): the first refusal waits the retry delay and lets the caller's
+    /// loop call again; a second throws <see cref="OneNoteBusyException"/> with <paramref name="hresult"/>.
+    /// </summary>
+    private void RetryOnceWhenBusy(string name, int attempt, int hresult, Exception refusal, Stopwatch clock)
+    {
+        if (attempt >= 2)
+        {
+            _log.Error("OneNote {Call} rejected twice as busy after {ElapsedMs} ms: {HResult}", name, clock.ElapsedMilliseconds, OneNoteHResults.Describe(hresult));
+            throw new OneNoteBusyException(name, hresult, refusal);
+        }
+
+        _log.Warning("OneNote {Call} was rejected as busy ({HResult}); retrying once after {DelayMs} ms", name, OneNoteHResults.Describe(hresult), _retryDelay.TotalMilliseconds);
+        Thread.Sleep(_retryDelay);
     }
 
     private ActivatedApp EnsureApp()

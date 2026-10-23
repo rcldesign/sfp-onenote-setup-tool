@@ -51,6 +51,7 @@ public class GeneratePreflightTests
         result.Ok.Should().BeTrue(string.Join("; ", result.Errors.Select(e => e.Message)));
         result.Warnings.Should().BeEmpty();
         result.NoOpenNotebooks.Should().BeFalse();
+        h.Locator.TypeLibrary.Should().Be(TypeLibraryCheck.None, "the fake's type library check has nothing to report by default");
         h.Locator.OpenCalls.Should().Be(1);
         h.App.CallsOf("GetHierarchy").Should().Equal(":Notebooks");
         h.Validator.Paths.Should().Equal("/planner/SFP_No_Dates.pdf");
@@ -66,6 +67,87 @@ public class GeneratePreflightTests
 
         result.Errors.Should().Contain((OneNoteUnavailableException.UserMessage, 3));
         h.Locator.OpenCalls.Should().Be(0);
+    }
+
+    /// <summary>
+    /// Fix round 5b: OneNote's type library registration points at a file that does not exist (the documented case: the
+    /// Office16 folder without root), so OneNote would start and then refuse every call, as on the owner's PC. The
+    /// preflight reports the check's error as its one error, exit 3, without starting OneNote. A machine without OneNote
+    /// still gets the install message alone: the install check comes first.
+    /// </summary>
+    [Fact]
+    public void A_broken_type_library_registration_is_the_one_error_with_exit_3_and_onenote_is_never_opened()
+    {
+        TypeLibraryCheck broken = OneNoteTypeLibrary.Check(
+            new OneNoteTypeLibrary.Registration(@"C:\Program Files\Microsoft Office\Office16\ONENOTE.EXE\3", null), _ => false);
+        string error = broken.Error!;
+        Harness h = new();
+        h.Locator.TypeLibrary = broken;
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        error.Should().StartWith("OneNote's type library registration points at a file that does not exist: ");
+        result.Errors.Should().Equal((error, 3));
+        result.Warnings.Should().BeEmpty();
+        result.NoOpenNotebooks.Should().BeFalse();
+        h.Locator.OpenCalls.Should().Be(0, "OneNote is not started when no registered entry names a file that exists");
+        h.App.CallsOf("GetHierarchy").Should().BeEmpty();
+
+        Harness notInstalled = new() { Locator = new FakeOneNoteLocator(false, () => throw new InvalidOperationException("must not be called")) { TypeLibrary = broken } };
+        notInstalled.Build().Check(Harness.Request()).Errors.Should().Equal((OneNoteUnavailableException.UserMessage, 3));
+    }
+
+    /// <summary>
+    /// Review F3: nothing registered in the registry this process sees is a warning, not an error: an App-V or packaged
+    /// Office can keep the type library in a virtual registry. The run goes on, OneNote is opened, and a OneNote that
+    /// answers passes with the warning.
+    /// </summary>
+    [Fact]
+    public void An_unregistered_type_library_is_a_warning_and_onenote_is_still_opened()
+    {
+        TypeLibraryCheck unregistered = OneNoteTypeLibrary.Check(new OneNoteTypeLibrary.Registration(null, null), _ => false);
+        string warning = unregistered.Warning!;
+        Harness h = new();
+        h.Locator.TypeLibrary = unregistered;
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        warning.Should().StartWith("OneNote's type library is not registered in this computer's registry");
+        result.Errors.Should().BeEmpty();
+        result.Ok.Should().BeTrue();
+        result.Warnings.Should().Equal(warning);
+        h.Locator.OpenCalls.Should().Be(1);
+        h.App.CallsOf("GetHierarchy").Should().Equal(":Notebooks");
+    }
+
+    /// <summary>
+    /// Review F3: a stale entry beside a sound one is a warning and the run goes on. When OneNote then refuses the first
+    /// call (a 64-bit OneNote may read the stale win64 entry), the first-call message is the error and the warning is
+    /// reported beside it.
+    /// </summary>
+    [Fact]
+    public void A_stale_type_library_entry_beside_a_sound_one_warns_and_a_refused_first_call_is_reported_beside_it()
+    {
+        TypeLibraryCheck stale = OneNoteTypeLibrary.Check(
+            new OneNoteTypeLibrary.Registration(@"C:\Program Files\Microsoft Office\Office16\ONENOTE.EXE\3", @"C:\Program Files\Microsoft Office\root\Office16\ONENOTE.EXE\3"),
+            path => path == @"C:\Program Files\Microsoft Office\root\Office16\ONENOTE.EXE");
+        string warning = stale.Warning!;
+        Harness answering = new();
+        answering.Locator.TypeLibrary = stale;
+        Harness refusing = new();
+        refusing.Locator.TypeLibrary = stale;
+        refusing.App.GetHierarchyFailure = () => OneNoteHResults.Map("GetHierarchy", new System.Runtime.InteropServices.COMException("refused", OneNoteHResults.Fail), null);
+
+        PreflightResult passed = answering.Build().Check(Harness.Request());
+        PreflightResult failed = refusing.Build().Check(Harness.Request());
+
+        stale.Error.Should().BeNull();
+        warning.Should().StartWith(@"OneNote's type library entry HKEY_CLASSES_ROOT\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0\win64 = ");
+        passed.Ok.Should().BeTrue();
+        passed.Warnings.Should().Equal(warning);
+        answering.Locator.OpenCalls.Should().Be(1);
+        failed.Errors.Should().Equal((GenerateText.FirstCallFailedMessage + " OneNote call GetHierarchy failed: E_FAIL (0x80004005): refused", 3));
+        failed.Warnings.Should().Equal(warning);
     }
 
     [Fact]
@@ -149,6 +231,121 @@ public class GeneratePreflightTests
 
         result.Errors.Should().ContainSingle(e => e.ExitCode == 3 && e.Message.StartsWith("OneNote could not be reached", StringComparison.Ordinal));
         result.Errors[0].Message.Should().NotContain(GenerateText.DialogOrSignInMessage);
+    }
+
+    /// <summary>
+    /// Fix round 5: OneNote started (activation answered) and its first call, GetHierarchy, failed with a bare E_FAIL, as
+    /// on the owner's PC, whose OneNote desktop (Office LTSC 2021) is signed in and in daily use. The preflight gives the
+    /// restart and elevation remedy ahead of the call's own message, exit 3; not "could not be reached", not the sign-in
+    /// text and not the install link, since OneNote is installed and running. Fix round 5b: the message names OneNote
+    /// failing to load its own type library as the first suspect (pointing at the log's type library line), the
+    /// elevation second, and an Online Repair of Office as the last remedy; it names no code, since the call's own
+    /// message that follows carries it.
+    /// </summary>
+    [Fact]
+    public void A_bare_e_fail_at_the_first_call_gives_the_restart_and_elevation_remedy_with_exit_3()
+    {
+        Harness h = new();
+        h.App.GetHierarchyFailure = () => new OneNoteException("GetHierarchy", OneNoteHResults.Fail, "OneNote call GetHierarchy failed: E_FAIL (0x80004005)", null);
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        (string message, int exitCode) = result.Errors.Should().ContainSingle().Subject;
+        exitCode.Should().Be(3);
+        message.Should().Be(GenerateText.FirstCallFailedMessage + " OneNote call GetHierarchy failed: E_FAIL (0x80004005)");
+        message.Should().NotContain("could not be reached")
+            .And.NotContain(GenerateText.DialogOrSignInMessage)
+            .And.NotContain(OneNoteUnavailableException.InstallUrl, "OneNote answered activation, so it is installed");
+        GenerateText.FirstCallFailedMessage.Should().Be(
+            "OneNote started but refused the first request. This is what OneNote answers when it cannot load its own type library (see the type library line in the log) or when this tool and OneNote run at different elevations. Close OneNote completely (also the OneNote icon in the notification area), run both at the same elevation, then retry. If it keeps failing, run an Online Repair of Office from Settings, Apps.");
+    }
+
+    /// <summary>
+    /// Review F4: TYPE_E_LIBNOTREGISTERED and TYPE_E_CANTLOADLIBRARY at the first call, after OneNote started, take the
+    /// E_FAIL branch: the first-call message, then the call's own message naming the code, exit 3.
+    /// </summary>
+    [Theory]
+    [InlineData(unchecked((int)0x80004005), "E_FAIL (0x80004005)")]
+    [InlineData(unchecked((int)0x8002801D), "TYPE_E_LIBNOTREGISTERED (0x8002801D)")]
+    [InlineData(unchecked((int)0x80029C4A), "TYPE_E_CANTLOADLIBRARY (0x80029C4A)")]
+    public void A_first_call_refused_with_e_fail_or_a_type_library_failure_gives_the_first_call_message_with_exit_3(int hresult, string described)
+    {
+        OneNoteException refusal = OneNoteHResults.Map("GetHierarchy", new System.Runtime.InteropServices.COMException("refused", hresult), null);
+        Harness h = new();
+        h.App.GetHierarchyFailure = () => refusal;
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        refusal.Should().BeOfType<OneNoteException>("Map leaves these a plain OneNoteException for the preflight to word");
+        result.Errors.Should().Equal((GenerateText.FirstCallFailedMessage + " OneNote call GetHierarchy failed: " + described + ": refused", 3));
+    }
+
+    /// <summary>
+    /// Fix round 5, the owner's run end to end: the COM session activates OneNote, GetHierarchy throws a COMException with
+    /// E_FAIL, the session maps it to a plain OneNoteException without a retry, and the preflight gives the restart and
+    /// elevation remedy with exit 3.
+    /// </summary>
+    [Fact]
+    public void A_bare_e_fail_from_the_com_session_after_onenote_started_gives_the_restart_and_elevation_remedy()
+    {
+        FakeOneNoteTarget target = new();
+        target.FailNext(OneNoteHResults.Fail);
+        FakeActivator activator = new(target);
+        using OneNoteSession session = new(activator, new Support.CapturingSink().CreateLogger(), TimeSpan.Zero);
+        Harness h = new() { Locator = new FakeOneNoteLocator(true, session) };
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        (string message, int exitCode) = result.Errors.Should().ContainSingle().Subject;
+        exitCode.Should().Be(3);
+        message.Should().StartWith(GenerateText.FirstCallFailedMessage + " OneNote call GetHierarchy failed: E_FAIL (0x80004005)");
+        activator.ActivationCount.Should().Be(1);
+        target.CallCount("GetHierarchy").Should().Be(1, "E_FAIL is not retried");
+    }
+
+    /// <summary>
+    /// Review F1: OneNote that cannot load its type library can fail GetIDsOfNames itself, which the COM binder raises as
+    /// MissingMemberException ("Could not get dispatch ID for GetHierarchy (error: 0x80004005)."). The session maps it by
+    /// the HRESULT it names, so the preflight gives the first-call message, not "no automation interface", exit 3.
+    /// </summary>
+    [Fact]
+    public void A_dispatch_id_failure_naming_e_fail_from_the_com_binder_gives_the_first_call_message_with_exit_3()
+    {
+        FakeOneNoteTarget target = new();
+        target.FailNextWith(new MissingMemberException("Could not get dispatch ID for GetHierarchy (error: 0x80004005)."));
+        FakeActivator activator = new(target);
+        using OneNoteSession session = new(activator, new Support.CapturingSink().CreateLogger(), TimeSpan.Zero);
+        Harness h = new() { Locator = new FakeOneNoteLocator(true, session) };
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        result.Errors.Should().Equal((GenerateText.FirstCallFailedMessage + " OneNote call GetHierarchy failed: E_FAIL (0x80004005): Could not get dispatch ID for GetHierarchy (error: 0x80004005).", 3));
+        result.Errors[0].Message.Should().NotContain(OneNoteUnavailableException.NoAutomationMessage);
+        target.CallCount("GetHierarchy").Should().Be(1, "E_FAIL is not retried");
+    }
+
+    /// <summary>
+    /// Fix round 5: a OneNote.Application object without the automation members (an object with no GetHierarchy, so the
+    /// runtime binder finds no such member, as it does for a COM object whose IDispatch does not know the name) is
+    /// reported as not OneNote desktop or a damaged install, naming the call, exit 3.
+    /// </summary>
+    [Fact]
+    public void An_onenote_object_without_the_automation_members_says_it_is_not_onenote_desktop_with_exit_3()
+    {
+        FakeActivator activator = new(new NoAutomationTarget());
+        using OneNoteSession session = new(activator, new Support.CapturingSink().CreateLogger(), TimeSpan.Zero);
+        Harness h = new() { Locator = new FakeOneNoteLocator(true, session) };
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        (string message, int exitCode) = result.Errors.Should().ContainSingle().Subject;
+        exitCode.Should().Be(3);
+        message.Should().StartWith(OneNoteUnavailableException.NoAutomationMessage + " GetHierarchy failed with DISP_E_UNKNOWNNAME (0x80020006): ")
+            .And.Contain("does not contain a definition for 'GetHierarchy'");
+        message.Should().NotContain("could not be reached")
+            .And.NotContain(GenerateText.FirstCallFailedMessage)
+            .And.NotContain(OneNoteUnavailableException.NotStartedMessage);
+        activator.ActivationCount.Should().Be(1);
     }
 
     public static TheoryData<string, OneNoteException> DialogRefusals() => new()

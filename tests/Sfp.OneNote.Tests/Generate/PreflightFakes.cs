@@ -5,7 +5,10 @@ using Sfp.OneNote.Writer;
 
 namespace Sfp.OneNote.Tests.Generate;
 
-/// <summary>A locator whose answers are scripted: installed or not, and the app it opens (or the exception it throws).</summary>
+/// <summary>
+/// A locator whose answers are scripted: installed or not, the type library check's answer, and the app it opens (or the
+/// exception it throws).
+/// </summary>
 internal sealed class FakeOneNoteLocator : IOneNoteLocator
 {
     private readonly Func<IOneNoteApp> _open;
@@ -22,6 +25,9 @@ internal sealed class FakeOneNoteLocator : IOneNoteLocator
     }
 
     public bool IsInstalled { get; }
+
+    /// <summary>The type library check's answer; nothing to report (the default) for a sound registration.</summary>
+    public TypeLibraryCheck TypeLibrary { get; set; } = TypeLibraryCheck.None;
 
     public int OpenCalls { get; private set; }
 

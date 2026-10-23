@@ -33,7 +33,8 @@ public class OneNoteException : Exception
 
 /// <summary>
 /// OneNote desktop is not installed or not registered (the install message, <see cref="UserMessage"/>), is installed but
-/// could not be started (<see cref="NotStartedMessage"/>), or went away during the run (<see cref="DisconnectedMessage"/>).
+/// could not be started (<see cref="NotStartedMessage"/>), went away during the run (<see cref="DisconnectedMessage"/>),
+/// or its OneNote.Application object has no automation members (<see cref="NoAutomationMessage"/>).
 /// </summary>
 public sealed class OneNoteUnavailableException : OneNoteException
 {
@@ -51,6 +52,13 @@ public sealed class OneNoteUnavailableException : OneNoteException
     /// OneNote run at different elevations, or OneNote hung while starting.
     /// </summary>
     public const string NotStartedMessage = "OneNote is installed but could not be started. Close OneNote, run this tool and OneNote at the same elevation (both as administrator or neither), then retry.";
+
+    /// <summary>
+    /// The OneNote.Application object was created but has no member the wrapper calls (DISP_E_UNKNOWNNAME,
+    /// DISP_E_MEMBERNOTFOUND, or the runtime binder or the COM binder finding no such member): the registration is not
+    /// OneNote desktop's, or the installation is damaged.
+    /// </summary>
+    public const string NoAutomationMessage = "The OneNote installed here has no automation interface, so it is not OneNote desktop (Office 2016 or later), or its installation is damaged. OneNote for Windows 10 and the Store app cannot be automated. Install or repair OneNote desktop from " + InstallUrl + ".";
 
     public OneNoteUnavailableException()
         : base(UserMessage)

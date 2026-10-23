@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Sfp.Core.Manifests;
 using Sfp.Core.Options;
 using Sfp.TestSupport;
@@ -253,7 +254,7 @@ public class ManifestLoaderTests : IDisposable
 
         act.Should().Throw<ManifestException>()
             .WithMessage($"*does not match the manifest schema at *{where}*")
-            .WithMessage($"*missing required properties, including the following: {key}*");
+            .Which.Message.Should().MatchRegex(MissingRequiredMember.Pattern(key));
     }
 
     [Fact]
@@ -266,7 +267,24 @@ public class ManifestLoaderTests : IDisposable
 
         act.Should().Throw<ManifestException>()
             .WithMessage("*does not match the manifest schema at *anchorPaddingPt*")
-            .WithMessage("*missing required properties, including the following: y*");
+            .Which.Message.Should().MatchRegex(MissingRequiredMember.Pattern("y"));
+    }
+
+    /// <summary>
+    /// The matcher the left-out member tests use accepts the serializer's sentence as .NET 8 and .NET 9 word it, and only
+    /// for the member it names: another member, a name inside a longer one, or a message without "required" fails.
+    /// </summary>
+    [Theory]
+    [InlineData("JSON deserialization for type 'Sfp.Core.Manifests.DateField' was missing required properties, including the following: x", "x", true)]
+    [InlineData("JSON deserialization for type 'Sfp.Core.Manifests.DateField' was missing required properties including: 'x'.", "x", true)]
+    [InlineData("JSON deserialization for type 'Sfp.Core.Manifests.LabelSpec' was missing required properties including: 'baselineY'.", "baselineY", true)]
+    [InlineData("JSON deserialization for type 'Sfp.Core.Manifests.DateField' was missing required properties, including the following: name", "h", false)]
+    [InlineData("JSON deserialization for type 'Sfp.Core.Manifests.ObjectiveLegend' was missing required properties including: 'maxWidthPt'.", "x", false)]
+    [InlineData("JSON deserialization for type 'Sfp.Core.Manifests.DateField' was missing required properties including: 'name'.", "x", false)]
+    [InlineData("Manifest 'user.json' does not match the manifest schema at $.slots.date.fields[0].x: the value is missing.", "x", false)]
+    public void The_missing_member_matcher_accepts_both_runtime_wordings_and_only_the_named_member(string message, string key, bool matches)
+    {
+        Regex.IsMatch(message, MissingRequiredMember.Pattern(key)).Should().Be(matches);
     }
 
     [Theory]

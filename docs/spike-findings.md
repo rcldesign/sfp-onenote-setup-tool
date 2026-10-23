@@ -20,6 +20,7 @@ is tools/spike/m0_7_ipad.md, and M0.8 reads the inked page back afterwards.
 - OneNote version string: _pending_
 - 2013 schema namespace accepted by GetHierarchy: _pending_
 - Open notebooks listed: _pending_
+- Suspected on the owner's PC (fix round 5b, unconfirmed): late binding (this tool's dynamic calls, pywin32's Dispatch) and early binding (pywin32's EnsureDispatch, interop assemblies) both depend on OneNote's registered type library, `HKEY_CLASSES_ROOT\TypeLib\{0EA692EE-BB50-4E3C-AEF0-356D91732725}\1.1\0\win64` or `\win32`. When that registration points at a file that does not exist, the evidence fits OneNote starting, then failing every call; pywin32's EnsureDispatch failing with "This COM object can not automate the makepy process" (and late-bound pywin32 getting AttributeError for GetHierarchy) is the sign of a broken registration. The Generate preflight checks it before starting OneNote (docs/decisions.md, fix round 5b).
 
 ## M0.2 Background image page
 

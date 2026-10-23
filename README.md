@@ -12,7 +12,7 @@ spike results in [docs/spike-findings.md](docs/spike-findings.md), and every tas
 ## What you need
 
 - Windows 10 22H2 or Windows 11, x64.
-- OneNote desktop 16.x (Office 2016 or later, perpetual or Microsoft 365). OneNote for Windows 10 is not supported.
+- OneNote desktop 16.x (Office 2016 or later, perpetual or Microsoft 365). OneNote for Windows 10 is not supported. If Generate reports that OneNote's type library registration points at a missing file, or warns about that registration and OneNote then refuses the first request, run an Online Repair of Office; see docs/error-matrix.md.
 - Your own licensed copy of `SFP_No_Dates.pdf` (132 pages). The release zip ships without it and the tool never copies it anywhere; the owner keeps a copy under docs/ in this repository for the test suite.
 - Bookman Old Style, which ships with Office. If it is missing the bundled TeX Gyre Bonum is used and a warning is shown.
 

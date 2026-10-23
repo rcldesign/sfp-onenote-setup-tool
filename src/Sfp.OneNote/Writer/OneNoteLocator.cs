@@ -14,6 +14,13 @@ public interface IOneNoteLocator
     /// <summary>True when the OneNote.Application ProgID resolves on this machine (always false off Windows).</summary>
     bool IsInstalled { get; }
 
+    /// <summary>
+    /// The type library check, read without starting OneNote (<see cref="OneNoteTypeLibrary.Check"/>): an error stops the
+    /// run before OneNote is started, a warning is reported and the run goes on. Both are null for a sound registration,
+    /// and off Windows (<see cref="TypeLibraryCheck.None"/>).
+    /// </summary>
+    TypeLibraryCheck TypeLibrary { get; }
+
     /// <summary>The run's COM session, created on first use and owned by the locator. Throws <see cref="OneNoteUnavailableException"/> off Windows.</summary>
     IOneNoteApp Open();
 }
@@ -30,6 +37,38 @@ public sealed class OneNoteLocator : IOneNoteLocator, IDisposable
     }
 
     public bool IsInstalled => OperatingSystem.IsWindows() && ProgIdResolves();
+
+    /// <summary>
+    /// Reads the registration on each access and logs it as one line (both values, or "absent", and whether each file
+    /// exists), so the run's log shows what the type library check saw; a warning is logged as well, since it reaches the
+    /// user only with the run's warnings.
+    /// </summary>
+    public TypeLibraryCheck TypeLibrary
+    {
+        get
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return TypeLibraryCheck.None;
+            }
+
+            OneNoteTypeLibrary.Registration registration = OneNoteTypeLibrary.Read();
+            _log.Information(
+                @"OneNote type library HKEY_CLASSES_ROOT\{Key}: win64 = {Win64} (file exists: {Win64Exists}), win32 = {Win32} (file exists: {Win32Exists})",
+                OneNoteTypeLibrary.KeyPath,
+                registration.Win64 ?? "absent",
+                FileExists(registration.Win64),
+                registration.Win32 ?? "absent",
+                FileExists(registration.Win32));
+            TypeLibraryCheck check = OneNoteTypeLibrary.Check(registration, File.Exists);
+            if (check.Warning is not null)
+            {
+                _log.Warning("OneNote type library (reported with the run's warnings): {Warning}", check.Warning);
+            }
+
+            return check;
+        }
+    }
 
     public IOneNoteApp Open()
     {
@@ -54,6 +93,9 @@ public sealed class OneNoteLocator : IOneNoteLocator, IDisposable
 
     [SupportedOSPlatform("windows")]
     private static bool ProgIdResolves() => Type.GetTypeFromProgID(ProgIdActivator.ProgId, throwOnError: false) is not null;
+
+    /// <summary>Whether the file a registered type library value names exists; false for an absent or blank value.</summary>
+    private static bool FileExists(string? value) => !string.IsNullOrWhiteSpace(value) && File.Exists(OneNoteTypeLibrary.FilePath(value));
 
     [SupportedOSPlatform("windows")]
     private static IOneNoteApp Create(ILogger log) => new OneNoteApp(log);

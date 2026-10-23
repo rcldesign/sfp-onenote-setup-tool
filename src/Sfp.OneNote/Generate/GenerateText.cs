@@ -17,6 +17,15 @@ public static class GenerateText
     /// </summary>
     public const string DialogOrSignInMessage = "OneNote is showing a dialog or is not signed in. Close the dialog in OneNote, or open OneNote and sign in once, then retry.";
 
+    /// <summary>
+    /// The preflight's first call failed after OneNote started (activation answered) with E_FAIL, TYPE_E_LIBNOTREGISTERED
+    /// or TYPE_E_CANTLOADLIBRARY, so OneNote is installed and running but refused the request. It names the two known
+    /// causes, OneNote unable to load its own type library first (the log's type library line shows the registration the
+    /// preflight read) and different elevations second, then the remedies: restart OneNote at the same elevation, then an
+    /// Online Repair of Office. The call's own message, which names the HRESULT, follows it.
+    /// </summary>
+    public const string FirstCallFailedMessage = "OneNote started but refused the first request. This is what OneNote answers when it cannot load its own type library (see the type library line in the log) or when this tool and OneNote run at different elevations. Close OneNote completely (also the OneNote icon in the notification area), run both at the same elevation, then retry. If it keeps failing, run an Online Repair of Office from Settings, Apps.";
+
     /// <summary>PRD error table: the output folder sits under OneDrive sync (warn only). The text lives in Sfp.Core so the Generate form shows the same words.</summary>
     public const string OneDriveWarningReason = GenerateMessages.OneDriveWarningReason;
 

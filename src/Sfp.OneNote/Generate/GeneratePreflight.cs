@@ -61,12 +61,13 @@ public sealed class PreflightFileSystem : IPreflightFileSystem
 }
 
 /// <summary>
-/// The PRD's pre-run checks in the order the Generate flow shows them: OneNote installed (ProgID resolves) and reachable
-/// (GetHierarchy answers), the PDF matching the manifest, the start month in range, the notebook name rule, the output
-/// folder writable, the OneDrive warning, the name collision rule, and the fallback-font warning. An empty notebook
-/// list is recorded (<see cref="PreflightResult.NoOpenNotebooks"/>), not refused: the PRD's not-signed-in row needs it
-/// and a failing first OpenHierarchy, which the orchestrator checks. Render-only skips the OneNote and notebook checks
-/// and only needs its output folder.
+/// The PRD's pre-run checks in the order the Generate flow shows them: OneNote installed (ProgID resolves), its type
+/// library registration usable (read before OneNote is started) and OneNote reachable (GetHierarchy answers), the PDF matching
+/// the manifest, the start month in range, the notebook name rule, the output folder writable, the OneDrive warning,
+/// the name collision rule, and the fallback-font warning. An empty notebook list is recorded
+/// (<see cref="PreflightResult.NoOpenNotebooks"/>), not refused: the PRD's not-signed-in row needs it and a failing
+/// first OpenHierarchy, which the orchestrator checks. Render-only skips the OneNote and notebook checks and only needs
+/// its output folder.
 /// </summary>
 public sealed class GeneratePreflight : IGeneratePreflight
 {
@@ -109,7 +110,7 @@ public sealed class GeneratePreflight : IGeneratePreflight
         List<string> warnings = new();
         GenerateOptions o = request.Options;
 
-        bool noOpenNotebooks = !request.RenderOnly && CheckOneNote(errors);
+        bool noOpenNotebooks = !request.RenderOnly && CheckOneNote(errors, warnings);
 
         ValidationResult pdf = _validator.Validate(request.Manifest, o.PdfPath);
         errors.AddRange(pdf.Errors.Select(e => (e, ValidationError)));
@@ -154,17 +155,38 @@ public sealed class GeneratePreflight : IGeneratePreflight
     }
 
     /// <summary>
-    /// OneNote installed and answering GetHierarchy; a failure is an error with exit 3. A refusal because a dialog holds
-    /// OneNote (busy twice, or hrAppInModalUI; OneNote's first-run sign-in dialog does this, and this is the run's first
-    /// call) says to close the dialog or sign in. Returns true when OneNote answered with no open notebook, which is
-    /// recorded for the orchestrator rather than refused (see <see cref="PreflightResult.NoOpenNotebooks"/>).
+    /// OneNote installed, its type library registration usable, and OneNote answering GetHierarchy; a failure is an error
+    /// with exit 3. The type library check (<see cref="IOneNoteLocator.TypeLibrary"/>) runs after the install check and
+    /// before OneNote is started: its error (registered entries whose files are all missing) is the only error and OneNote
+    /// is not opened; its warning (nothing registered in the registry this process sees, or a stale entry beside a sound
+    /// one) joins <paramref name="warnings"/> and the run goes on. A refusal because a dialog holds OneNote (busy twice, or
+    /// hrAppInModalUI; OneNote's first-run sign-in dialog does this, and this is the run's first call) says to close the
+    /// dialog or sign in. E_FAIL, TYPE_E_LIBNOTREGISTERED or TYPE_E_CANTLOADLIBRARY from that first call, after OneNote
+    /// started, gives the type library and elevation remedy (<see cref="GenerateText.FirstCallFailedMessage"/>) ahead of
+    /// the call's message, which names the HRESULT. A OneNote.Application object without the automation members
+    /// (DISP_E_UNKNOWNNAME, DISP_E_MEMBERNOTFOUND, or the runtime binder finding no such member) arrives as
+    /// <see cref="OneNoteUnavailableException"/> opening with <see cref="OneNoteUnavailableException.NoAutomationMessage"/>
+    /// and is shown as it is. Returns true when OneNote answered with no open notebook, which is recorded for the
+    /// orchestrator rather than refused (see <see cref="PreflightResult.NoOpenNotebooks"/>).
     /// </summary>
-    private bool CheckOneNote(List<(string Message, int ExitCode)> errors)
+    private bool CheckOneNote(List<(string Message, int ExitCode)> errors, List<string> warnings)
     {
         if (!_oneNote.IsInstalled)
         {
             errors.Add((OneNoteUnavailableException.UserMessage, OneNoteUnavailable));
             return false;
+        }
+
+        TypeLibraryCheck typeLibrary = _oneNote.TypeLibrary;
+        if (typeLibrary.Error is not null)
+        {
+            errors.Add((typeLibrary.Error, OneNoteUnavailable));
+            return false;
+        }
+
+        if (typeLibrary.Warning is not null)
+        {
+            warnings.Add(typeLibrary.Warning);
         }
 
         try
@@ -179,6 +201,10 @@ public sealed class GeneratePreflight : IGeneratePreflight
         catch (OneNoteException ex) when (ex is OneNoteBusyException || ex.HResult == OneNoteHResults.AppInModalUI)
         {
             errors.Add((GenerateText.DialogOrSignInMessage + " " + ex.Message, OneNoteUnavailable));
+        }
+        catch (OneNoteException ex) when (ex.HResult == OneNoteHResults.Fail || OneNoteHResults.IsTypeLibraryFailure(ex.HResult))
+        {
+            errors.Add((GenerateText.FirstCallFailedMessage + " " + ex.Message, OneNoteUnavailable));
         }
         catch (OneNoteException ex)
         {

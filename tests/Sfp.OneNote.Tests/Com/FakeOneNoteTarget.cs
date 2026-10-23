@@ -50,6 +50,12 @@ public sealed class FakeOneNoteTarget : IDisposable
         }
     }
 
+    /// <summary>
+    /// The next call (whichever it is) throws <paramref name="failure"/> as it is, for the exceptions the COM binder raises
+    /// itself instead of a COMException (MissingMemberException, for one).
+    /// </summary>
+    public void FailNextWith(Exception failure) => _pendingFailures.Enqueue(failure);
+
     public void GetHierarchy(string startId, int scope, out string xml, int schema)
     {
         Enter("GetHierarchy");
@@ -117,15 +123,25 @@ public sealed class FakeOneNoteTarget : IDisposable
     }
 }
 
-/// <summary>Hands the fake to the session the way the ProgID activator hands OneNote, and records where it happened.</summary>
+/// <summary>
+/// Stands in for a OneNote.Application object without the automation members, as a registration that is not OneNote
+/// desktop's, or a damaged install, gives: it has none of the IApplication methods, so every late-bound call finds no
+/// such member and the runtime binder throws RuntimeBinderException, as it does for a COM object whose IDispatch does
+/// not know the name. Public, like <see cref="FakeOneNoteTarget"/>, so the binder reports this type's member missing.
+/// </summary>
+public sealed class NoAutomationTarget
+{
+}
+
+/// <summary>Hands a target (the fake, or another stand-in) to the session the way the ProgID activator hands OneNote, and records where it happened.</summary>
 internal sealed class FakeActivator : IOneNoteActivator
 {
-    public FakeActivator(FakeOneNoteTarget target)
+    public FakeActivator(object target)
     {
         Target = target;
     }
 
-    public FakeOneNoteTarget Target { get; }
+    public object Target { get; }
 
     public int? ActivatedOnThread { get; private set; }
 
