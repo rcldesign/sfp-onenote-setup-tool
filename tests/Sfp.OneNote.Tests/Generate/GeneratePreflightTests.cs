@@ -52,6 +52,7 @@ public class GeneratePreflightTests
         result.Warnings.Should().BeEmpty();
         result.NoOpenNotebooks.Should().BeFalse();
         h.Locator.TypeLibrary.Should().Be(TypeLibraryCheck.None, "the fake's type library check has nothing to report by default");
+        h.Locator.ElevationProblem.Should().BeNull("the fake's elevation check has nothing to report by default");
         h.Locator.OpenCalls.Should().Be(1);
         h.App.CallsOf("GetHierarchy").Should().Equal(":Notebooks");
         h.Validator.Paths.Should().Equal("/planner/SFP_No_Dates.pdf");
@@ -184,6 +185,83 @@ public class GeneratePreflightTests
         refusing.Locator.OpenCalls.Should().Be(1);
     }
 
+    /// <summary>
+    /// Fix round 5f, the owner's PC: the tool ran as administrator while OneNote ran as the normal user, and OneNote
+    /// refused the first call with E_FAIL although its type library registration was complete. The elevation check's
+    /// problem is the one error, exit 3, and OneNote is never opened. A machine without OneNote still gets the install
+    /// message alone (the install check comes first), and render-only never asks.
+    /// </summary>
+    [Fact]
+    public void An_elevation_mismatch_is_the_one_error_with_exit_3_and_onenote_is_never_opened()
+    {
+        string problem = ProcessElevation.Problem(new ElevationState(true, false, new[] { 1234 }, 0))!;
+        Harness h = new();
+        h.Locator.ElevationProblem = problem;
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        problem.Should().StartWith("This tool is running as administrator but OneNote is not (OneNote process 1234). ");
+        result.Errors.Should().Equal((problem, 3));
+        result.Warnings.Should().BeEmpty();
+        result.NoOpenNotebooks.Should().BeFalse();
+        h.Locator.OpenCalls.Should().Be(0, "OneNote refuses automation across the elevation boundary, so it is not started");
+        h.App.CallsOf("GetHierarchy").Should().BeEmpty();
+
+        Harness notInstalled = new() { Locator = new FakeOneNoteLocator(false, () => throw new InvalidOperationException("must not be called")) { ElevationProblem = problem } };
+        notInstalled.Build().Check(Harness.Request()).Errors.Should().Equal((OneNoteUnavailableException.UserMessage, 3));
+
+        Harness renderOnly = new();
+        renderOnly.Locator.ElevationProblem = problem;
+        PreflightResult rendered = renderOnly.Build().Check(Harness.Request(renderOnly: true, renderDir: "/png"));
+        rendered.Ok.Should().BeTrue(string.Join("; ", rendered.Errors.Select(e => e.Message)));
+        renderOnly.Locator.OpenCalls.Should().Be(0);
+    }
+
+    /// <summary>
+    /// Fix round 5f: the elevation check runs after the type library check, so a type library error is the one error and
+    /// the elevation problem is not reported, and OneNote is not opened.
+    /// </summary>
+    [Fact]
+    public void A_type_library_error_is_reported_instead_of_an_elevation_mismatch()
+    {
+        TypeLibraryCheck broken = OneNoteTypeLibrary.Check(
+            new OneNoteTypeLibrary.Registration(@"C:\Program Files\Microsoft Office\Office16\ONENOTE.EXE\3", null), _ => false);
+        string error = broken.Error!;
+        Harness h = new();
+        h.Locator.TypeLibrary = broken;
+        h.Locator.ElevationProblem = ProcessElevation.Problem(new ElevationState(false, true, new[] { 1234 }, 0));
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        h.Locator.ElevationProblem.Should().NotBeNull();
+        result.Errors.Should().Equal((error, 3));
+        result.Warnings.Should().BeEmpty();
+        h.Locator.OpenCalls.Should().Be(0);
+    }
+
+    /// <summary>
+    /// Fix round 5f: a type library warning comes before the elevation check, so it is reported beside the elevation
+    /// problem, which is the error (exit 3), and OneNote is not opened.
+    /// </summary>
+    [Fact]
+    public void A_type_library_warning_is_reported_beside_an_elevation_mismatch()
+    {
+        const string server = @"C:\Program Files\Microsoft Office\Root\Office16\ONENOTE.EXE";
+        TypeLibraryCheck bitness = OneNoteTypeLibrary.Check(new OneNoteTypeLibrary.Registration(null, server + @"\3"), path => path == server, Bitness.X64);
+        string warning = bitness.Warning!;
+        string problem = ProcessElevation.Problem(new ElevationState(false, true, new[] { 1234 }, 0))!;
+        Harness h = new();
+        h.Locator.TypeLibrary = bitness;
+        h.Locator.ElevationProblem = problem;
+
+        PreflightResult result = h.Build().Check(Harness.Request());
+
+        problem.Should().StartWith("OneNote is running as administrator (OneNote process 1234) but this tool is not. ");
+        result.Errors.Should().Equal((problem, 3));
+        result.Warnings.Should().Equal(warning);
+        h.Locator.OpenCalls.Should().Be(0);
+    }
+
     [Fact]
     public void No_open_notebook_is_recorded_but_does_not_block_on_its_own()
     {
@@ -274,7 +352,9 @@ public class GeneratePreflightTests
     /// text and not the install link, since OneNote is installed and running. Fix round 5b: the message names OneNote
     /// failing to load its own type library as the first suspect (pointing at the log's type library line), the
     /// elevation second, and an Online Repair of Office as the last remedy; it names no code, since the call's own
-    /// message that follows carries it. Fix round 5d: it points at the type library warning as well.
+    /// message that follows carries it. Fix round 5d: it points at the type library warning as well. Fix round 5f: it
+    /// names the elevation only for when the elevation check could not tell, since a mismatch it sees stops the run
+    /// before OneNote is opened.
     /// </summary>
     [Fact]
     public void A_bare_e_fail_at_the_first_call_gives_the_restart_and_elevation_remedy_with_exit_3()
@@ -291,7 +371,7 @@ public class GeneratePreflightTests
             .And.NotContain(GenerateText.DialogOrSignInMessage)
             .And.NotContain(OneNoteUnavailableException.InstallUrl, "OneNote answered activation, so it is installed");
         GenerateText.FirstCallFailedMessage.Should().Be(
-            "OneNote started but refused the first request. This is what OneNote answers when it cannot load its own type library (see the type library warning, when one is shown, and the type library line in the log) or when this tool and OneNote run at different elevations. Close OneNote completely (also the OneNote icon in the notification area), run both at the same elevation, then retry. If it keeps failing, run an Online Repair of Office from Settings, Apps.");
+            "OneNote started but refused the first request. This is what OneNote answers when it cannot load its own type library (see the type library warning, when one is shown, and the type library line in the log) or when this tool and OneNote run at different elevations and the check could not tell (OneNote was not running when the tool started). Close OneNote completely (also the OneNote icon in the notification area), run both at the same elevation, then retry. If it keeps failing, run an Online Repair of Office from Settings, Apps.");
     }
 
     /// <summary>

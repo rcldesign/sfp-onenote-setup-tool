@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.Versioning;
 using Serilog;
 using Sfp.OneNote.Com;
@@ -22,6 +23,14 @@ public interface IOneNoteLocator
     /// registration, and off Windows (<see cref="TypeLibraryCheck.None"/>).
     /// </summary>
     TypeLibraryCheck TypeLibrary { get; }
+
+    /// <summary>
+    /// The elevation check, read without starting OneNote: the problem when a running OneNote process runs at another
+    /// elevation than this tool (<see cref="ProcessElevation.Problem"/>), which stops the run before OneNote is opened.
+    /// Null when no readable OneNote process runs at another elevation (none running, all at the tool's elevation, or
+    /// none whose token can be read), when the tool's own elevation cannot be read, and off Windows.
+    /// </summary>
+    string? ElevationProblem { get; }
 
     /// <summary>The run's COM session, created on first use and owned by the locator. Throws <see cref="OneNoteUnavailableException"/> off Windows.</summary>
     IOneNoteApp Open();
@@ -78,6 +87,34 @@ public sealed class OneNoteLocator : IOneNoteLocator, IDisposable
         }
     }
 
+    /// <summary>
+    /// Reads both sides (<see cref="ProcessElevation.Read"/>) on each access and logs them as one line: the tool's and
+    /// OneNote's elevation, each as true, false or "unknown", the IDs of the OneNote processes at the other elevation or
+    /// "none", and how many OneNote processes could not be read, so the run's log shows what the elevation check saw. The
+    /// problem itself reaches the log with the preflight's errors. Off Windows: null, and nothing is read or logged.
+    /// </summary>
+    public string? ElevationProblem
+    {
+        get
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                return null;
+            }
+
+            ElevationState state = ProcessElevation.Read();
+
+            // Each value goes in as a string, so the run log's {Message:lj} shows them all alike, without quotes.
+            _log.Information(
+                "Elevation: tool = {ToolElevated}, OneNote = {OneNoteElevated} (differing processes {OneNotePids}, unreadable {OneNoteUnreadableCount})",
+                Describe(state.ToolElevated),
+                Describe(state.OneNoteElevated),
+                state.OneNotePids.Count == 0 ? "none" : ProcessElevation.JoinPids(state.OneNotePids),
+                state.OneNoteUnreadableCount.ToString(CultureInfo.InvariantCulture));
+            return ProcessElevation.Problem(state);
+        }
+    }
+
     public IOneNoteApp Open()
     {
         if (_app is null)
@@ -101,6 +138,14 @@ public sealed class OneNoteLocator : IOneNoteLocator, IDisposable
 
     [SupportedOSPlatform("windows")]
     private static bool ProgIdResolves() => Type.GetTypeFromProgID(ProgIdActivator.ProgId, throwOnError: false) is not null;
+
+    /// <summary>A side's elevation as the log line shows it: "true", "false", or "unknown" when it could not be read.</summary>
+    private static string Describe(bool? elevated) => elevated switch
+    {
+        true => "true",
+        false => "false",
+        null => "unknown",
+    };
 
     /// <summary>Whether the file a registered type library value names exists; false for an absent or blank value.</summary>
     private static bool FileExists(string? value) => !string.IsNullOrWhiteSpace(value) && File.Exists(OneNoteTypeLibrary.FilePath(value));

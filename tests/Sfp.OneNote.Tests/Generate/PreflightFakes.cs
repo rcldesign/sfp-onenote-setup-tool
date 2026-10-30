@@ -6,8 +6,8 @@ using Sfp.OneNote.Writer;
 namespace Sfp.OneNote.Tests.Generate;
 
 /// <summary>
-/// A locator whose answers are scripted: installed or not, the type library check's answer, and the app it opens (or the
-/// exception it throws).
+/// A locator whose answers are scripted: installed or not, the type library check's answer, the elevation check's
+/// answer, and the app it opens (or the exception it throws).
 /// </summary>
 internal sealed class FakeOneNoteLocator : IOneNoteLocator
 {
@@ -28,6 +28,9 @@ internal sealed class FakeOneNoteLocator : IOneNoteLocator
 
     /// <summary>The type library check's answer; nothing to report (the default) for a sound registration.</summary>
     public TypeLibraryCheck TypeLibrary { get; set; } = TypeLibraryCheck.None;
+
+    /// <summary>The elevation check's answer; nothing to report (the default) when both sides run at the same elevation.</summary>
+    public string? ElevationProblem { get; set; }
 
     public int OpenCalls { get; private set; }
 

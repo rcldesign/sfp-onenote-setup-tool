@@ -62,9 +62,10 @@ public sealed class PreflightFileSystem : IPreflightFileSystem
 
 /// <summary>
 /// The PRD's pre-run checks in the order the Generate flow shows them: OneNote installed (ProgID resolves), its type
-/// library registration usable (read before OneNote is started) and OneNote reachable (GetHierarchy answers), the PDF matching
-/// the manifest, the start month in range, the notebook name rule, the output folder writable, the OneDrive warning,
-/// the name collision rule, and the fallback-font warning. An empty notebook list is recorded
+/// library registration usable and this tool at the same elevation as a running OneNote (both read before OneNote is
+/// started), and OneNote reachable (GetHierarchy answers), the PDF matching the manifest, the start month in range, the
+/// notebook name rule, the output folder writable, the OneDrive warning, the name collision rule, and the fallback-font
+/// warning. An empty notebook list is recorded
 /// (<see cref="PreflightResult.NoOpenNotebooks"/>), not refused: the PRD's not-signed-in row needs it and a failing
 /// first OpenHierarchy, which the orchestrator checks. Render-only skips the OneNote and notebook checks and only needs
 /// its output folder.
@@ -155,16 +156,20 @@ public sealed class GeneratePreflight : IGeneratePreflight
     }
 
     /// <summary>
-    /// OneNote installed, its type library registration usable, and OneNote answering GetHierarchy; a failure is an error
-    /// with exit 3. The type library check (<see cref="IOneNoteLocator.TypeLibrary"/>) runs after the install check and
-    /// before OneNote is started: its error (registered entries whose files are all missing) is the only error and OneNote
-    /// is not opened; its warning (nothing registered in the registry this process sees, a usable entry only for clients
-    /// of the other bitness than OneNote's, or a stale entry beside a sound one) joins <paramref name="warnings"/> and the
-    /// run goes on. A refusal because a dialog holds OneNote (busy twice, or hrAppInModalUI; OneNote's first-run sign-in
-    /// dialog does this, and this is the run's first call) says to close the dialog or sign in. E_FAIL,
-    /// TYPE_E_LIBNOTREGISTERED or TYPE_E_CANTLOADLIBRARY from that first call, after OneNote started, gives the type
-    /// library and elevation remedy (<see cref="GenerateText.FirstCallFailedMessage"/>) ahead of the call's message,
-    /// which names the HRESULT. A OneNote.Application object without the automation members
+    /// OneNote installed, its type library registration usable, this tool at the same elevation as a running OneNote, and
+    /// OneNote answering GetHierarchy; a failure is an error with exit 3. The type library check
+    /// (<see cref="IOneNoteLocator.TypeLibrary"/>) runs after the install check and before OneNote is started: its error
+    /// (registered entries whose files are all missing) is the only error and OneNote is not opened; its warning (nothing
+    /// registered in the registry this process sees, a usable entry only for clients of the other bitness than OneNote's,
+    /// or a stale entry beside a sound one) joins <paramref name="warnings"/> and the run goes on. The elevation check
+    /// (<see cref="IOneNoteLocator.ElevationProblem"/>) runs after the type library check, so after its warning too, and
+    /// before OneNote is started: when this tool and a running OneNote are known to run at different elevations, its
+    /// problem is the only error and OneNote is not opened, since OneNote refuses automation across that boundary. A
+    /// refusal because a dialog holds OneNote (busy twice, or hrAppInModalUI; OneNote's first-run sign-in dialog does
+    /// this, and this is the run's first call) says to close the dialog or sign in. E_FAIL, TYPE_E_LIBNOTREGISTERED or
+    /// TYPE_E_CANTLOADLIBRARY from that first call, after OneNote started, gives the type library and elevation remedy
+    /// (<see cref="GenerateText.FirstCallFailedMessage"/>) ahead of the call's message, which names the HRESULT. A
+    /// OneNote.Application object without the automation members
     /// (DISP_E_UNKNOWNNAME, DISP_E_MEMBERNOTFOUND, or the runtime binder finding no such member) arrives as
     /// <see cref="OneNoteUnavailableException"/> opening with <see cref="OneNoteUnavailableException.NoAutomationMessage"/>
     /// and is shown as it is. Returns true when OneNote answered with no open notebook, which is recorded for the
@@ -188,6 +193,13 @@ public sealed class GeneratePreflight : IGeneratePreflight
         if (typeLibrary.Warning is not null)
         {
             warnings.Add(typeLibrary.Warning);
+        }
+
+        string? elevation = _oneNote.ElevationProblem;
+        if (elevation is not null)
+        {
+            errors.Add((elevation, OneNoteUnavailable));
+            return false;
         }
 
         try
